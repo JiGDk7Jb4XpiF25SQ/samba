@@ -59,8 +59,6 @@ static void usage(void)
 	printf("  -D LEVEL             debug level\n");
 	printf("  -r MACHINE           remote machine\n");
 	printf("  -U USER              remote username (e.g. SAM/user)\n");
-
-	printf("extra options when run by root or in local mode:\n");
 	printf("  -a                   add user\n");
 	printf("  -d                   disable user\n");
 	printf("  -e                   enable user\n");
@@ -98,10 +96,6 @@ static int process_options(int argc, char **argv, int local_flags)
 	while ((ch = getopt(argc, argv, "c:axdehminjr:sw:R:D:U:LWS:")) != EOF) {
 		switch(ch) {
 		case 'L':
-			if (getuid() != 0) {
-				fprintf(stderr, "smbpasswd -L can only be used by root.\n");
-				exit(1);
-			}
 			local_flags |= LOCAL_AM_ROOT;
 			break;
 		case 'c':
@@ -631,15 +625,10 @@ int main(int argc, char **argv)
 
 	msg_ctx = server_messaging_context();
 	if (msg_ctx == NULL) {
-		if (geteuid() != 0) {
-			DBG_NOTICE("Unable to initialize messaging context. "
-				   "Must be root to do that.\n");
-		} else {
-			fprintf(stderr,
-				"smbpasswd is not able to initialize the "
-				"messaging context!\n");
-			return 1;
-		}
+		fprintf(stderr,
+			"smbpasswd is not able to initialize the "
+			"messaging context!\n");
+		return 1;
 	}
 
 	/*
