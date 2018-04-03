@@ -146,6 +146,14 @@ _PUBLIC_ bool file_check_permissions(const char *fname,
 		return false;
 	}
 
+	if (pst->st_uid != uid && !uid_wrapper_enabled()) {
+		DEBUG(0, ("invalid ownership of file '%s': "
+			 "owned by uid %u, should be %u\n",
+			 fname, (unsigned int)pst->st_uid,
+			 (unsigned int)uid));
+		return false;
+	}
+
 	if ((pst->st_mode & 0777) != file_perms) {
 		DEBUG(0, ("invalid permissions on file "
 			 "'%s': has 0%o should be 0%o\n", fname,
@@ -261,11 +269,6 @@ _PUBLIC_ bool directory_create_or_exist_strict(const char *dname,
 	if (!S_ISDIR(st.st_mode)) {
 		DEBUG(0, ("directory %s isn't a directory\n",
 			dname));
-		return false;
-	}
-	if (st.st_uid != uid && !uid_wrapper_enabled()) {
-		DBG_NOTICE("invalid ownership on directory "
-			  "%s\n", dname);
 		return false;
 	}
 	if ((st.st_mode & 0777) != dir_perms) {
