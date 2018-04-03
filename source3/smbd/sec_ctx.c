@@ -53,7 +53,7 @@ static bool become_uid(uid_t uid)
 {
 	/* Check for dodgy uid values */
 
-	if (uid == (uid_t)-1 || 
+/*	if (uid == (uid_t)-1 || 
 	    ((sizeof(uid_t) == 2) && (uid == (uid_t)65535))) {
 		if (!become_uid_done) {
 			DEBUG(1,("WARNING: using uid %d is a security risk\n",
@@ -61,10 +61,10 @@ static bool become_uid(uid_t uid)
 			become_uid_done = true;
 		}
 	}
-
+*/
 	/* Set effective user id */
 
-	set_effective_uid(uid);
+//	set_effective_uid(uid);
 
 	return True;
 }
@@ -77,7 +77,7 @@ static bool become_gid(gid_t gid)
 {
 	/* Check for dodgy gid values */
 
-	if (gid == (gid_t)-1 || ((sizeof(gid_t) == 2) && 
+/*	if (gid == (gid_t)-1 || ((sizeof(gid_t) == 2) && 
 				 (gid == (gid_t)65535))) {
 		if (!become_gid_done) {
 			DEBUG(1,("WARNING: using gid %d is a security risk\n",
@@ -85,10 +85,10 @@ static bool become_gid(gid_t gid)
 			become_gid_done = true;
 		}
 	}
-
+*/
 	/* Set effective group id */
 
-	set_effective_gid(gid);
+//	set_effective_gid(gid);
 	return True;
 }
 
@@ -98,7 +98,8 @@ static bool become_gid(gid_t gid)
 
 static bool become_id(uid_t uid, gid_t gid)
 {
-	return become_gid(gid) && become_uid(uid);
+	return True;
+//	return become_gid(gid) && become_uid(uid);
 }
 
 /****************************************************************************
@@ -107,7 +108,7 @@ static bool become_id(uid_t uid, gid_t gid)
 
 static void gain_root(void)
 {
-	if (non_root_mode()) {
+/*	if (non_root_mode()) {
 		return;
 	}
 
@@ -129,7 +130,7 @@ static void gain_root(void)
 			      ("Warning: You appear to have a trapdoor "
 			       "gid system\n"));
 		}
-	}
+	}*/
 }
 
 /****************************************************************************
