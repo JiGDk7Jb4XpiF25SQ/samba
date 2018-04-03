@@ -67,8 +67,8 @@ void sec_init(void)
 		}
 #endif
 
-		initial_uid = geteuid();
-		initial_gid = getegid();
+		initial_uid = 0;
+		initial_gid = 0;
 
 #ifndef AUTOCONF_TEST
 		if (uid_wrapper_enabled()) {
@@ -93,7 +93,7 @@ some code (eg. winbindd, profiling shm) needs to know what gid we started as
 ****************************************************************************/
 gid_t sec_initial_gid(void)
 {
-	return initial_gid;
+	return 0;
 }
 
 /**
@@ -103,17 +103,7 @@ gid_t sec_initial_gid(void)
  */
 bool root_mode(void)
 {
-	uid_t euid;
-
-	euid = geteuid();
-
-#ifndef AUTOCONF_TEST
-	if (uid_wrapper_enabled()) {
-		return (euid == initial_uid || euid == (uid_t)0);
-	}
-#endif
-
-	return (initial_uid == euid);
+	return 1;
 }
 
 /****************************************************************************
@@ -121,7 +111,7 @@ are we running in non-root mode?
 ****************************************************************************/
 bool non_root_mode(void)
 {
-	return (initial_uid != (uid_t)0);
+	return 0;
 }
 
 /****************************************************************************
@@ -129,16 +119,7 @@ abort if we haven't set the uid correctly
 ****************************************************************************/
 static void assert_uid(uid_t ruid, uid_t euid)
 {
-	if ((euid != (uid_t)-1 && geteuid() != euid) ||
-	    (ruid != (uid_t)-1 && getuid() != ruid)) {
-		if (!non_root_mode()) {
-			DEBUG(0,("Failed to set uid privileges to (%d,%d) now set to (%d,%d)\n",
-				 (int)ruid, (int)euid,
-				 (int)getuid(), (int)geteuid()));
-			smb_panic("failed to set uid\n");
-			exit(1);
-		}
-	}
+
 }
 
 /****************************************************************************
@@ -146,17 +127,7 @@ abort if we haven't set the gid correctly
 ****************************************************************************/
 static void assert_gid(gid_t rgid, gid_t egid)
 {
-	if ((egid != (gid_t)-1 && getegid() != egid) ||
-	    (rgid != (gid_t)-1 && getgid() != rgid)) {
-		if (!non_root_mode()) {
-			DEBUG(0,("Failed to set gid privileges to (%d,%d) now set to (%d,%d) uid=(%d,%d)\n",
-				 (int)rgid, (int)egid,
-				 (int)getgid(), (int)getegid(),
-				 (int)getuid(), (int)geteuid()));
-			smb_panic("failed to set gid\n");
-			exit(1);
-		}
-	}
+
 }
 
 /****************************************************************************
@@ -164,28 +135,8 @@ static void assert_gid(gid_t rgid, gid_t egid)
  We want to end up with ruid==euid==0
 ****************************************************************************/
 void gain_root_privilege(void)
-{	
-#if defined(USE_SETRESUID) || defined(USE_LINUX_THREAD_CREDENTIALS)
-	samba_setresuid(0,0,0);
-#endif
-    
-#if USE_SETEUID
-	samba_seteuid(0);
-#endif
+{
 
-#if USE_SETREUID
-	samba_setreuid(0, 0);
-#endif
-
-#if USE_SETUIDX
-	samba_setuidx(ID_EFFECTIVE, 0);
-	samba_setuidx(ID_REAL, 0);
-#endif
-
-	/* this is needed on some systems */
-	samba_setuid(0);
-
-	assert_uid(0, 0);
 }
 
 
@@ -195,26 +146,7 @@ void gain_root_privilege(void)
 ****************************************************************************/
 void gain_root_group_privilege(void)
 {
-#if defined(USE_SETRESUID) || defined(USE_LINUX_THREAD_CREDENTIALS)
-	samba_setresgid(0,0,0);
-#endif
 
-#if USE_SETREUID
-	samba_setregid(0,0);
-#endif
-
-#if USE_SETEUID
-	samba_setegid(0);
-#endif
-
-#if USE_SETUIDX
-	samba_setgidx(ID_EFFECTIVE, 0);
-	samba_setgidx(ID_REAL, 0);
-#endif
-
-	samba_setgid(0);
-
-	assert_gid(0, 0);
 }
 
 

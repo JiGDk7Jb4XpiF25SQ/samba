@@ -613,9 +613,7 @@ int main(int argc, char **argv)
 	set_auth_parameters(argc, argv);
 #endif /* HAVE_SET_AUTH_PARAMETERS */
 
-	if (getuid() == 0) {
-		local_flags = LOCAL_AM_ROOT;
-	}
+	local_flags = LOCAL_AM_ROOT;
 
 	smb_init_locale();
 

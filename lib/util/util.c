@@ -146,14 +146,6 @@ _PUBLIC_ bool file_check_permissions(const char *fname,
 		return false;
 	}
 
-	if (pst->st_uid != uid && !uid_wrapper_enabled()) {
-		DEBUG(0, ("invalid ownership of file '%s': "
-			 "owned by uid %u, should be %u\n",
-			 fname, (unsigned int)pst->st_uid,
-			 (unsigned int)uid));
-		return false;
-	}
-
 	if ((pst->st_mode & 0777) != file_perms) {
 		DEBUG(0, ("invalid permissions on file "
 			 "'%s': has 0%o should be 0%o\n", fname,

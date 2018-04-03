@@ -80,170 +80,55 @@ int samba_setgroups(size_t setlen, const gid_t *gidset);
 /* All the setXX[ug]id functions and setgroups Samba uses. */
 int samba_setresuid(uid_t ruid, uid_t euid, uid_t suid)
 {
-#if defined(USE_LINUX_THREAD_CREDENTIALS)
-#if defined(USE_LINUX_32BIT_SYSCALLS)
-	return syscall(SYS_setresuid32, ruid, euid, suid);
-#else
-	return syscall(SYS_setresuid, ruid, euid, suid);
-#endif
-#elif defined(HAVE_SETRESUID)
-	return setresuid(ruid, euid, suid);
-#else
-	errno = ENOSYS;
-	return -1;
-#endif
+	return 0;
 }
 
 int samba_setresgid(gid_t rgid, gid_t egid, gid_t sgid)
 {
-#if defined(USE_LINUX_THREAD_CREDENTIALS)
-#if defined(USE_LINUX_32BIT_SYSCALLS)
-	return syscall(SYS_setresgid32, rgid, egid, sgid);
-#else
-	return syscall(SYS_setresgid, rgid, egid, sgid);
-#endif
-#elif defined(HAVE_SETRESGID)
-	return setresgid(rgid, egid, sgid);
-#else
-	errno = ENOSYS;
-	return -1;
-#endif
+	return 0;
 }
 
 int samba_setreuid(uid_t ruid, uid_t euid)
 {
-#if defined(USE_LINUX_THREAD_CREDENTIALS)
-#if defined(USE_LINUX_32BIT_SYSCALLS)
-	return syscall(SYS_setreuid32, ruid, euid);
-#else
-	return syscall(SYS_setreuid, ruid, euid);
-#endif
-#elif defined(HAVE_SETREUID)
-	return setreuid(ruid, euid);
-#else
-	errno = ENOSYS;
-	return -1;
-#endif
+	return 0;
 }
 
 int samba_setregid(gid_t rgid, gid_t egid)
 {
-#if defined(USE_LINUX_THREAD_CREDENTIALS)
-#if defined(USE_LINUX_32BIT_SYSCALLS)
-	return syscall(SYS_setregid32, rgid, egid);
-#else
-	return syscall(SYS_setregid, rgid, egid);
-#endif
-#elif defined(HAVE_SETREGID)
-	return setregid(rgid, egid);
-#else
-	errno = ENOSYS;
-	return -1;
-#endif
+	return 0;
 }
 
 int samba_seteuid(uid_t euid)
 {
-#if defined(USE_LINUX_THREAD_CREDENTIALS)
-#if defined(USE_LINUX_32BIT_SYSCALLS)
-	/* seteuid is not a separate system call. */
-	return syscall(SYS_setresuid32, -1, euid, -1);
-#else
-	/* seteuid is not a separate system call. */
-	return syscall(SYS_setresuid, -1, euid, -1);
-#endif
-#elif defined(HAVE_SETEUID)
-	return seteuid(euid);
-#else
-	errno = ENOSYS;
-	return -1;
-#endif
+	return 0;
 }
 
 int samba_setegid(gid_t egid)
 {
-#if defined(USE_LINUX_THREAD_CREDENTIALS)
-#if defined(USE_LINUX_32BIT_SYSCALLS)
-	/* setegid is not a separate system call. */
-	return syscall(SYS_setresgid32, -1, egid, -1);
-#else
-	/* setegid is not a separate system call. */
-	return syscall(SYS_setresgid, -1, egid, -1);
-#endif
-#elif defined(HAVE_SETEGID)
-	return setegid(egid);
-#else
-	errno = ENOSYS;
-	return -1;
-#endif
+	return 0;
 }
 
 int samba_setuid(uid_t uid)
 {
-#if defined(USE_LINUX_THREAD_CREDENTIALS)
-#if defined(USE_LINUX_32BIT_SYSCALLS)
-	return syscall(SYS_setuid32, uid);
-#else
-	return syscall(SYS_setuid, uid);
-#endif
-#elif defined(HAVE_SETUID)
-	return setuid(uid);
-#else
-	errno = ENOSYS;
-	return -1;
-#endif
+	return 0;
 }
 
 int samba_setgid(gid_t gid)
 {
-#if defined(USE_LINUX_THREAD_CREDENTIALS)
-#if defined(USE_LINUX_32BIT_SYSCALLS)
-	return syscall(SYS_setgid32, gid);
-#else
-	return syscall(SYS_setgid, gid);
-#endif
-#elif defined(HAVE_SETGID)
-	return setgid(gid);
-#else
-	errno = ENOSYS;
-	return -1;
-#endif
+	return 0;
 }
 
 int samba_setuidx(int flags, uid_t uid)
 {
-#if defined(HAVE_SETUIDX)
-	return setuidx(flags, uid);
-#else
-	/* USE_LINUX_THREAD_CREDENTIALS doesn't have this. */
-	errno = ENOSYS;
-	return -1;
-#endif
+	return 0;
 }
 
 int samba_setgidx(int flags, gid_t gid)
 {
-#if defined(HAVE_SETGIDX)
-	return setgidx(flags, gid);
-#else
-	/* USE_LINUX_THREAD_CREDENTIALS doesn't have this. */
-	errno = ENOSYS;
-	return -1;
-#endif
+	return 0;
 }
 
 int samba_setgroups(size_t setlen, const gid_t *gidset)
 {
-#if defined(USE_LINUX_THREAD_CREDENTIALS)
-#if defined(USE_LINUX_32BIT_SYSCALLS)
-	return syscall(SYS_setgroups32, setlen, gidset);
-#else
-	return syscall(SYS_setgroups, setlen, gidset);
-#endif
-#elif defined(HAVE_SETGROUPS)
-	return setgroups(setlen, gidset);
-#else
-	errno = ENOSYS;
-	return -1;
-#endif
+	return 0;
 }
