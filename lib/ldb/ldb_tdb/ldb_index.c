@@ -842,11 +842,17 @@ static struct ldb_dn *ltdb_index_key(struct ldb_context *ldb,
 	const char *attr_for_dn = NULL;
 	int r;
 	bool should_b64_encode;
-	unsigned max_key_length = ltdb_max_key_length(ltdb);
-	unsigned key_len = 0;
-	unsigned attr_len = 0;
-	unsigned indx_len = 0;
+
+	unsigned int max_key_length = ltdb_max_key_length(ltdb);
+	size_t key_len = 0;
+	size_t attr_len = 0;
+	const size_t indx_len = sizeof(LTDB_INDEX) - 1;
 	unsigned frmt_len = 0;
+	const size_t additional_key_length = 4;
+	unsigned int num_separators = 3; /* Estimate for overflow check */
+	const size_t min_data = 1;
+	const size_t min_key_length = additional_key_length
+		+ indx_len + num_separators + min_data;
 
 	if (attr[0] == '@') {
 		attr_for_dn = attr;
@@ -884,7 +890,29 @@ static struct ldb_dn *ltdb_index_key(struct ldb_context *ldb,
 		}
 	}
 	attr_len = strlen(attr_for_dn);
-	indx_len = strlen(LTDB_INDEX);
+
+	/*
+	 * Check if there is any hope this will fit into the DB.
+	 * Overflow here is not actually critical the code below
+	 * checks again to make the printf and the DB does another
+	 * check for too long keys
+	 */
+	if (max_key_length - attr_len < min_key_length) {
+		ldb_asprintf_errstring(
+			ldb,
+			__location__ ": max_key_length "
+			"is too small (%u) < (%u)",
+			max_key_length,
+			(unsigned)(min_key_length + attr_len));
+		talloc_free(attr_folded);
+		return NULL;
+	}
+
+	/*
+	 * ltdb_key_dn() makes something 4 bytes longer, it adds a leading
+	 * "DN=" and a trailing string terminator
+	 */
+	max_key_length -= additional_key_length;
 
 	/*
 	 * We do not base 64 encode a DN in a key, it has already been
@@ -909,16 +937,20 @@ static struct ldb_dn *ltdb_index_key(struct ldb_context *ldb,
 	}
 
 	if (should_b64_encode) {
-		unsigned vstr_len = 0;
+		size_t vstr_len = 0;
 		char *vstr = ldb_base64_encode(ldb, (char *)v.data, v.length);
 		if (!vstr) {
 			talloc_free(attr_folded);
 			return NULL;
 		}
 		vstr_len = strlen(vstr);
-		key_len = 3 + indx_len + attr_len + vstr_len;
+		/* 
+		 * Overflow here is not critical as we only use this
+		 * to choose the printf truncation
+		 */
+		key_len = num_separators + indx_len + attr_len + vstr_len;
 		if (key_len > max_key_length) {
-			unsigned excess = key_len - max_key_length;
+			size_t excess = key_len - max_key_length;
 			frmt_len = vstr_len - excess;
 			*truncation = KEY_TRUNCATED;
 			/*
@@ -943,9 +975,16 @@ static struct ldb_dn *ltdb_index_key(struct ldb_context *ldb,
 		}
 		talloc_free(vstr);
 	} else {
-		key_len = 2 + indx_len + attr_len + (int)v.length;
+		/* Only need two seperators */
+		num_separators = 2;
+
+		/*
+		 * Overflow here is not critical as we only use this
+		 * to choose the printf truncation
+		 */
+		key_len = num_separators + indx_len + attr_len + (int)v.length;
 		if (key_len > max_key_length) {
-			unsigned excess = key_len - max_key_length;
+			size_t excess = key_len - max_key_length;
 			frmt_len = v.length - excess;
 			*truncation = KEY_TRUNCATED;
 			/*
@@ -2783,11 +2822,11 @@ static int re_key(struct ltdb_private *ltdb, struct ldb_val ldb_key, struct ldb_
 	}
 	if (key.dsize != key2.dsize ||
 	    (memcmp(key.dptr, key2.dptr, key.dsize) != 0)) {
-		TDB_DATA data = {
-			.dptr = val.data,
-			.dsize = val.length
+		struct ldb_val ldb_key2 = {
+			.data = key2.dptr,
+			.length = key2.dsize
 		};
-		ltdb->kv_ops->update_in_iterate(ltdb, key, key2, data, ctx);
+		ltdb->kv_ops->update_in_iterate(ltdb, ldb_key, ldb_key2, val, ctx);
 	}
 	talloc_free(key2.dptr);
 

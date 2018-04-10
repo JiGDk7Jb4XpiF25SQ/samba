@@ -1264,7 +1264,7 @@ static bool enable_aapl(struct torture_context *tctx,
 	DATA_BLOB data;
 	struct smb2_create_blob *aapl = NULL;
 	uint32_t aapl_server_caps;
-	uint32_t expexted_scaps = (SMB2_CRTCTX_AAPL_UNIX_BASED |
+	uint32_t expected_scaps = (SMB2_CRTCTX_AAPL_UNIX_BASED |
 				   SMB2_CRTCTX_AAPL_SUPPORTS_READ_DIR_ATTR |
 				   SMB2_CRTCTX_AAPL_SUPPORTS_NFS_ACE |
 				   SMB2_CRTCTX_AAPL_SUPPORTS_OSX_COPYFILE);
@@ -1313,17 +1313,17 @@ static bool enable_aapl(struct torture_context *tctx,
 	torture_assert_goto(tctx, aapl != NULL, ret, done, "missing AAPL context");
 
 	if (!is_osx_server) {
-		size_t exptected_aapl_ctx_size;
+		size_t expected_aapl_ctx_size;
 
-		exptected_aapl_ctx_size = strlen("MacSamba") * 2 + 40;
+		expected_aapl_ctx_size = strlen("MacSamba") * 2 + 40;
 
 		torture_assert_goto(
-			tctx, aapl->data.length == exptected_aapl_ctx_size,
+			tctx, aapl->data.length == expected_aapl_ctx_size,
 			ret, done, "bad AAPL size");
 	}
 
 	aapl_server_caps = BVAL(aapl->data.data, 16);
-	torture_assert_goto(tctx, aapl_server_caps == expexted_scaps,
+	torture_assert_goto(tctx, aapl_server_caps == expected_scaps,
 			    ret, done, "bad AAPL caps");
 
 done:
@@ -2044,6 +2044,7 @@ static bool test_aapl(struct torture_context *tctx,
 	unsigned int count;
 	union smb_search_data *d;
 	uint64_t rfork_len;
+	bool is_osx_server = torture_setting_bool(tctx, "osx", false);
 
 	smb2_deltree(tree, BASEDIR);
 
@@ -2100,7 +2101,10 @@ static bool test_aapl(struct torture_context *tctx,
 		goto done;
 	}
 
-	if (aapl->data.length != 50) {
+	if (!is_osx_server) {
+		size_t expected_aapl_ctx_size;
+		bool size_ok;
+
 		/*
 		 * uint32_t CommandCode = kAAPL_SERVER_QUERY
 		 * uint32_t Reserved = 0;
@@ -2113,11 +2117,12 @@ static bool test_aapl(struct torture_context *tctx,
 		 *                       kAAPL_CASE_SENSITIVE;
 		 * uint32_t Pad2 = 0;
 		 * uint32_t ModelStringLen = 10;
-		 * ucs2_t ModelString[5] = "Samba";
+		 * ucs2_t ModelString[5] = "MacSamba";
 		 */
-		torture_warning(tctx,
-				"(%s) unexpected AAPL context length: %zd, expected 50",
-				__location__, aapl->data.length);
+		expected_aapl_ctx_size = strlen("MacSamba") * 2 + 40;
+
+		size_ok = aapl->data.length == expected_aapl_ctx_size;
+		torture_assert_goto(tctx, size_ok, ret, done, "bad AAPL size");
 	}
 
 	aapl_cmd = IVAL(aapl->data.data, 0);
