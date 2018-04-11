@@ -20,6 +20,7 @@
 
 #include "includes.h"
 #include "ads.h"
+#include "libsmb/namequery.h"
 #include "librpc/gen_ndr/ndr_libnet_join.h"
 #include "libnet/libnet_join.h"
 #include "libcli/auth/libcli_auth.h"
@@ -43,6 +44,7 @@
 #include "libcli/auth/netlogon_creds_cli.h"
 #include "auth/credentials/credentials.h"
 #include "krb5_env.h"
+#include "libsmb/dsgetdcname.h"
 
 /****************************************************************
 ****************************************************************/

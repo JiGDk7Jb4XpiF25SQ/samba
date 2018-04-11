@@ -18,12 +18,14 @@
 
 #include "includes.h"
 #include "utils/net.h"
+#include "libsmb/namequery.h"
 #include "libads/sitename_cache.h"
 #include "../lib/addns/dnsquery.h"
 #include "../librpc/gen_ndr/ndr_netlogon.h"
 #include "smb_krb5.h"
 #include "../libcli/security/security.h"
 #include "passdb/lookup_sid.h"
+#include "libsmb/dsgetdcname.h"
 
 int net_lookup_usage(struct net_context *c, int argc, const char **argv)
 {
