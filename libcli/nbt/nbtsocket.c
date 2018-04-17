@@ -367,7 +367,8 @@ failed:
 /*
   send off a nbt name request
 */
-struct nbt_name_request *nbt_name_request_send(struct nbt_name_socket *nbtsock,
+struct nbt_name_request *nbt_name_request_send(TALLOC_CTX *mem_ctx,
+					       struct nbt_name_socket *nbtsock,
 					       struct socket_address *dest,
 					       struct nbt_name_packet *request,
 					       int timeout, int retries,
@@ -377,7 +378,7 @@ struct nbt_name_request *nbt_name_request_send(struct nbt_name_socket *nbtsock,
 	int id;
 	enum ndr_err_code ndr_err;
 
-	req = talloc_zero(nbtsock, struct nbt_name_request);
+	req = talloc_zero(mem_ctx, struct nbt_name_request);
 	if (req == NULL) goto failed;
 
 	req->nbtsock                = nbtsock;
@@ -526,7 +527,7 @@ NTSTATUS nbt_set_unexpected_handler(struct nbt_name_socket *nbtsock,
 */
 _PUBLIC_ NTSTATUS nbt_rcode_to_ntstatus(uint8_t rcode)
 {
-	int i;
+	size_t i;
 	struct {
 		enum nbt_rcode rcode;
 		NTSTATUS status;

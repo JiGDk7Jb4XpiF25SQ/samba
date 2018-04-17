@@ -265,6 +265,7 @@ static PyObject *py_nbt_name_register(PyObject *self, PyObject *args, PyObject *
 	io.in.broadcast = true;
 	io.in.multi_homed = true;
 	io.in.register_demand = true;
+	io.in.ttl = 0;
 	io.in.timeout = 0;
 	io.in.retries = 0;
 
@@ -320,6 +321,7 @@ static PyObject *py_nbt_name_refresh(PyObject *self, PyObject *args, PyObject *k
 
 	io.in.broadcast = true;
 	io.in.nb_flags = 0;
+	io.in.ttl = 0;
 	io.in.timeout = 0;
 	io.in.retries = 0;
 
