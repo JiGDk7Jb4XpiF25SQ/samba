@@ -401,6 +401,10 @@ static int winbind_open_pipe_sock(struct winbindd_context *ctx,
 		return -1;
 	}
 
+	if (need_priv == 0) {
+		return ctx->winbindd_fd;
+	}
+
 	/* try and get priv pipe */
 
 	request.wb_flags = WBFLAG_RECURSE;
@@ -420,13 +424,13 @@ static int winbind_open_pipe_sock(struct winbindd_context *ctx,
 			ctx->winbindd_fd = fd;
 			ctx->is_privileged = 1;
 		}
+
+		SAFE_FREE(response.extra_data.data);
 	}
 
-	if ((need_priv != 0) && (ctx->is_privileged == 0)) {
+	if (ctx->is_privileged == 0) {
 		return -1;
 	}
-
-	SAFE_FREE(response.extra_data.data);
 
 	return ctx->winbindd_fd;
 #else
