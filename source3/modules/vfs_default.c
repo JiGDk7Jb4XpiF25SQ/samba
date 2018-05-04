@@ -636,33 +636,13 @@ static ssize_t vfswrap_pread(vfs_handle_struct *handle, files_struct *fsp, void 
 
 	if (result == -1 && errno == ESPIPE) {
 		/* Maintain the fiction that pipes can be seeked (sought?) on. */
-		result = SMB_VFS_READ(fsp, data, n);
+		result = sys_read(fsp->fh->fd, data, n);
 		fsp->fh->pos = 0;
 	}
 
 #else /* HAVE_PREAD */
-	off_t   curr;
-	int lerrno;
-
-	curr = SMB_VFS_LSEEK(fsp, 0, SEEK_CUR);
-	if (curr == -1 && errno == ESPIPE) {
-		/* Maintain the fiction that pipes can be seeked (sought?) on. */
-		result = SMB_VFS_READ(fsp, data, n);
-		fsp->fh->pos = 0;
-		return result;
-	}
-
-	if (SMB_VFS_LSEEK(fsp, offset, SEEK_SET) == -1) {
-		return -1;
-	}
-
-	errno = 0;
-	result = SMB_VFS_READ(fsp, data, n);
-	lerrno = errno;
-
-	SMB_VFS_LSEEK(fsp, curr, SEEK_SET);
-	errno = lerrno;
-
+	errno = ENOSYS;
+	result = -1;
 #endif /* HAVE_PREAD */
 
 	return result;
@@ -1125,20 +1105,6 @@ static int vfswrap_rename(vfs_handle_struct *handle,
  out:
 	END_PROFILE(syscall_rename);
 	return result;
-}
-
-static int vfswrap_fsync(vfs_handle_struct *handle, files_struct *fsp)
-{
-#ifdef HAVE_FSYNC
-	int result;
-
-	START_PROFILE(syscall_fsync);
-	result = fsync(fsp->fh->fd);
-	END_PROFILE(syscall_fsync);
-	return result;
-#else
-	return 0;
-#endif
 }
 
 static int vfswrap_stat(vfs_handle_struct *handle,
@@ -3036,7 +3002,6 @@ static struct vfs_fn_pointers vfs_default_fns = {
 	.sendfile_fn = vfswrap_sendfile,
 	.recvfile_fn = vfswrap_recvfile,
 	.rename_fn = vfswrap_rename,
-	.fsync_fn = vfswrap_fsync,
 	.fsync_send_fn = vfswrap_fsync_send,
 	.fsync_recv_fn = vfswrap_fsync_recv,
 	.stat_fn = vfswrap_stat,

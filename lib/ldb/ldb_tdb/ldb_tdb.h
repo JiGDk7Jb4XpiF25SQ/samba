@@ -29,6 +29,7 @@ struct kv_db_ops {
 	const char * (*errorstr)(struct ltdb_private *ltdb);
 	const char * (*name)(struct ltdb_private *ltdb);
 	bool (*has_changed)(struct ltdb_private *ltdb);
+	bool (*transaction_active)(struct ltdb_private *ltdb);
 };
 
 /* this private structure is used by the ltdb backend in the
@@ -52,7 +53,6 @@ struct ltdb_private {
 		const char *GUID_index_dn_component;
 	} *cache;
 
-	int in_transaction;
 
 	bool check_base;
 	bool disallow_dn_filter;
