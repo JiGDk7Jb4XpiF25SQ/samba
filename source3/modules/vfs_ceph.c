@@ -458,18 +458,6 @@ static int cephwrap_close(struct vfs_handle_struct *handle, files_struct *fsp)
 	WRAP_RETURN(result);
 }
 
-static ssize_t cephwrap_read(struct vfs_handle_struct *handle, files_struct *fsp, void *data, size_t n)
-{
-	ssize_t result;
-
-	DBG_DEBUG("[CEPH] read(%p, %p, %p, %llu)\n", handle, fsp, data, llu(n));
-
-	/* Using -1 for the offset means read/write rather than pread/pwrite */
-	result = ceph_read(handle->data, fsp->fh->fd, data, n, -1);
-	DBG_DEBUG("[CEPH] read(...) = %llu\n", llu(result));
-	WRAP_RETURN(result);
-}
-
 static ssize_t cephwrap_pread(struct vfs_handle_struct *handle, files_struct *fsp, void *data,
 			size_t n, off_t offset)
 {
@@ -482,22 +470,6 @@ static ssize_t cephwrap_pread(struct vfs_handle_struct *handle, files_struct *fs
 	WRAP_RETURN(result);
 }
 
-
-static ssize_t cephwrap_write(struct vfs_handle_struct *handle, files_struct *fsp, const void *data, size_t n)
-{
-	ssize_t result;
-
-	DBG_DEBUG("[CEPH] write(%p, %p, %p, %llu)\n", handle, fsp, data, llu(n));
-
-	result = ceph_write(handle->data, fsp->fh->fd, data, n, -1);
-
-	DBG_DEBUG("[CEPH] write(...) = %llu\n", llu(result));
-	if (result < 0) {
-		WRAP_RETURN(result);
-	}
-	fsp->fh->pos += result;
-	return result;
-}
 
 static ssize_t cephwrap_pwrite(struct vfs_handle_struct *handle, files_struct *fsp, const void *data,
 			size_t n, off_t offset)
@@ -1125,15 +1097,10 @@ static int cephwrap_ftruncate(struct vfs_handle_struct *handle, files_struct *fs
 		goto done;
 	}
 
-	if (SMB_VFS_LSEEK(fsp, len-1, SEEK_SET) != len -1)
+	if (SMB_VFS_PWRITE(fsp, &c, 1, len-1)!=1) {
 		goto done;
+	}
 
-	if (SMB_VFS_WRITE(fsp, &c, 1)!=1)
-		goto done;
-
-	/* Seek to where we were */
-	if (SMB_VFS_LSEEK(fsp, currpos, SEEK_SET) != currpos)
-		goto done;
 	result = 0;
 
   done:
@@ -1474,9 +1441,7 @@ static struct vfs_fn_pointers ceph_fns = {
 
 	.open_fn = cephwrap_open,
 	.close_fn = cephwrap_close,
-	.read_fn = cephwrap_read,
 	.pread_fn = cephwrap_pread,
-	.write_fn = cephwrap_write,
 	.pwrite_fn = cephwrap_pwrite,
 	.lseek_fn = cephwrap_lseek,
 	.sendfile_fn = cephwrap_sendfile,

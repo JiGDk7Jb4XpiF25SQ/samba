@@ -614,16 +614,6 @@ static int vfswrap_close(vfs_handle_struct *handle, files_struct *fsp)
 	return result;
 }
 
-static ssize_t vfswrap_read(vfs_handle_struct *handle, files_struct *fsp, void *data, size_t n)
-{
-	ssize_t result;
-
-	START_PROFILE_BYTES(syscall_read, n);
-	result = sys_read(fsp->fh->fd, data, n);
-	END_PROFILE_BYTES(syscall_read);
-	return result;
-}
-
 static ssize_t vfswrap_pread(vfs_handle_struct *handle, files_struct *fsp, void *data,
 			size_t n, off_t offset)
 {
@@ -648,16 +638,6 @@ static ssize_t vfswrap_pread(vfs_handle_struct *handle, files_struct *fsp, void 
 	return result;
 }
 
-static ssize_t vfswrap_write(vfs_handle_struct *handle, files_struct *fsp, const void *data, size_t n)
-{
-	ssize_t result;
-
-	START_PROFILE_BYTES(syscall_write, n);
-	result = sys_write(fsp->fh->fd, data, n);
-	END_PROFILE_BYTES(syscall_write);
-	return result;
-}
-
 static ssize_t vfswrap_pwrite(vfs_handle_struct *handle, files_struct *fsp, const void *data,
 			size_t n, off_t offset)
 {
@@ -670,28 +650,12 @@ static ssize_t vfswrap_pwrite(vfs_handle_struct *handle, files_struct *fsp, cons
 
 	if (result == -1 && errno == ESPIPE) {
 		/* Maintain the fiction that pipes can be sought on. */
-		result = SMB_VFS_WRITE(fsp, data, n);
+		result = sys_write(fsp->fh->fd, data, n);
 	}
 
 #else /* HAVE_PWRITE */
-	off_t   curr;
-	int         lerrno;
-
-	curr = SMB_VFS_LSEEK(fsp, 0, SEEK_CUR);
-	if (curr == -1) {
-		return -1;
-	}
-
-	if (SMB_VFS_LSEEK(fsp, offset, SEEK_SET) == -1) {
-		return -1;
-	}
-
-	result = SMB_VFS_WRITE(fsp, data, n);
-	lerrno = errno;
-
-	SMB_VFS_LSEEK(fsp, curr, SEEK_SET);
-	errno = lerrno;
-
+	errno = ENOSYS;
+	result = -1;
 #endif /* HAVE_PWRITE */
 
 	return result;
@@ -2990,11 +2954,9 @@ static struct vfs_fn_pointers vfs_default_fns = {
 	.open_fn = vfswrap_open,
 	.create_file_fn = vfswrap_create_file,
 	.close_fn = vfswrap_close,
-	.read_fn = vfswrap_read,
 	.pread_fn = vfswrap_pread,
 	.pread_send_fn = vfswrap_pread_send,
 	.pread_recv_fn = vfswrap_pread_recv,
-	.write_fn = vfswrap_write,
 	.pwrite_fn = vfswrap_pwrite,
 	.pwrite_send_fn = vfswrap_pwrite_send,
 	.pwrite_recv_fn = vfswrap_pwrite_recv,

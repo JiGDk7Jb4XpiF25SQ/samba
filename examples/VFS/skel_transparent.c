@@ -229,12 +229,6 @@ static int skel_close_fn(vfs_handle_struct *handle, files_struct *fsp)
 	return SMB_VFS_NEXT_CLOSE(handle, fsp);
 }
 
-static ssize_t skel_vfs_read(vfs_handle_struct *handle, files_struct *fsp,
-			     void *data, size_t n)
-{
-	return SMB_VFS_NEXT_READ(handle, fsp, data, n);
-}
-
 static ssize_t skel_pread(vfs_handle_struct *handle, files_struct *fsp,
 			  void *data, size_t n, off_t offset)
 {
@@ -293,12 +287,6 @@ static ssize_t skel_pread_recv(struct tevent_req *req,
 	}
 	*vfs_aio_state = state->vfs_aio_state;
 	return state->ret;
-}
-
-static ssize_t skel_write(vfs_handle_struct *handle, files_struct *fsp,
-			  const void *data, size_t n)
-{
-	return SMB_VFS_NEXT_WRITE(handle, fsp, data, n);
 }
 
 static ssize_t skel_pwrite(vfs_handle_struct *handle, files_struct *fsp,
@@ -1123,11 +1111,9 @@ struct vfs_fn_pointers skel_transparent_fns = {
 	.open_fn = skel_open,
 	.create_file_fn = skel_create_file,
 	.close_fn = skel_close_fn,
-	.read_fn = skel_vfs_read,
 	.pread_fn = skel_pread,
 	.pread_send_fn = skel_pread_send,
 	.pread_recv_fn = skel_pread_recv,
-	.write_fn = skel_write,
 	.pwrite_fn = skel_pwrite,
 	.pwrite_send_fn = skel_pwrite_send,
 	.pwrite_recv_fn = skel_pwrite_recv,
