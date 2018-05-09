@@ -551,8 +551,12 @@ for t in tests:
         plansmbtorture4testsuite(t, "nt4_dc", '//$SERVER_IP/tmp -U$USERNAME%$PASSWORD --option=torture:wksname=samba3rpctest')
         plansmbtorture4testsuite(t, "ad_dc", '//$SERVER/tmp -U$USERNAME%$PASSWORD --option=torture:wksname=samba3rpctest')
     elif t == "libsmbclient":
-        plansmbtorture4testsuite(t, "nt4_dc", '//$SERVER_IP/tmp -U$USERNAME%%$PASSWORD --option=torture:replace_smbconf=%s' % os.path.join(srcdir(), "testdata/samba3/smb_new.conf"))
-        plansmbtorture4testsuite(t, "ad_dc", '//$SERVER/tmp -U$USERNAME%%$PASSWORD --option=torture:replace_smbconf=%s' % os.path.join(srcdir(), "testdata/samba3/smb_new.conf"))
+        plansmbtorture4testsuite(t, "nt4_dc", '//$SERVER_IP/tmp -U$USERNAME%%$PASSWORD '
+                                    '--option=torture:smburl=smb://$USERNAME:$PASSWORD@$SERVER/tmp '
+                                    '--option=torture:replace_smbconf=%s' % os.path.join(srcdir(), "testdata/samba3/smb_new.conf"))
+        plansmbtorture4testsuite(t, "ad_dc", '//$SERVER/tmp -U$USERNAME%%$PASSWORD '
+                                    '--option=torture:smburl=smb://$USERNAME:$PASSWORD@$SERVER/tmp '
+                                    '--option=torture:replace_smbconf=%s' % os.path.join(srcdir(), "testdata/samba3/smb_new.conf"))
     else:
         plansmbtorture4testsuite(t, "nt4_dc", '//$SERVER_IP/tmp -U$USERNAME%$PASSWORD')
         plansmbtorture4testsuite(t, "ad_dc", '//$SERVER/tmp -U$USERNAME%$PASSWORD')
@@ -638,6 +642,12 @@ plantestsuite("samba3.blackbox.smbclient.encryption_off", "simpleserver",
               [os.path.join(samba3srcdir, "script/tests/test_smbclient_encryption_off.sh"),
                "$USERNAME", "$PASSWORD", "$SERVER",
                smbclient3])
+
+plantestsuite("samba3.blackbox.rpcclient_netsessenum", "ad_member",
+              [os.path.join(samba3srcdir,
+                            "script/tests/test_rpcclient_netsessenum.sh"),
+               "$DOMAIN", "$DC_USERNAME", "$DC_PASSWORD", "$SERVER",
+               os.path.join(bindir(), "rpcclient"), smbtorture3, "tmp"])
 
 # The ktest environment uses:
 # server min protocol = SMB3_00

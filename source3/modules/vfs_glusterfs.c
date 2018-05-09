@@ -592,12 +592,6 @@ static int vfs_gluster_close(struct vfs_handle_struct *handle,
 	return glfs_close(glfd);
 }
 
-static ssize_t vfs_gluster_read(struct vfs_handle_struct *handle,
-				files_struct *fsp, void *data, size_t n)
-{
-	return glfs_read(*(glfs_fd_t **)VFS_FETCH_FSP_EXTENSION(handle, fsp), data, n, 0);
-}
-
 static ssize_t vfs_gluster_pread(struct vfs_handle_struct *handle,
 				 files_struct *fsp, void *data, size_t n,
 				 off_t offset)
@@ -887,12 +881,6 @@ static ssize_t vfs_gluster_recv(struct tevent_req *req,
 	return ret;
 }
 
-static ssize_t vfs_gluster_write(struct vfs_handle_struct *handle,
-				 files_struct *fsp, const void *data, size_t n)
-{
-	return glfs_write(*(glfs_fd_t **)VFS_FETCH_FSP_EXTENSION(handle, fsp), data, n, 0);
-}
-
 static ssize_t vfs_gluster_pwrite(struct vfs_handle_struct *handle,
 				  files_struct *fsp, const void *data,
 				  size_t n, off_t offset)
@@ -929,12 +917,6 @@ static int vfs_gluster_rename(struct vfs_handle_struct *handle,
 {
 	return glfs_rename(handle->data, smb_fname_src->base_name,
 			   smb_fname_dst->base_name);
-}
-
-static int vfs_gluster_fsync(struct vfs_handle_struct *handle,
-			     files_struct *fsp)
-{
-	return glfs_fsync(*(glfs_fd_t **)VFS_FETCH_FSP_EXTENSION(handle, fsp));
 }
 
 static struct tevent_req *vfs_gluster_fsync_send(struct vfs_handle_struct
@@ -1459,11 +1441,9 @@ static struct vfs_fn_pointers glusterfs_fns = {
 	.open_fn = vfs_gluster_open,
 	.create_file_fn = NULL,
 	.close_fn = vfs_gluster_close,
-	.read_fn = vfs_gluster_read,
 	.pread_fn = vfs_gluster_pread,
 	.pread_send_fn = vfs_gluster_pread_send,
 	.pread_recv_fn = vfs_gluster_recv,
-	.write_fn = vfs_gluster_write,
 	.pwrite_fn = vfs_gluster_pwrite,
 	.pwrite_send_fn = vfs_gluster_pwrite_send,
 	.pwrite_recv_fn = vfs_gluster_recv,
@@ -1471,7 +1451,6 @@ static struct vfs_fn_pointers glusterfs_fns = {
 	.sendfile_fn = vfs_gluster_sendfile,
 	.recvfile_fn = vfs_gluster_recvfile,
 	.rename_fn = vfs_gluster_rename,
-	.fsync_fn = vfs_gluster_fsync,
 	.fsync_send_fn = vfs_gluster_fsync_send,
 	.fsync_recv_fn = vfs_gluster_fsync_recv,
 

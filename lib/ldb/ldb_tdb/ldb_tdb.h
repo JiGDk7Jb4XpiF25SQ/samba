@@ -29,12 +29,14 @@ struct kv_db_ops {
 	const char * (*errorstr)(struct ltdb_private *ltdb);
 	const char * (*name)(struct ltdb_private *ltdb);
 	bool (*has_changed)(struct ltdb_private *ltdb);
+	bool (*transaction_active)(struct ltdb_private *ltdb);
 };
 
 /* this private structure is used by the ltdb backend in the
    ldb_context */
 struct ltdb_private {
 	const struct kv_db_ops *kv_ops;
+	struct ldb_module *module;
 	TDB_CONTEXT *tdb;
 	unsigned int connect_flags;
 	
@@ -52,7 +54,6 @@ struct ltdb_private {
 		const char *GUID_index_dn_component;
 	} *cache;
 
-	int in_transaction;
 
 	bool check_base;
 	bool disallow_dn_filter;
@@ -75,6 +76,12 @@ struct ltdb_private {
 	 * greater than this length will be rejected.
 	 */
 	unsigned max_key_length;
+
+	/*
+	 * The PID that opened this database so we don't work in a
+	 * fork()ed child.
+	 */
+	pid_t pid;
 };
 
 struct ltdb_context {

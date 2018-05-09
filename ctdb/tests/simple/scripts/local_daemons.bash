@@ -115,7 +115,7 @@ setup_ctdb ()
 	local pnn
 	for pnn in $(seq 0 $(($TEST_LOCAL_DAEMONS - 1))) ; do
 		setup_ctdb_base "$SIMPLE_TESTS_VAR_DIR" "node.${pnn}" \
-				functions
+				functions notify.sh
 
 		cp "$nodes_file" "${CTDB_BASE}/nodes"
 
@@ -131,7 +131,6 @@ setup_ctdb ()
 		local node_ip=$(sed -n -e "$(($pnn + 1))p" "$nodes_file")
 
 		local db_dir="${CTDB_BASE}/db"
-		mkdir -p "${db_dir}/persistent"
 
 		if $no_event_scripts ; then
 			rm -vf "${CTDB_BASE}/events.d/"*
@@ -142,10 +141,9 @@ CTDB_RECOVERY_LOCK="${SIMPLE_TESTS_VAR_DIR}/rec.lock"
 CTDB_NODE_ADDRESS="${node_ip}"
 CTDB_LOGGING="file:${CTDB_BASE}/log.ctdb"
 CTDB_DEBUGLEVEL=INFO
-CTDB_DBDIR="${db_dir}"
+CTDB_DBDIR="${db_dir}/volatile"
 CTDB_DBDIR_PERSISTENT="${db_dir}/persistent"
 CTDB_DBDIR_STATE="${db_dir}/state"
-CTDB_NOSETSCHED=yes
 EOF
 	done
 }
@@ -154,7 +152,7 @@ start_ctdb_1 ()
 {
 	local pnn="$1"
 
-	CTDBD="${VALGRIND} ctdbd --sloppy-start --nopublicipcheck" \
+	CTDBD="${VALGRIND} ctdbd" \
 	     onnode "$pnn" ctdbd_wrapper start
 }
 

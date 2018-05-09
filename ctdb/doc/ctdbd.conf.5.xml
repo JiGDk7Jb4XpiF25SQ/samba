@@ -66,15 +66,6 @@
     <variablelist>
 
       <varlistentry>
-	<term>CTDB_BASE=<parameter>DIRECTORY</parameter></term>
-	<listitem>
-	  <para>
-	    DIRECTORY containing CTDB scripts and configuration files.
-	  </para>
-	</listitem>
-      </varlistentry>
-
-      <varlistentry>
 	<term>CTDB_INIT_STYLE=debian|redhat|suse</term>
 	<listitem>
 	  <para>
@@ -149,18 +140,7 @@
 	<term>CTDB_DBDIR=<parameter>DIRECTORY</parameter></term>
 	<listitem>
 	  <para>
-	    Defaults to <filename>/usr/local/var/lib/ctdb</filename>.
-	  </para>
-	  <para>
-	    Apart from a DIRECTORY, this can take a special value of
-	    the form
-	    <option>tmpfs</option><optional>:<parameter>OPTIONS</parameter></optional>.
-	    OPTIONS is a comma-separated list of any permissible
-	    options to the tmpfs filesystem.  The only pre-specified
-	    default is <option>mode=700</option>, which can
-	    overridden by specifying <option>mode</option> in
-	    OPTIONS.  It probably makes sense to specify a maximum
-	    <option>size</option>.
+	    Defaults to <filename>/usr/local/var/lib/ctdb/volatile</filename>.
 	  </para>
 	  <para>
 	    Corresponds to <option>--dbdir</option>.
@@ -188,6 +168,50 @@
 	  </para>
 	  <para>
 	    Corresponds to <option>--dbdir-state</option>.
+	  </para>
+	</listitem>
+      </varlistentry>
+
+      <varlistentry>
+	<term>CTDB_DEBUG_HUNG_SCRIPT=<parameter>FILENAME</parameter></term>
+	<listitem>
+	  <para>
+	    FILENAME is a script to run to log debug information when
+	    an event script times out.
+	  </para>
+	  <para>
+	    Default is <filename>/usr/local/etc/ctdb/debug-hung-script.sh</filename>.
+	  </para>
+	</listitem>
+      </varlistentry>
+
+      <varlistentry>
+	<term>CTDB_DEBUG_HUNG_SCRIPT_STACKPAT=<parameter>REGEXP</parameter></term>
+	<listitem>
+	  <para>
+	    REGEXP specifies interesting processes for which stack
+	    traces should be logged when debugging hung eventscripts
+	    and those processes are matched in pstree output.  REGEXP
+	    is an extended regexp so choices are separated by pipes
+	    ('|').  However, REGEXP should not contain parentheses.
+	    See also <citetitle>CTDB_DEBUG_HUNG_SCRIPT</citetitle>.
+	  </para>
+	  <para>
+	    Default is "exportfs|rpcinfo".
+	  </para>
+	</listitem>
+      </varlistentry>
+
+      <varlistentry>
+	<term>CTDB_DEBUG_LOCKS=<parameter>FILENAME</parameter></term>
+	<listitem>
+	  <para>
+	    FILENAME is a script to run to log debug information when
+	    an CTDB fails to freeze databases during recovery.
+	  </para>
+	  <para>
+	    No default, usually
+	    <filename>/usr/local/etc/ctdb/debug_locks.sh</filename>.
 	  </para>
 	</listitem>
       </varlistentry>
@@ -285,6 +309,18 @@
       </varlistentry>
 
       <varlistentry>
+	<term>CTDB_MAX_OPEN_FILES=<parameter>NUM</parameter></term>
+	<listitem>
+	  <para>
+	    NUM is the maximum number of open files.
+	  </para>
+	  <para>
+	    There is no default.
+	  </para>
+	</listitem>
+      </varlistentry>
+
+      <varlistentry>
 	<term>CTDB_NOSETSCHED=yes|no</term>
 	<listitem>
 	  <para>
@@ -294,17 +330,6 @@
 	    Usually CTDB runs with real-time priority.	If you are running
 	    CTDB on a platform that does not support real-time priority,
 	    you can set this.
-	  </para>
-	</listitem>
-      </varlistentry>
-
-      <varlistentry>
-	<term>CTDB_NOTIFY_SCRIPT=<parameter>FILENAME</parameter></term>
-	<listitem>
-	  <para>
-	    No default, usually
-	    <filename>/usr/local/etc/ctdb/notify.sh</filename>.  Corresponds to
-	    <option>--notification-script</option>.
 	  </para>
 	</listitem>
       </varlistentry>
@@ -397,6 +422,18 @@
       </varlistentry>
 
       <varlistentry>
+	<term>CTDB_SUPPRESS_COREFILE=yes|no</term>
+	<listitem>
+	  <para>
+	    Whether CTDB core files should be suppressed.
+	  </para>
+	  <para>
+	    Default is no.
+	  </para>
+	</listitem>
+      </varlistentry>
+
+      <varlistentry>
 	<term>CTDB_TRANSPORT=tcp|infiniband</term>
 	<listitem>
 	  <para>
@@ -418,22 +455,6 @@
     </para>
 
     <variablelist>
-
-      <varlistentry>
-	<term>CTDB_SHUTDOWN_TIMEOUT=<parameter>NUM</parameter></term>
-	<listitem>
-	  <para>
-	    NUM is the number of seconds to wait for
-	    <citerefentry><refentrytitle>ctdbd</refentrytitle>
-	    <manvolnum>1</manvolnum></citerefentry> to shut down
-	    gracefully before giving up and killing it.
-	  </para>
-
-	  <para>
-	    Defaults is 30.
-	  </para>
-	</listitem>
-      </varlistentry>
 
       <varlistentry>
 	<term>CTDB_STARTUP_TIMEOUT=<parameter>NUM</parameter></term>
@@ -1329,6 +1350,45 @@ CTDB_PER_IP_ROUTING_TABLE_ID_HIGH=9000
 
     <refsect2>
       <title>
+	DATABASE SETUP
+      </title>
+
+      <para>
+	CTDB checks the consistency of databases during startup.
+      </para>
+
+      <refsect3>
+	<title>Eventscripts</title>
+
+	<simplelist>
+	  <member><filename>00.ctdb</filename></member>
+	</simplelist>
+
+      </refsect3>
+
+      <variablelist>
+
+	<varlistentry>
+	  <term>CTDB_MAX_CORRUPT_DB_BACKUPS=<parameter>NUM</parameter></term>
+	  <listitem>
+	    <para>
+	      NUM is the maximum number of volatile TDB database backups
+	      to be kept (for each database) when a corrupt database is
+	      found during startup.  Volatile TDBs are zeroed during
+	      startup so backups are needed to debug any corruption that
+	      occurs before a restart.
+	    </para>
+	    <para>
+	      Default is 10.
+	    </para>
+	  </listitem>
+	</varlistentry>
+
+      </variablelist>
+    </refsect2>
+
+    <refsect2>
+      <title>
 	SYSTEM RESOURCE MONITORING CONFIGURATION
       </title>
 
@@ -1429,209 +1489,12 @@ CTDB_PER_IP_ROUTING_TABLE_ID_HIGH=9000
   </refsect1>
 
   <refsect1>
-    <title>
-      DEBUG AND TEST
-    </title>
-
-    <para>
-      Variable in this section are for debugging and testing CTDB.
-      They should not generally be needed.
-    </para>
-
-    <variablelist>
-
-      <varlistentry>
-	<term>CTDB_DEBUG_HUNG_SCRIPT=<parameter>FILENAME</parameter></term>
-	<listitem>
-	  <para>
-	    FILENAME is a script to run to log debug information when
-	    an event script times out.
-	  </para>
-	  <para>
-	    Default is <filename><varname>CTDB_BASE</varname>/debug-hung-script.sh</filename>.
-	  </para>
-	</listitem>
-      </varlistentry>
-
-      <varlistentry>
-	<term>CTDB_DEBUG_HUNG_SCRIPT_LOGFILE=<parameter>FILENAME</parameter></term>
-	<listitem>
-	  <para>
-	    FILENAME specifies where log messages should go when
-	    debugging hung eventscripts.  This is a testing option.
-	    See also <citetitle>CTDB_DEBUG_HUNG_SCRIPT</citetitle>.
-	  </para>
-	  <para>
-	    No default.  Messages go to stdout/stderr and are logged
-	    to the same place as other CTDB log messages.
-	  </para>
-	</listitem>
-      </varlistentry>
-
-      <varlistentry>
-	<term>CTDB_DEBUG_HUNG_SCRIPT_STACKPAT=<parameter>REGEXP</parameter></term>
-	<listitem>
-	  <para>
-	    REGEXP specifies interesting processes for which stack
-	    traces should be logged when debugging hung eventscripts
-	    and those processes are matched in pstree output.  REGEXP
-	    is an extended regexp so choices are separated by pipes
-	    ('|').  However, REGEXP should not contain parentheses.
-	    See also <citetitle>CTDB_DEBUG_HUNG_SCRIPT</citetitle>.
-	  </para>
-	  <para>
-	    Default is "exportfs|rpcinfo".
-	  </para>
-	</listitem>
-      </varlistentry>
-
-      <varlistentry>
-	<term>CTDB_DEBUG_LOCKS=<parameter>FILENAME</parameter></term>
-	<listitem>
-	  <para>
-	    FILENAME is a script to run to log debug information when
-	    an CTDB fails to freeze databases during recovery.
-	  </para>
-	  <para>
-	    No default, usually
-	    <filename><varname>CTDB_BASE</varname>/debug_locks.sh</filename>.
-	  </para>
-	</listitem>
-      </varlistentry>
-
-      <varlistentry>
-	<term>CTDB_SYS_ETCDIR=<parameter>DIRECTORY</parameter></term>
-	<listitem>
-	  <para>
-	    DIRECTORY containing system configuration files.  This is
-	    used to provide alternate configuration when testing and
-	    should not need to be changed from the default.
-	  </para>
-	  <para>
-	    Default is <filename>/etc</filename>.
-	  </para>
-	</listitem>
-      </varlistentry>
-
-      <varlistentry>
-	<term>CTDB_MAX_CORRUPT_DB_BACKUPS=<parameter>NUM</parameter></term>
-	<listitem>
-	  <para>
-	    NUM is the maximum number of volatile TDB database backups
-	    to be kept (for each database) when a corrupt database is
-	    found during startup.  Volatile TDBs are zeroed during
-	    startup so backups are needed to debug any corruption that
-	    occurs before a restart.
-	  </para>
-	  <para>
-	    Default is 10.
-	  </para>
-	</listitem>
-      </varlistentry>
-
-      <varlistentry>
-	<term>CTDB_MAX_OPEN_FILES=<parameter>NUM</parameter></term>
-	<listitem>
-	  <para>
-	    NUM is the maximum number of open files.
-	  </para>
-	  <para>
-	    There is no default.
-	  </para>
-	</listitem>
-      </varlistentry>
-
-      <varlistentry>
-	<term>CTDB_RC_LOCAL=<parameter>FILENAME</parameter></term>
-	<listitem>
-	  <para>
-	    FILENAME is a script fragment to be sourced by the
-	    <filename>functions</filename> that is sourced by scripts.
-	    On example use would be to override function definitions
-	    in unit tests.  As a sanity check, this file must be
-	    executable for it to be used.
-	  </para>
-	  <para>
-	    No default.
-	  </para>
-	</listitem>
-      </varlistentry>
-
-      <varlistentry>
-	<term>CTDB_RUN_TIMEOUT_MONITOR=yes|no</term>
-	<listitem>
-	  <para>
-	    Whether CTDB should simulate timing out monitor events.
-	    This uses the <filename>99.timeout</filename> eventscript.
-	  </para>
-	  <para>
-	    Default is no.
-	  </para>
-	</listitem>
-      </varlistentry>
-
-      <varlistentry>
-	<term>CTDB_SUPPRESS_COREFILE=yes|no</term>
-	<listitem>
-	  <para>
-	    Whether CTDB core files should be suppressed.
-	  </para>
-	  <para>
-	    Default is no.
-	  </para>
-	</listitem>
-      </varlistentry>
-
-      <varlistentry>
-	<term>CTDB_VALGRIND=yes|no|<parameter>COMMAND</parameter></term>
-	<listitem>
-	  <para>
-	    If "yes", this causes
-	    <citerefentry><refentrytitle>ctdbd</refentrytitle>
-	    <manvolnum>1</manvolnum></citerefentry> to be run under
-	    <citerefentry><refentrytitle>valgrind</refentrytitle>
-	    <manvolnum>1</manvolnum></citerefentry> with logs going to
-	    <filename>/usr/local/var/log/ctdb_valgrind</filename>.  If neither
-	    "yes" nor "no" then the value is assumed to be a COMMAND
-	    (e.g. a <command>valgrind</command> variation, a
-	    <citerefentry><refentrytitle>gdb</refentrytitle>
-	    <manvolnum>1</manvolnum></citerefentry> command) that is
-	    used in place of the default <command>valgrind</command>
-	    command.  In either case, the <option>--valgrind</option>
-	    option is passed to <command>ctdbd</command>.
-	  </para>
-	  <para>
-	    Default is no.
-	  </para>
-	</listitem>
-      </varlistentry>
-
-      <varlistentry>
-	<term>CTDB_VARDIR=<parameter>DIRECTORY</parameter></term>
-	<listitem>
-	  <para>
-	    DIRECTORY containing CTDB files that are modified at
-	    runtime.
-	  </para>
-	  <para>
-	    Defaults to <filename>/usr/local/var/lib/ctdb</filename>.
-	  </para>
-	</listitem>
-      </varlistentry>
-
-    </variablelist>
-
-  </refsect1>
-
-
-  <refsect1>
     <title>FILES</title>
 
     <simplelist>
       <member><filename>/usr/local/etc/ctdb/ctdbd.conf</filename></member>
       <member><filename>/etc/sysconfig/ctdb</filename></member>
       <member><filename>/etc/default/ctdb</filename></member>
-      <member><filename>/usr/local/etc/ctdb/sysconfig/ctdb</filename></member>
     </simplelist>
   </refsect1>
 

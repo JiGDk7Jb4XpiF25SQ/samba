@@ -121,7 +121,7 @@ tasks = {
                 ("clean", "make clean", "text/plain") ],
 
     # We split out this so the isolated nt4_dc tests do not wait for ad_dc or ad_dc_ntvfs tests (which are long)
-    "samba-nt4" : [ ("configure", "./configure.developer --with-selftest-prefix=./bin/ab" + samba_configure_params, "text/plain"),
+    "samba-nt4" : [ ("configure", "./configure.developer --without-ads --with-selftest-prefix=./bin/ab" + samba_configure_params, "text/plain"),
                        ("make", "make -j", "text/plain"),
                        ("test", "make test FAIL_IMMEDIATELY=1 TESTS='--include-env=nt4_dc --include-env=nt4_member'", "text/plain"),
                        ("install", "make install", "text/plain"),
@@ -130,7 +130,7 @@ tasks = {
 
     # We split out this so the isolated ad_dc tests do not wait for ad_dc_ntvfs tests (which are long)
     "samba-fileserver" : [ ("random-sleep", "../script/random-sleep.sh 60 600", "text/plain"),
-                      ("configure", "./configure.developer --without-ad-dc --without-ads --with-selftest-prefix=./bin/ab" + samba_configure_params, "text/plain"),
+                      ("configure", "./configure.developer --without-ad-dc --without-ldap --without-ads --with-selftest-prefix=./bin/ab" + samba_configure_params, "text/plain"),
                       ("make", "make -j", "text/plain"),
                       ("test", "make test FAIL_IMMEDIATELY=1 TESTS='--include-env=fileserver'", "text/plain"),
                       ("check-clean-tree", "script/clean-source-tree.sh", "text/plain")],
@@ -520,7 +520,7 @@ class buildlist(object):
     def write_system_info(self):
         filename = 'system-info.txt'
         f = open(filename, 'w')
-        for cmd in ['uname -a', 'free', 'cat /proc/cpuinfo']:
+        for cmd in ['uname -a', 'free', 'cat /proc/cpuinfo', 'cc --version']:
             print('### %s' % cmd, file=f)
             print(run_cmd(cmd, output=True, checkfail=False), file=f)
             print(file=f)
@@ -692,6 +692,11 @@ parser.add_option("", "--restrict-tests", help="run as make test with this TESTS
                   default='')
 
 def send_email(subject, text, log_tar):
+    if options.email is None:
+        do_print("not sending email because the recipient is not set")
+        do_print("the text content would have been:\n\nSubject: %s\n\nTs" %
+                 (subject, text))
+        return
     outer = MIMEMultipart()
     outer['Subject'] = subject
     outer['To'] = options.email

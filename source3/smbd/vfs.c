@@ -398,78 +398,6 @@ NTSTATUS vfs_file_exist(connection_struct *conn, struct smb_filename *smb_fname)
 	return NT_STATUS_OBJECT_NAME_NOT_FOUND;
 }
 
-/****************************************************************************
- Read data from fsp on the vfs. (note: EINTR re-read differs from vfs_write_data)
-****************************************************************************/
-
-ssize_t vfs_read_data(files_struct *fsp, char *buf, size_t byte_count)
-{
-	size_t total=0;
-
-	while (total < byte_count)
-	{
-		ssize_t ret = SMB_VFS_READ(fsp, buf + total,
-					   byte_count - total);
-
-		if (ret == 0) return total;
-		if (ret == -1) {
-			if (errno == EINTR)
-				continue;
-			else
-				return -1;
-		}
-		total += ret;
-	}
-	return (ssize_t)total;
-}
-
-/****************************************************************************
- Write data to a fd on the vfs.
-****************************************************************************/
-
-ssize_t vfs_write_data(struct smb_request *req,
-			files_struct *fsp,
-			const char *buffer,
-			size_t N)
-{
-	size_t total=0;
-	ssize_t ret;
-
-	if (req && req->unread_bytes) {
-		int sockfd = req->xconn->transport.sock;
-		int old_flags;
-		SMB_ASSERT(req->unread_bytes == N);
-		/* VFS_RECVFILE must drain the socket
-		 * before returning. */
-		req->unread_bytes = 0;
-		/* Ensure the socket is blocking. */
-		old_flags = fcntl(sockfd, F_GETFL, 0);
-		if (set_blocking(sockfd, true) == -1) {
-			return (ssize_t)-1;
-		}
-		ret = SMB_VFS_RECVFILE(sockfd,
-					fsp,
-					(off_t)-1,
-					N);
-		if (fcntl(sockfd, F_SETFL, old_flags) == -1) {
-			return (ssize_t)-1;
-		}
-		return ret;
-	}
-
-	while (total < N) {
-		ret = SMB_VFS_WRITE(fsp, buffer + total, N - total);
-
-		if (ret == -1)
-			return -1;
-		if (ret == 0)
-			return total;
-
-		total += ret;
-	}
-	return (ssize_t)total;
-}
-
 ssize_t vfs_pwrite_data(struct smb_request *req,
 			files_struct *fsp,
 			const char *buffer,
@@ -1729,13 +1657,6 @@ int smb_vfs_call_close(struct vfs_handle_struct *handle,
 	return handle->fns->close_fn(handle, fsp);
 }
 
-ssize_t smb_vfs_call_read(struct vfs_handle_struct *handle,
-			  struct files_struct *fsp, void *data, size_t n)
-{
-	VFS_FIND(read);
-	return handle->fns->read_fn(handle, fsp, data, n);
-}
-
 ssize_t smb_vfs_call_pread(struct vfs_handle_struct *handle,
 			   struct files_struct *fsp, void *data, size_t n,
 			   off_t offset)
@@ -1806,14 +1727,6 @@ ssize_t SMB_VFS_PREAD_RECV(struct tevent_req *req,
 	}
 	*vfs_aio_state = state->vfs_aio_state;
 	return state->retval;
-}
-
-ssize_t smb_vfs_call_write(struct vfs_handle_struct *handle,
-			   struct files_struct *fsp, const void *data,
-			   size_t n)
-{
-	VFS_FIND(write);
-	return handle->fns->write_fn(handle, fsp, data, n);
 }
 
 ssize_t smb_vfs_call_pwrite(struct vfs_handle_struct *handle,
@@ -1921,13 +1834,6 @@ int smb_vfs_call_rename(struct vfs_handle_struct *handle,
 	return handle->fns->rename_fn(handle, smb_fname_src, smb_fname_dst);
 }
 
-int smb_vfs_call_fsync(struct vfs_handle_struct *handle,
-		       struct files_struct *fsp)
-{
-	VFS_FIND(fsync);
-	return handle->fns->fsync_fn(handle, fsp);
-}
-
 struct smb_vfs_call_fsync_state {
 	int (*recv_fn)(struct tevent_req *req, struct vfs_aio_state *vfs_aio_state);
 	int retval;
@@ -1988,6 +1894,45 @@ int SMB_VFS_FSYNC_RECV(struct tevent_req *req, struct vfs_aio_state *vfs_aio_sta
 	return state->retval;
 }
 
+/*
+ * Synchronous version of fsync, built from backend
+ * async VFS primitives. Uses a temporary sub-event
+ * context (NOT NESTED).
+ */
+
+int smb_vfs_fsync_sync(files_struct *fsp)
+{
+	TALLOC_CTX *frame = talloc_stackframe();
+	struct tevent_req *req = NULL;
+	struct vfs_aio_state aio_state = { 0 };
+	int ret = -1;
+	bool ok;
+	struct tevent_context *ev = samba_tevent_context_init(frame);
+
+	if (ev == NULL) {
+		goto out;
+	}
+
+	req = SMB_VFS_FSYNC_SEND(talloc_tos(), ev, fsp);
+	if (req == NULL) {
+		goto out;
+	}
+
+	ok = tevent_req_poll(req, ev);
+	if (!ok) {
+		goto out;
+	}
+
+	ret = SMB_VFS_FSYNC_RECV(req, &aio_state);
+
+  out:
+
+	TALLOC_FREE(frame);
+	if (aio_state.error != 0) {
+		errno = aio_state.error;
+	}
+	return ret;
+}
 
 int smb_vfs_call_stat(struct vfs_handle_struct *handle,
 		      struct smb_filename *smb_fname)

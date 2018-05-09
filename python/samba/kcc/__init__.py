@@ -274,7 +274,7 @@ class KCC(object):
                                                      scope=ldb.SCOPE_BASE,
                                                      attrs=["dsServiceName"])
                 dn = ldb.Dn(self.samdb,
-                            service_name_res[0]["dsServiceName"][0])
+                            service_name_res[0]["dsServiceName"][0].decode('utf8'))
 
                 res = self.samdb.search(base=dn, scope=ldb.SCOPE_BASE,
                                         attrs=["objectGUID"])
@@ -858,8 +858,6 @@ class KCC(object):
         :param current_dsa: optional DSA on whose behalf we are acting.
         :return: None
         """
-        count = 0
-
         ro = False
         if current_dsa is None:
             current_dsa = self.my_dsa
