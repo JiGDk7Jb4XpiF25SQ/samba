@@ -14,10 +14,11 @@ import samba.tests
 from samba.tests import delete_force
 from samba.dcerpc import security, samr
 from samba.ndr import ndr_unpack
+from samba.tests.password_test import PasswordTestCase
 
 import time
 
-class BasePasswordTestCase(samba.tests.TestCase):
+class BasePasswordTestCase(PasswordTestCase):
     def _open_samr_user(self, res):
         self.assertTrue("objectSid" in res[0])
 
@@ -199,6 +200,20 @@ class BasePasswordTestCase(samba.tests.TestCase):
         time.sleep(0.01)
         return res
 
+    def update_lockout_settings(self, threshold, duration, observation_window):
+        """Updates the global user lockout settings"""
+        m = Message()
+        m.dn = Dn(self.ldb, self.base_dn)
+        account_lockout_duration_ticks = -int(duration * (1e7))
+        m["lockoutDuration"] = MessageElement(str(account_lockout_duration_ticks),
+                                              FLAG_MOD_REPLACE, "lockoutDuration")
+        m["lockoutThreshold"] = MessageElement(str(threshold),
+                                               FLAG_MOD_REPLACE, "lockoutThreshold")
+        lockout_observation_window_ticks = -int(observation_window * (1e7))
+        m["lockOutObservationWindow"] = MessageElement(str(lockout_observation_window_ticks),
+                                                       FLAG_MOD_REPLACE, "lockOutObservationWindow")
+        self.ldb.modify(m)
+
     def _readd_user(self, creds, lockOutObservationWindow=0):
         username = creds.get_username()
         userpass = creds.get_password()
@@ -272,18 +287,11 @@ userPassword: """ + userpass + """
         self.template_creds.set_gensec_features(self.global_creds.get_gensec_features())
         self.template_creds.set_kerberos_state(self.global_creds.get_kerberos_state())
 
-
         # Gets back the basedn
         base_dn = self.ldb.domain_dn()
 
         # Gets back the configuration basedn
         configuration_dn = self.ldb.get_config_basedn().get_linearized()
-
-        # Get the old "dSHeuristics" if it was set
-        dsheuristics = self.ldb.get_dsheuristics()
-
-        # Reset the "dSHeuristics" as they were before
-        self.addCleanup(self.ldb.set_dsheuristics, dsheuristics)
 
         res = self.ldb.search(base_dn,
                          scope=SCOPE_BASE, attrs=["lockoutDuration", "lockOutObservationWindow", "lockoutThreshold"])
@@ -314,40 +322,14 @@ replace: lockoutThreshold
 lockoutThreshold: """ + str(lockoutThreshold) + """
 """)
 
-        m = Message()
-        m.dn = Dn(self.ldb, base_dn)
-
-        self.account_lockout_duration = 2
-        account_lockout_duration_ticks = -int(self.account_lockout_duration * (1e7))
-
-        m["lockoutDuration"] = MessageElement(str(account_lockout_duration_ticks),
-                                              FLAG_MOD_REPLACE, "lockoutDuration")
-
-        account_lockout_threshold = 3
-        m["lockoutThreshold"] = MessageElement(str(account_lockout_threshold),
-                                               FLAG_MOD_REPLACE, "lockoutThreshold")
-
-        self.lockout_observation_window = 2
-        lockout_observation_window_ticks = -int(self.lockout_observation_window * (1e7))
-
-        m["lockOutObservationWindow"] = MessageElement(str(lockout_observation_window_ticks),
-                                                       FLAG_MOD_REPLACE, "lockOutObservationWindow")
-
-        self.ldb.modify(m)
-
-        # Set the "dSHeuristics" to activate the correct "userPassword" behaviour
-        self.ldb.set_dsheuristics("000000001")
-
-        # Get the old "minPwdAge"
-        minPwdAge = self.ldb.get_minPwdAge()
-
-        # Reset the "minPwdAge" as it was before
-        self.addCleanup(self.ldb.set_minPwdAge, minPwdAge)
-
-        # Set it temporarely to "0"
-        self.ldb.set_minPwdAge("0")
-
         self.base_dn = self.ldb.domain_dn()
+        self.account_lockout_duration = 2
+        self.lockout_observation_window = 2
+        self.update_lockout_settings(threshold=3, duration=2,
+                                     observation_window=2)
+
+        # update DC to allow password changes for the duration of this test
+        self.allow_password_changes()
 
         self.domain_sid = security.dom_sid(self.ldb.get_domain_sid())
         self.samr = samr.samr("ncacn_ip_tcp:%s[seal]" % self.host, self.lp, self.global_creds)

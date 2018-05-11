@@ -615,6 +615,7 @@ planpythontestsuite("ad_dc_ntvfs:local", "samba.tests.samba_tool.computer")
 planpythontestsuite("ad_dc:local", "samba.tests.samba_tool.ntacl")
 planpythontestsuite("none", "samba.tests.samba_tool.provision_password_check")
 planpythontestsuite("none", "samba.tests.samba_tool.help")
+planpythontestsuite("ad_dc_ntvfs:local", "samba.tests.samba_tool.passwordsettings")
 
 # Run these against chgdcpass to share the runtime load
 planpythontestsuite("chgdcpass:local", "samba.tests.samba_tool.sites")
@@ -798,6 +799,11 @@ planoldpythontestsuite("rodc:local", "replica_sync_rodc",
 		       name="samba4.drs.replica_sync_rodc.python(rodc)",
 		       environ={'DC1': '$DC_SERVER', 'DC2': '$RODC_DC_SERVER'},
 		       extra_args=['-U$DOMAIN/$DC_USERNAME%$DC_PASSWORD'])
+
+planoldpythontestsuite("ad_dc_ntvfs", "password_settings",
+                       extra_path=[os.path.join(samba4srcdir, 'dsdb/tests/python')],
+                       name="samba4.ldap.password_settings.python",
+                       extra_args=['-U$DOMAIN/$DC_USERNAME%$DC_PASSWORD'])
 
 for env in ["ad_dc_ntvfs", "fl2000dc", "fl2003dc", "fl2008r2dc"]:
     plantestsuite_loadlist("samba4.ldap_schema.python(%s)" % env, env, [python, os.path.join(samba4srcdir, "dsdb/tests/python/ldap_schema.py"), '$SERVER', '-U"$USERNAME%$PASSWORD"', '--workgroup=$DOMAIN', '$LOADLIST', '$LISTOPT'])
