@@ -115,15 +115,10 @@ DESTDIR=$RPM_BUILD_ROOT ./buildtools/bin/waf install
 
 install -m644 config/ctdbd.conf $RPM_BUILD_ROOT%{_sysconfdir}/ctdb
 install -m644 config/ctdb.tunables $RPM_BUILD_ROOT%{_sysconfdir}/ctdb
+install -m644 config/script.options $RPM_BUILD_ROOT%{_sysconfdir}/ctdb
 
-# Add a pointer to modern location for configuration file.  Allow with
-# "noreplace" in the files section, this stops RPM moving aside a
-# working configuration.
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/sysconfig
-cat >$RPM_BUILD_ROOT%{_sysconfdir}/sysconfig/ctdb <<EOF
-# CTDB configuration is now in %{_sysconfdir}/ctdb/ctdbd.conf
-EOF
-chmod 644 $RPM_BUILD_ROOT%{_sysconfdir}/sysconfig/ctdb
+install -m644 config/ctdb.sysconfig $RPM_BUILD_ROOT%{_sysconfdir}/sysconfig/ctdb
 
 %if %{with_systemd}
 mkdir -p $RPM_BUILD_ROOT%{_unitdir}
@@ -158,6 +153,7 @@ rm -rf $RPM_BUILD_ROOT
 
 %config(noreplace) %{_sysconfdir}/ctdb/ctdbd.conf
 %config(noreplace) %{_sysconfdir}/ctdb/ctdb.tunables
+%config(noreplace) %{_sysconfdir}/ctdb/script.options
 %{_sysconfdir}/ctdb/notify.sh
 %dir %{_sysconfdir}/ctdb/notify.d
 %config(noreplace) %{_sysconfdir}/ctdb/debug-hung-script.sh
@@ -202,16 +198,7 @@ rm -rf $RPM_BUILD_ROOT
 %{_bindir}/ctdb_diagnostics
 %{_bindir}/onnode
 %dir %{_libexecdir}/ctdb
-%{_libexecdir}/ctdb/ctdb_eventd
-%{_libexecdir}/ctdb/ctdb_lock_helper
-%{_libexecdir}/ctdb/ctdb_recovery_helper
-%{_libexecdir}/ctdb/ctdb_takeover_helper
-%{_libexecdir}/ctdb/ctdb_mutex_fcntl_helper
-%{_libexecdir}/ctdb/ctdb_event
-%{_libexecdir}/ctdb/ctdb_natgw
-%{_libexecdir}/ctdb/ctdb_lvs
-%{_libexecdir}/ctdb/ctdb_killtcp
-%{_libexecdir}/ctdb/smnotify
+%{_libexecdir}/ctdb/*
 %dir %{_libdir}
 %{_libdir}/ctdb/lib*
 %{_mandir}/man1/ctdb.1.gz
@@ -221,6 +208,8 @@ rm -rf $RPM_BUILD_ROOT
 %{_mandir}/man1/onnode.1.gz
 %{_mandir}/man1/ltdbtool.1.gz
 %{_mandir}/man1/ping_pong.1.gz
+%{_mandir}/man5/ctdb-script.options.5.gz
+%{_mandir}/man5/ctdb.sysconfig.5.gz
 %{_mandir}/man5/ctdbd.conf.5.gz
 %{_mandir}/man7/ctdb.7.gz
 %{_mandir}/man7/ctdb-statistics.7.gz

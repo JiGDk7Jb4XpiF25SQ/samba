@@ -30,7 +30,7 @@
  *
  * @brief A framework for a server based on unix-domain sockets.
  *
- * This abstraction allows to build simple servers that communicate using
+ * This abstraction allows one to build simple servers that communicate using
  * unix-domain sockets.  It takes care of the common boilerplate.
  */
 
@@ -110,7 +110,7 @@ struct sock_daemon_funcs {
  *
  * @param[in] client The new socket client context
  * @param[in] private_data Private data set with the socket
- * @retun true if connection should be accepted, false otherwise
+ * @return true if connection should be accepted, false otherwise
  *
  *
  * disconnect() is called  when client closes connection
