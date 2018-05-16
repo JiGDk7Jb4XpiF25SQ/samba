@@ -105,6 +105,41 @@ string_version_to_constant = {
     "2012_R2": DS_DOMAIN_FUNCTION_2012_R2,
 }
 
+common_provision_join_options = [
+    Option("--machinepass", type="string", metavar="PASSWORD",
+           help="choose machine password (otherwise random)"),
+    Option("--plaintext-secrets", action="store_true",
+           help="Store secret/sensitive values as plain text on disk" +
+           "(default is to encrypt secret/ensitive values)"),
+    Option("--backend-store", type="choice", metavar="BACKENDSTORE",
+           choices=["tdb", "mdb"],
+           help="Specify the database backend to be used "
+           "(default is %s)" % get_default_backend_store()),
+    Option("--targetdir", metavar="DIR",
+           help="Set target directory (where to store provision)", type=str),
+    Option("--quiet", help="Be quiet", action="store_true"),
+]
+
+common_join_options = [
+    Option("--server", help="DC to join", type=str),
+    Option("--site", help="site to join", type=str),
+    Option("--domain-critical-only",
+           help="only replicate critical domain objects",
+           action="store_true"),
+    Option("--dns-backend", type="choice", metavar="NAMESERVER-BACKEND",
+           choices=["SAMBA_INTERNAL", "BIND9_DLZ", "NONE"],
+           help="The DNS server backend. SAMBA_INTERNAL is the builtin name server (default), "
+           "BIND9_DLZ uses samba4 AD to store zone information, "
+           "NONE skips the DNS setup entirely (this DC will not be a DNS server)",
+           default="SAMBA_INTERNAL"),
+    Option("--verbose", help="Be verbose", action="store_true")
+]
+
+common_ntvfs_options = [
+        Option("--use-ntvfs", help="Use NTVFS for the fileserver (default = no)",
+               action="store_true")
+]
+
 def get_testparm_var(testparm, smbconf, varname):
     errfile = open(os.devnull, 'w')
     p = subprocess.Popen([testparm, '-s', '-l',
@@ -210,8 +245,6 @@ class cmd_domain_provision(Command):
                 help="choose admin password (otherwise random)"),
          Option("--krbtgtpass", type="string", metavar="PASSWORD",
                 help="choose krbtgt password (otherwise random)"),
-         Option("--machinepass", type="string", metavar="PASSWORD",
-                help="choose machine password (otherwise random)"),
          Option("--dns-backend", type="choice", metavar="NAMESERVER-BACKEND",
                 choices=["SAMBA_INTERNAL", "BIND9_FLATFILE", "BIND9_DLZ", "NONE"],
                 help="The DNS server backend. SAMBA_INTERNAL is the builtin name server (default), "
@@ -221,20 +254,14 @@ class cmd_domain_provision(Command):
                 default="SAMBA_INTERNAL"),
          Option("--dnspass", type="string", metavar="PASSWORD",
                 help="choose dns password (otherwise random)"),
-         Option("--ldapadminpass", type="string", metavar="PASSWORD",
-                help="choose password to set between Samba and its LDAP backend (otherwise random)"),
          Option("--root", type="string", metavar="USERNAME",
                 help="choose 'root' unix username"),
          Option("--nobody", type="string", metavar="USERNAME",
                 help="choose 'nobody' user"),
          Option("--users", type="string", metavar="GROUPNAME",
                 help="choose 'users' group"),
-         Option("--quiet", help="Be quiet", action="store_true"),
          Option("--blank", action="store_true",
                 help="do not add users or groups, just the structure"),
-         Option("--ldap-backend-type", type="choice", metavar="LDAP-BACKEND-TYPE",
-                help="Test initialisation support for unsupported LDAP backend type (fedora-ds or openldap) DO NOT USE",
-                choices=["fedora-ds", "openldap"]),
          Option("--server-role", type="choice", metavar="ROLE",
                 choices=["domain controller", "dc", "member server", "member", "standalone"],
                 help="The server role (domain controller | dc | member server | member | standalone). Default is dc.",
@@ -251,21 +278,17 @@ class cmd_domain_provision(Command):
                 help="The initial nextRid value (only needed for upgrades).  Default is 1000."),
          Option("--partitions-only",
                 help="Configure Samba's partitions, but do not modify them (ie, join a BDC)", action="store_true"),
-         Option("--targetdir", type="string", metavar="DIR",
-                help="Set target directory"),
-         Option("--ol-mmr-urls", type="string", metavar="LDAPSERVER",
-                help="List of LDAP-URLS [ ldap://<FQHN>:<PORT>/  (where <PORT> has to be different than 389!) ] separated with comma (\",\") for use with OpenLDAP-MMR (Multi-Master-Replication), e.g.: \"ldap://s4dc1:9000,ldap://s4dc2:9000\""),
          Option("--use-rfc2307", action="store_true", help="Use AD to store posix attributes (default = no)"),
-         Option("--plaintext-secrets", action="store_true",
-                help="Store secret/sensitive values as plain text on disk" +
-                     "(default is to encrypt secret/ensitive values)"),
-         Option("--backend-store", type="choice", metavar="BACKENDSTORE",
-                choices=["tdb", "mdb"],
-                help="Specify the database backend to be used "
-                     "(default is %s)" % get_default_backend_store()),
         ]
 
     openldap_options = [
+        Option("--ldapadminpass", type="string", metavar="PASSWORD",
+               help="choose password to set between Samba and its LDAP backend (otherwise random)"),
+        Option("--ldap-backend-type", type="choice", metavar="LDAP-BACKEND-TYPE",
+               help="Test initialisation support for unsupported LDAP backend type (fedora-ds or openldap) DO NOT USE",
+               choices=["fedora-ds", "openldap"]),
+        Option("--ol-mmr-urls", type="string", metavar="LDAPSERVER",
+                help="List of LDAP-URLS [ ldap://<FQHN>:<PORT>/  (where <PORT> has to be different than 389!) ] separated with comma (\",\") for use with OpenLDAP-MMR (Multi-Master-Replication), e.g.: \"ldap://s4dc1:9000,ldap://s4dc2:9000\""),
         Option("--ldap-dryrun-mode", help="Configure LDAP backend, but do not run any binaries and exit early.  Used only for the test environment.  DO NOT USE",
                action="store_true"),
         Option("--slapd-path", type="string", metavar="SLAPD-PATH",
@@ -277,7 +300,6 @@ class cmd_domain_provision(Command):
         ]
 
     ntvfs_options = [
-        Option("--use-ntvfs", action="store_true", help="Use NTVFS for the fileserver (default = no)"),
         Option("--use-xattrs", type="choice", choices=["yes","no","auto"],
                metavar="[yes|no|auto]",
                help="Define if we should use the native fs capabilities or a tdb file for "
@@ -286,11 +308,14 @@ class cmd_domain_provision(Command):
                default="auto")
     ]
 
+    takes_options.extend(common_provision_join_options)
+
     if os.getenv('TEST_LDAP', "no") == "yes":
         takes_options.extend(openldap_options)
 
     if samba.is_ntvfs_fileserver_built():
-         takes_options.extend(ntvfs_options)
+        takes_options.extend(common_ntvfs_options)
+        takes_options.extend(ntvfs_options)
 
     takes_args = []
 
@@ -563,31 +588,13 @@ class cmd_domain_dcpromo(Command):
         "credopts": options.CredentialsOptions,
     }
 
-    takes_options = [
-        Option("--server", help="DC to join", type=str),
-        Option("--site", help="site to join", type=str),
-        Option("--targetdir", help="where to store provision", type=str),
-        Option("--domain-critical-only",
-               help="only replicate critical domain objects",
-               action="store_true"),
-        Option("--machinepass", type=str, metavar="PASSWORD",
-               help="choose machine password (otherwise random)"),
-        Option("--dns-backend", type="choice", metavar="NAMESERVER-BACKEND",
-               choices=["SAMBA_INTERNAL", "BIND9_DLZ", "NONE"],
-               help="The DNS server backend. SAMBA_INTERNAL is the builtin name server (default), "
-                   "BIND9_DLZ uses samba4 AD to store zone information, "
-                   "NONE skips the DNS setup entirely (this DC will not be a DNS server)",
-               default="SAMBA_INTERNAL"),
-        Option("--quiet", help="Be quiet", action="store_true"),
-        Option("--verbose", help="Be verbose", action="store_true")
-        ]
+    takes_options = []
+    takes_options.extend(common_join_options)
 
-    ntvfs_options = [
-         Option("--use-ntvfs", action="store_true", help="Use NTVFS for the fileserver (default = no)"),
-    ]
+    takes_options.extend(common_provision_join_options)
 
     if samba.is_ntvfs_fileserver_built():
-         takes_options.extend(ntvfs_options)
+         takes_options.extend(common_ntvfs_options)
 
 
     takes_args = ["domain", "role?"]
@@ -596,7 +603,8 @@ class cmd_domain_dcpromo(Command):
             versionopts=None, server=None, site=None, targetdir=None,
             domain_critical_only=False, parent_domain=None, machinepass=None,
             use_ntvfs=False, dns_backend=None,
-            quiet=False, verbose=False):
+            quiet=False, verbose=False, plaintext_secrets=False,
+            backend_store=None):
         lp = sambaopts.get_loadparm()
         creds = credopts.get_credentials(lp)
         net = Net(creds, lp, server=credopts.ipaddress)
@@ -620,13 +628,15 @@ class cmd_domain_dcpromo(Command):
                     domain_critical_only=domain_critical_only,
                     machinepass=machinepass, use_ntvfs=use_ntvfs,
                     dns_backend=dns_backend,
-                    promote_existing=True)
+                    promote_existing=True, plaintext_secrets=plaintext_secrets,
+                    backend_store=backend_store)
         elif role == "RODC":
             join_RODC(logger=logger, server=server, creds=creds, lp=lp, domain=domain,
                       site=site, netbios_name=netbios_name, targetdir=targetdir,
                       domain_critical_only=domain_critical_only,
                       machinepass=machinepass, use_ntvfs=use_ntvfs, dns_backend=dns_backend,
-                      promote_existing=True)
+                      promote_existing=True, plaintext_secrets=plaintext_secrets,
+                      backend_store=backend_store)
         else:
             raise CommandError("Invalid role '%s' (possible values: DC, RODC)" % role)
 
@@ -643,34 +653,18 @@ class cmd_domain_join(Command):
     }
 
     takes_options = [
-        Option("--server", help="DC to join", type=str),
-        Option("--site", help="site to join", type=str),
-        Option("--targetdir", help="where to store provision", type=str),
         Option("--parent-domain", help="parent domain to create subdomain under", type=str),
-        Option("--domain-critical-only",
-               help="only replicate critical domain objects",
-               action="store_true"),
-        Option("--machinepass", type=str, metavar="PASSWORD",
-               help="choose machine password (otherwise random)"),
         Option("--adminpass", type="string", metavar="PASSWORD",
                help="choose adminstrator password when joining as a subdomain (otherwise random)"),
-        Option("--dns-backend", type="choice", metavar="NAMESERVER-BACKEND",
-               choices=["SAMBA_INTERNAL", "BIND9_DLZ", "NONE"],
-               help="The DNS server backend. SAMBA_INTERNAL is the builtin name server (default), "
-                   "BIND9_DLZ uses samba4 AD to store zone information, "
-                   "NONE skips the DNS setup entirely (this DC will not be a DNS server)",
-               default="SAMBA_INTERNAL"),
-        Option("--plaintext-secrets", action="store_true",
-               help="Store secret/sensitive values as plain text on disk" +
-                    "(default is to encrypt secret/ensitive values)"),
-        Option("--quiet", help="Be quiet", action="store_true"),
-        Option("--verbose", help="Be verbose", action="store_true")
        ]
 
     ntvfs_options = [
         Option("--use-ntvfs", help="Use NTVFS for the fileserver (default = no)",
                action="store_true")
     ]
+    takes_options.extend(common_join_options)
+    takes_options.extend(common_provision_join_options)
+
     if samba.is_ntvfs_fileserver_built():
         takes_options.extend(ntvfs_options)
 
@@ -680,7 +674,9 @@ class cmd_domain_join(Command):
             versionopts=None, server=None, site=None, targetdir=None,
             domain_critical_only=False, parent_domain=None, machinepass=None,
             use_ntvfs=False, dns_backend=None, adminpass=None,
-            quiet=False, verbose=False, plaintext_secrets=False):
+            quiet=False, verbose=False,
+            plaintext_secrets=False,
+            backend_store=None):
         lp = sambaopts.get_loadparm()
         creds = credopts.get_credentials(lp)
         net = Net(creds, lp, server=credopts.ipaddress)
@@ -713,14 +709,16 @@ class cmd_domain_join(Command):
                     domain_critical_only=domain_critical_only,
                     machinepass=machinepass, use_ntvfs=use_ntvfs,
                     dns_backend=dns_backend,
-                    plaintext_secrets=plaintext_secrets)
+                    plaintext_secrets=plaintext_secrets,
+                    backend_store=backend_store)
         elif role == "RODC":
             join_RODC(logger=logger, server=server, creds=creds, lp=lp, domain=domain,
                       site=site, netbios_name=netbios_name, targetdir=targetdir,
                       domain_critical_only=domain_critical_only,
                       machinepass=machinepass, use_ntvfs=use_ntvfs,
                       dns_backend=dns_backend,
-                      plaintext_secrets=plaintext_secrets)
+                      plaintext_secrets=plaintext_secrets,
+                      backend_store=backend_store)
         elif role == "SUBDOMAIN":
             if not adminpass:
                 logger.info("Administrator password will be set randomly!")
@@ -734,7 +732,8 @@ class cmd_domain_join(Command):
                            targetdir=targetdir, machinepass=machinepass,
                            use_ntvfs=use_ntvfs, dns_backend=dns_backend,
                            adminpass=adminpass,
-                           plaintext_secrets=plaintext_secrets)
+                           plaintext_secrets=plaintext_secrets,
+                           backend_store=backend_store)
         else:
             raise CommandError("Invalid role '%s' (possible values: MEMBER, DC, RODC, SUBDOMAIN)" % role)
 
@@ -1567,8 +1566,6 @@ class cmd_domain_classicupgrade(Command):
     ]
 
     ntvfs_options = [
-        Option("--use-ntvfs", help="Use NTVFS for the fileserver (default = no)",
-               action="store_true"),
         Option("--use-xattrs", type="choice", choices=["yes","no","auto"],
                metavar="[yes|no|auto]",
                help="Define if we should use the native fs capabilities or a tdb file for "
@@ -1577,6 +1574,7 @@ class cmd_domain_classicupgrade(Command):
                default="auto")
     ]
     if samba.is_ntvfs_fileserver_built():
+        takes_options.extend(common_ntvfs_options)
         takes_options.extend(ntvfs_options)
 
     takes_args = ["smbconf"]

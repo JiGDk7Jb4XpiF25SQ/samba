@@ -113,6 +113,13 @@ for env in ["ad_dc_ntvfs", "fl2008r2dc", "fl2003dc"]:
         '--option=clientldapsaslwrapping=plain',
         '--sign',
         '--encrypt',
+        '-k yes --option=clientldapsaslwrapping=plain',
+        '-k yes --sign',
+        '-k yes --encrypt',
+        '-k no --option=clientldapsaslwrapping=plain',
+        '-k no --sign --option=ntlmssp_client:ldap_style_send_seal=no',
+        '-k no --sign',
+        '-k no --encrypt',
     ]
 
     for auth_option in auth_options:
@@ -1058,3 +1065,5 @@ plantestsuite("samba4.dsdb.samdb.ldb_modules.unique_object_sids" , "none",
               [os.path.join(bindir(), "test_unique_object_sids")])
 plantestsuite("samba4.dsdb.samdb.ldb_modules.encrypted_secrets", "none",
                   [os.path.join(bindir(), "test_encrypted_secrets")])
+plantestsuite("lib.audit_logging.audit_logging", "none",
+                  [os.path.join(bindir(), "audit_logging_test")])
