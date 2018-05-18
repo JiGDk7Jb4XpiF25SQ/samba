@@ -1738,8 +1738,10 @@ static bool find_new_dc(TALLOC_CTX *mem_ctx,
 	TALLOC_FREE(addrs);
 	num_addrs = 0;
 
-	close(*fd);
-	*fd = -1;
+	if (*fd != -1) {
+		close(*fd);
+		*fd = -1;
+	}
 
 	goto again;
 }
@@ -1981,7 +1983,10 @@ static NTSTATUS cm_open_connection(struct winbindd_domain *domain,
 			&new_conn->cli, &retry);
 		if (!NT_STATUS_IS_OK(result)) {
 			/* Don't leak the smb connection socket */
-			close(fd);
+			if (fd != -1) {
+				close(fd);
+				fd = -1;
+			}
 		}
 
 		if (!retry)

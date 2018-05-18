@@ -113,7 +113,7 @@ mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/sudoers.d
 
 DESTDIR=$RPM_BUILD_ROOT ./buildtools/bin/waf install
 
-install -m644 config/ctdbd.conf $RPM_BUILD_ROOT%{_sysconfdir}/ctdb
+install -m644 config/ctdb.conf $RPM_BUILD_ROOT%{_sysconfdir}/ctdb
 install -m644 config/ctdb.tunables $RPM_BUILD_ROOT%{_sysconfdir}/ctdb
 install -m644 config/script.options $RPM_BUILD_ROOT%{_sysconfdir}/ctdb
 
@@ -151,7 +151,7 @@ rm -rf $RPM_BUILD_ROOT
 %files
 %defattr(-,root,root)
 
-%config(noreplace) %{_sysconfdir}/ctdb/ctdbd.conf
+%config(noreplace) %{_sysconfdir}/ctdb/ctdb.conf
 %config(noreplace) %{_sysconfdir}/ctdb/ctdb.tunables
 %config(noreplace) %{_sysconfdir}/ctdb/script.options
 %{_sysconfdir}/ctdb/notify.sh
@@ -208,13 +208,14 @@ rm -rf $RPM_BUILD_ROOT
 %{_mandir}/man1/onnode.1.gz
 %{_mandir}/man1/ltdbtool.1.gz
 %{_mandir}/man1/ping_pong.1.gz
+%{_mandir}/man5/ctdb.conf.5.gz
 %{_mandir}/man5/ctdb-script.options.5.gz
 %{_mandir}/man5/ctdb.sysconfig.5.gz
-%{_mandir}/man5/ctdbd.conf.5.gz
 %{_mandir}/man7/ctdb.7.gz
 %{_mandir}/man7/ctdb-statistics.7.gz
 %{_mandir}/man7/ctdb-tunables.7.gz
 %attr(0700,root,root) %dir %{_localstatedir}/lib/ctdb
+%attr(0700,root,root) %dir %{_localstatedir}/lib/ctdb/*
 %attr(0700,root,root) %dir %{_localstatedir}/run/ctdb
 
 

@@ -39,32 +39,9 @@
 #include "common/system.h"
 #include "common/common.h"
 #include "common/logging.h"
+#include "common/logging_conf.h"
 
-static struct {
-	const char *debuglevel;
-	const char *transport;
-	const char *myaddress;
-	const char *logging;
-	const char *recovery_lock;
-	const char *db_dir;
-	const char *db_dir_persistent;
-	const char *db_dir_state;
-	int         nosetsched;
-	int         start_as_disabled;
-	int         start_as_stopped;
-	int         no_lmaster;
-	int         no_recmaster;
-	int	    script_log_level;
-	int         max_persistent_check_errors;
-} options = {
-	.debuglevel = "NOTICE",
-	.transport = "tcp",
-	.logging = "file:" LOGDIR "/log.ctdb",
-	.db_dir = CTDB_VARDIR "/volatile",
-	.db_dir_persistent = CTDB_VARDIR "/persistent",
-	.db_dir_state = CTDB_VARDIR "/state",
-	.script_log_level = DEBUG_ERR,
-};
+#include "ctdb_config.h"
 
 int script_log_level;
 bool fast_start;
@@ -172,24 +149,8 @@ int main(int argc, const char *argv[])
 
 	struct poptOption popt_options[] = {
 		POPT_AUTOHELP
-		{ "debug", 'd', POPT_ARG_STRING, &options.debuglevel, 0, "debug level", NULL },
-		{ "interactive", 'i', POPT_ARG_NONE, &interactive, 0, "don't fork", NULL },
-		{ "logging", 0, POPT_ARG_STRING, &options.logging, 0, "logging method to be used", NULL },
-		{ "listen", 0, POPT_ARG_STRING, &options.myaddress, 0, "address to listen on", "address" },
-		{ "transport", 0, POPT_ARG_STRING, &options.transport, 0, "protocol transport", NULL },
-		{ "dbdir", 0, POPT_ARG_STRING, &options.db_dir, 0, "directory for the tdb files", NULL },
-		{ "dbdir-persistent", 0, POPT_ARG_STRING, &options.db_dir_persistent, 0, "directory for persistent tdb files", NULL },
-		{ "dbdir-state", 0, POPT_ARG_STRING, &options.db_dir_state, 0, "directory for internal state tdb files", NULL },
-		{ "reclock", 0, POPT_ARG_STRING, &options.recovery_lock, 0, "recovery lock", "lock" },
-		{ "nosetsched", 0, POPT_ARG_NONE, &options.nosetsched, 0, "disable setscheduler SCHED_FIFO call, use mmap for tdbs", NULL },
-		{ "start-as-disabled", 0, POPT_ARG_NONE, &options.start_as_disabled, 0, "Node starts in disabled state", NULL },
-		{ "start-as-stopped", 0, POPT_ARG_NONE, &options.start_as_stopped, 0, "Node starts in stopped state", NULL },
-		{ "no-lmaster", 0, POPT_ARG_NONE, &options.no_lmaster, 0, "disable lmaster role on this node", NULL },
-		{ "no-recmaster", 0, POPT_ARG_NONE, &options.no_recmaster, 0, "disable recmaster role on this node", NULL },
-		{ "script-log-level", 0, POPT_ARG_INT, &options.script_log_level, 0, "log level of event script output", NULL },
-		{ "max-persistent-check-errors", 0, POPT_ARG_INT,
-		  &options.max_persistent_check_errors, 0,
-		  "max allowed persistent check errors (default 0)", NULL },
+		{ "interactive", 'i', POPT_ARG_NONE, &interactive, 0,
+		  "don't fork", NULL },
 		POPT_TABLEEND
 	};
 	int opt, ret;
@@ -197,7 +158,10 @@ int main(int argc, const char *argv[])
 	poptContext pc;
 	struct tevent_context *ev;
 	const char *ctdb_base;
+	struct conf_context *conf;
+	const char *logging_location;
 	const char *t;
+	bool ok;
 
 	/*
 	 * Basic setup
@@ -254,29 +218,45 @@ int main(int argc, const char *argv[])
 	}
 
 	/*
+	 * Configuration file handling
+	 */
+
+	ret = ctdbd_config_load(ctdb, &conf);
+	if (ret != 0) {
+		fprintf(stderr, "Failed to setup config file handling\n");
+		goto fail;
+	}
+
+	/*
 	 * Logging setup/options
 	 */
 
-	/* Log to stderr when running as interactive */
+	/* Log to stderr (ignoring configuration) when running as interactive */
 	if (interactive) {
-		options.logging = "file:";
+		logging_location = "file:";
+	} else {
+		logging_location = logging_conf_location(conf);
 	}
 
-	if (strcmp(options.logging, "syslog") != 0) {
+	if (strcmp(logging_location, "syslog") != 0) {
 		/* This can help when CTDB logging is misconfigured */
 		syslog(LOG_DAEMON|LOG_NOTICE,
 		       "CTDB logging to location %s",
-		       options.logging);
+		       logging_location);
 	}
 
 	/* Initialize logging and set the debug level */
-	if (!ctdb_logging_init(ctdb, options.logging, options.debuglevel)) {
+	ok = ctdb_logging_init(ctdb,
+			       logging_location,
+			       logging_conf_log_level(conf));
+	if (!ok) {
 		goto fail;
 	}
-	setenv("CTDB_LOGGING", options.logging, 1);
+	setenv("CTDB_LOGGING", logging_location, 1);
 	setenv("CTDB_DEBUGLEVEL", debug_level_to_string(DEBUGLEVEL), 1);
 
-	script_log_level = options.script_log_level;
+	script_log_level = debug_level_from_string(
+					ctdb_config.script_log_level);
 
 	D_NOTICE("CTDB starting on node\n");
 
@@ -284,20 +264,20 @@ int main(int argc, const char *argv[])
 	 * Cluster setup/options
 	 */
 
-	ret = ctdb_set_transport(ctdb, options.transport);
+	ret = ctdb_set_transport(ctdb, ctdb_config.transport);
 	if (ret == -1) {
 		D_ERR("ctdb_set_transport failed - %s\n", ctdb_errstr(ctdb));
 		goto fail;
 	}
 
-	if (options.recovery_lock == NULL) {
+	if (ctdb_config.recovery_lock == NULL) {
 		D_WARNING("Recovery lock not set\n");
 	}
-	ctdb->recovery_lock = options.recovery_lock;
+	ctdb->recovery_lock = ctdb_config.recovery_lock;
 
 	/* tell ctdb what address to listen on */
-	if (options.myaddress) {
-		ret = ctdb_set_address(ctdb, options.myaddress);
+	if (ctdb_config.node_address) {
+		ret = ctdb_set_address(ctdb, ctdb_config.node_address);
 		if (ret == -1) {
 			D_ERR("ctdb_set_address failed - %s\n",
 			      ctdb_errstr(ctdb));
@@ -317,38 +297,51 @@ int main(int argc, const char *argv[])
 	 * Database setup/options
 	 */
 
-	ctdb->db_directory = options.db_dir;
-	mkdir_p_or_die(ctdb->db_directory, 0700);
+	ctdb->db_directory = ctdb_config.dbdir_volatile;
+	ctdb->db_directory_persistent = ctdb_config.dbdir_persistent;
+	ctdb->db_directory_state = ctdb_config.dbdir_state;
 
-	ctdb->db_directory_persistent = options.db_dir_persistent;
-	mkdir_p_or_die(ctdb->db_directory_persistent, 0700);
+	if (ctdb_config.lock_debug_script != NULL) {
+		ret = setenv("CTDB_DEBUG_LOCKS",
+			     ctdb_config.lock_debug_script,
+			     1);
+		if (ret != 0) {
+			D_ERR("Failed to set up lock debugging (%s)\n",
+			      strerror(ret));
+			goto fail;
+		}
+	}
 
-	ctdb->db_directory_state = options.db_dir_state;
-	mkdir_p_or_die(ctdb->db_directory_state, 0700);
-
-	if (options.max_persistent_check_errors < 0) {
-		ctdb->max_persistent_check_errors = 0xFFFFFFFFFFFFFFFFLL;
-	} else {
-		ctdb->max_persistent_check_errors =
-			(uint64_t)options.max_persistent_check_errors;
+	/*
+	 * Event setup/options
+	 */
+	if (ctdb_config.event_debug_script != NULL) {
+		ret = setenv("CTDB_DEBUG_HUNG_SCRIPT",
+			     ctdb_config.event_debug_script,
+			     1);
+		if (ret != 0) {
+			D_ERR("Failed to set up event script debugging (%s)\n",
+			      strerror(ret));
+			goto fail;
+		}
 	}
 
 	/*
 	 * Legacy setup/options
 	 */
 
-	ctdb->start_as_disabled = options.start_as_disabled;
-	ctdb->start_as_stopped  = options.start_as_stopped;
+	ctdb->start_as_disabled = (int)ctdb_config.start_as_disabled;
+	ctdb->start_as_stopped  = (int)ctdb_config.start_as_stopped;
 
 	/* set ctdbd capabilities */
-	if (options.no_lmaster != 0) {
+	if (!ctdb_config.lmaster_capability) {
 		ctdb->capabilities &= ~CTDB_CAP_LMASTER;
 	}
-	if (options.no_recmaster != 0) {
+	if (!ctdb_config.recmaster_capability) {
 		ctdb->capabilities &= ~CTDB_CAP_RECMASTER;
 	}
 
-	ctdb->do_setsched = (options.nosetsched != 1);
+	ctdb->do_setsched = !ctdb_config.no_realtime;
 
 	/*
 	 * Miscellaneous setup

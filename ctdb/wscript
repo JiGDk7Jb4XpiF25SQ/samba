@@ -48,9 +48,9 @@ manpages_misc = [
     'ctdb_diagnostics.1',
     'ctdbd_wrapper.1',
     'onnode.1',
+    'ctdb.conf.5',
     'ctdb-script.options.5',
     'ctdb.sysconfig.5',
-    'ctdbd.conf.5',
     'ctdb.7',
     'ctdb-statistics.7',
     'ctdb-tunables.7',
@@ -464,10 +464,30 @@ def build(bld):
                      deps='''ctdb-util samba-util talloc replace popt''',
                      install_path='${CTDB_HELPER_BINDIR}')
 
+    bld.SAMBA_SUBSYSTEM('ctdb-cluster-conf',
+                        source='cluster/cluster_conf.c',
+                        deps='ctdb-util')
+
+    bld.SAMBA_SUBSYSTEM('ctdb-database-conf',
+                        source='database/database_conf.c',
+                        deps='ctdb-util')
+
+    bld.SAMBA_SUBSYSTEM('ctdb-event-conf',
+                        source='event/event_conf.c',
+                        deps='ctdb-util')
+
+    bld.SAMBA_SUBSYSTEM('ctdb-legacy-conf',
+                        source='server/legacy_conf.c',
+                        deps='ctdb-util')
+
     bld.SAMBA_BINARY('ctdb-config',
                      source='common/conf_tool.c',
                      cflags='-DCTDB_CONF_TOOL',
                      deps='''ctdb-logging-conf
+                             ctdb-event-conf
+                             ctdb-cluster-conf
+                             ctdb-database-conf
+                             ctdb-legacy-conf
                              ctdb-util samba-util talloc replace popt''',
                      install_path='${CTDB_HELPER_BINDIR}')
 
@@ -489,10 +509,17 @@ def build(bld):
                                              ctdb_statistics.c
                                              ctdb_update_record.c
                                              ctdb_lock.c ctdb_fork.c
-                                             ctdb_tunnel.c ctdb_client.c'''),
+                                             ctdb_tunnel.c ctdb_client.c
+                                             ctdb_config.c
+                                          '''),
                      includes='include',
                      deps='''ctdb-common ctdb-system ctdb-protocol
                              ctdb-tcp ctdb-util replace sys_rw popt
+                             ctdb-logging-conf
+                             ctdb-cluster-conf
+                             ctdb-database-conf
+                             ctdb-event-conf
+                             ctdb-legacy-conf
                              talloc tevent tdb-wrap tdb talloc_report''' +
                           ib_deps,
                      install_path='${SBINDIR}',
@@ -751,6 +778,9 @@ def build(bld):
     bld.install_dir(bld.env.CTDB_LOGDIR)
     bld.install_dir(bld.env.CTDB_RUNDIR)
     bld.install_dir(bld.env.CTDB_VARDIR)
+
+    for d in ['volatile', 'persistent', 'state']:
+        bld.install_dir(os.path.join(bld.env.CTDB_VARDIR, d))
 
     # Unit tests
     ctdb_unit_tests = [

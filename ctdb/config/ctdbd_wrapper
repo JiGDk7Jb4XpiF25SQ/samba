@@ -20,75 +20,15 @@ fi
 
 . "${CTDB_BASE}/functions"
 
-loadconfig
+load_system_config "ctdb"
 
 ctdbd="${CTDBD:-/usr/local/sbin/ctdbd}"
 
 ############################################################
 
-# Only the nested function references its arguments
-# shellcheck disable=SC2120
-build_ctdb_options ()
-{
-    ctdb_options=""
-
-    maybe_set ()
-    {
-	# If the given variable isn't set then do nothing
-	[ -n "$2" ] || return
-	# If a required value for the variable and it doesn't match,
-	# then do nothing
-	[ -z "$3" -o "$3" = "$2" ] || return
-
-	val="'$2'"
-	case "$1" in
-	    --*) sep="=" ;;
-	    -*)  sep=" " ;;
-	esac
-	# For these options we're only passing a value-less flag.
-	if [ -n "$3" ] ; then
-	    val=""
-	    sep=""
-	fi
-
-	ctdb_options="${ctdb_options}${ctdb_options:+ }${1}${sep}${val}"
-    }
-
-    # build up ctdb_options variable from optional parameters
-    maybe_set "--reclock"                "$CTDB_RECOVERY_LOCK"
-    maybe_set "--logging"                "$CTDB_LOGGING"
-    maybe_set "--listen"                 "$CTDB_NODE_ADDRESS"
-    maybe_set "--dbdir"                  "$CTDB_DBDIR"
-    maybe_set "--dbdir-persistent"       "$CTDB_DBDIR_PERSISTENT"
-    maybe_set "--dbdir-state"            "$CTDB_DBDIR_STATE"
-    maybe_set "--transport"              "$CTDB_TRANSPORT"
-    maybe_set "-d"                       "$CTDB_DEBUGLEVEL"
-    maybe_set "--start-as-disabled"      "$CTDB_START_AS_DISABLED"    "yes"
-    maybe_set "--start-as-stopped "      "$CTDB_START_AS_STOPPED"     "yes"
-    maybe_set "--no-recmaster"           "$CTDB_CAPABILITY_RECMASTER" "no"
-    maybe_set "--no-lmaster"             "$CTDB_CAPABILITY_LMASTER"   "no"
-    maybe_set "--nosetsched"             "$CTDB_NOSETSCHED"           "yes"
-    maybe_set "--script-log-level"       "$CTDB_SCRIPT_LOG_LEVEL"
-    maybe_set "--max-persistent-check-errors" "$CTDB_MAX_PERSISTENT_CHECK_ERRORS"
-}
-
-export_debug_variables ()
-{
-    [ -n "$CTDB_DEBUG_HUNG_SCRIPT" ] && export CTDB_DEBUG_HUNG_SCRIPT
-    [ -n "$CTDB_DEBUG_LOCKS" ] && export CTDB_DEBUG_LOCKS
-}
-
-############################################################
-
 start()
 {
-    # build_ctdb_options() takes no arguments
-    # shellcheck disable=SC2119
-    build_ctdb_options
-
-    export_debug_variables
-
-    eval "$ctdbd" "$ctdb_options" || return 1
+    eval "$ctdbd" || return 1
 
     # Wait until ctdbd has started and is ready to respond to clients.
     _timeout="${CTDB_STARTUP_TIMEOUT:-10}"

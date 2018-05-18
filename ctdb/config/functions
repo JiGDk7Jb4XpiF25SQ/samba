@@ -44,16 +44,6 @@ load_system_config ()
 	fi
 }
 
-loadconfig() {
-
-	load_system_config "ctdb"
-
-	_config="${CTDB_BASE}/ctdbd.conf"
-	if [ -r "$_config" ] ; then
-		. "$_config"
-	fi
-}
-
 # load_script_options [ component script ]
 #   script is an event script name relative to a component
 #   component is currently ignored
@@ -66,8 +56,6 @@ load_script_options ()
 	else
 		die "usage: load_script_options [ component script ]"
 	fi
-
-	loadconfig
 
 	_options="${CTDB_BASE}/script.options"
 
@@ -242,6 +230,43 @@ ctdb_get_ip_address ()
     # ip_address is used by caller
     # shellcheck disable=SC2034
     cat "$_ip_addr_file"
+}
+
+# Cached retrieval of database options for use by event scripts.
+#
+# If the variables are already set then they should not be overwritten
+# - this should only happen during event script testing.
+ctdb_get_db_options ()
+{
+	_db_opts_file="${CTDB_SCRIPT_VARDIR}/db_options.cache"
+
+	if [ ! -f "$_db_opts_file" ] ; then
+		{
+			ctdb_translate_option "database" \
+					      "volatile database directory" \
+					      "CTDB_DBDIR"
+			ctdb_translate_option "database" \
+					      "persistent database directory" \
+					      "CTDB_DBDIR_PERSISTENT"
+			ctdb_translate_option "database" \
+					      "state database directory" \
+					      "CTDB_DBDIR_STATE"
+		} >"$_db_opts_file"
+	fi
+
+	. "$_db_opts_file"
+}
+
+ctdb_translate_option ()
+{
+	_section="$1"
+	_opt="$2"
+	_variable="$3"
+
+	# ctdb-config already prints an error if something goes wrong
+	_t=$("${CTDB_HELPER_BINDIR}/ctdb-config" get "$_section" "$_opt") || \
+		exit $?
+	echo "${_variable}=\"${_t}\""
 }
 
 ######################################################

@@ -54,6 +54,8 @@
 static bool client_is_idle(struct winbindd_cli_state *state);
 static void remove_client(struct winbindd_cli_state *state);
 static void winbindd_setup_max_fds(void);
+static void request_ok(struct winbindd_cli_state *state);
+static void request_error(struct winbindd_cli_state *state);
 
 static bool opt_nocache = False;
 static bool interactive = False;
@@ -521,37 +523,41 @@ static void winbind_msg_validate_cache(struct messaging_context *msg_ctx,
 	_exit(0);
 }
 
-static struct winbindd_dispatch_table {
+static struct winbindd_bool_dispatch_table {
 	enum winbindd_cmd cmd;
-	void (*fn)(struct winbindd_cli_state *state);
-	const char *winbindd_cmd_name;
-} dispatch_table[] = {
-
-	/* Enumeration functions */
-
-	{ WINBINDD_LIST_TRUSTDOM, winbindd_list_trusted_domains,
-	  "LIST_TRUSTDOM" },
-
-	/* Miscellaneous */
-
-	{ WINBINDD_INFO, winbindd_info, "INFO" },
-	{ WINBINDD_PING, winbindd_ping, "PING" },
-	{ WINBINDD_INTERFACE_VERSION, winbindd_interface_version,
+	bool (*fn)(struct winbindd_cli_state *state);
+	const char *cmd_name;
+} bool_dispatch_table[] = {
+	{ WINBINDD_INTERFACE_VERSION,
+	  winbindd_interface_version,
 	  "INTERFACE_VERSION" },
-	{ WINBINDD_DOMAIN_NAME, winbindd_domain_name, "DOMAIN_NAME" },
-	{ WINBINDD_DOMAIN_INFO, winbindd_domain_info, "DOMAIN_INFO" },
-	{ WINBINDD_DC_INFO, winbindd_dc_info, "DC_INFO" },
-	{ WINBINDD_NETBIOS_NAME, winbindd_netbios_name, "NETBIOS_NAME" },
-	{ WINBINDD_PRIV_PIPE_DIR, winbindd_priv_pipe_dir,
+	{ WINBINDD_INFO,
+	  winbindd_info,
+	  "INFO" },
+	{ WINBINDD_PING,
+	  winbindd_ping,
+	  "PING" },
+	{ WINBINDD_DOMAIN_NAME,
+	  winbindd_domain_name,
+	  "DOMAIN_NAME" },
+	{ WINBINDD_NETBIOS_NAME,
+	  winbindd_netbios_name,
+	  "NETBIOS_NAME" },
+	{ WINBINDD_DC_INFO,
+	  winbindd_dc_info,
+	  "DC_INFO" },
+	{ WINBINDD_CCACHE_NTLMAUTH,
+	  winbindd_ccache_ntlm_auth,
+	  "NTLMAUTH" },
+	{ WINBINDD_CCACHE_SAVE,
+	  winbindd_ccache_save,
+	  "CCACHE_SAVE" },
+	{ WINBINDD_PRIV_PIPE_DIR,
+	  winbindd_priv_pipe_dir,
 	  "WINBINDD_PRIV_PIPE_DIR" },
-
-	/* Credential cache access */
-	{ WINBINDD_CCACHE_NTLMAUTH, winbindd_ccache_ntlm_auth, "NTLMAUTH" },
-	{ WINBINDD_CCACHE_SAVE, winbindd_ccache_save, "CCACHE_SAVE" },
-
-	/* End of list */
-
-	{ WINBINDD_NUM_CMDS, NULL, "NONE" }
+	{ WINBINDD_LIST_TRUSTDOM,
+	  winbindd_list_trusted_domains,
+	  "LIST_TRUSTDOM" },
 };
 
 struct winbindd_async_dispatch_table {
@@ -635,6 +641,8 @@ static struct winbindd_async_dispatch_table async_nonpriv_table[] = {
 	  winbindd_wins_byip_send, winbindd_wins_byip_recv },
 	{ WINBINDD_WINS_BYNAME, "WINS_BYNAME",
 	  winbindd_wins_byname_send, winbindd_wins_byname_recv },
+	{ WINBINDD_DOMAIN_INFO, "DOMAIN_INFO",
+	  winbindd_domain_info_send, winbindd_domain_info_recv },
 
 	{ 0, NULL, NULL, NULL }
 };
@@ -656,8 +664,9 @@ static void wb_request_done(struct tevent_req *req);
 
 static void process_request(struct winbindd_cli_state *state)
 {
-	struct winbindd_dispatch_table *table = dispatch_table;
 	struct winbindd_async_dispatch_table *atable;
+	size_t i;
+	bool ok;
 
 	state->mem_ctx = talloc_named(state, 0, "winbind request");
 	if (state->mem_ctx == NULL)
@@ -719,19 +728,27 @@ static void process_request(struct winbindd_cli_state *state)
 	state->response->result = WINBINDD_PENDING;
 	state->response->length = sizeof(struct winbindd_response);
 
-	for (table = dispatch_table; table->fn; table++) {
-		if (state->request->cmd == table->cmd) {
-			DEBUG(10,("process_request: request fn %s\n",
-				  table->winbindd_cmd_name ));
-			state->cmd_name = table->winbindd_cmd_name;
-			table->fn(state);
+	for (i=0; i<ARRAY_SIZE(bool_dispatch_table); i++) {
+		if (bool_dispatch_table[i].cmd == state->request->cmd) {
 			break;
 		}
 	}
 
-	if (!table->fn) {
+	if (i == ARRAY_SIZE(bool_dispatch_table)) {
 		DEBUG(10,("process_request: unknown request fn number %d\n",
 			  (int)state->request->cmd ));
+		request_error(state);
+		return;
+	}
+
+	DBG_DEBUG("process_request: request fn %s\n",
+		  bool_dispatch_table[i].cmd_name);
+
+	ok = bool_dispatch_table[i].fn(state);
+
+	if (ok) {
+		request_ok(state);
+	} else {
 		request_error(state);
 	}
 }
@@ -842,14 +859,14 @@ static void winbind_client_response_written(struct tevent_req *req)
 	state->io_req = req;
 }
 
-void request_error(struct winbindd_cli_state *state)
+static void request_error(struct winbindd_cli_state *state)
 {
 	SMB_ASSERT(state->response->result == WINBINDD_PENDING);
 	state->response->result = WINBINDD_ERROR;
 	request_finished(state);
 }
 
-void request_ok(struct winbindd_cli_state *state)
+static void request_ok(struct winbindd_cli_state *state)
 {
 	SMB_ASSERT(state->response->result == WINBINDD_PENDING);
 	state->response->result = WINBINDD_OK;

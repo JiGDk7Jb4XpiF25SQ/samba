@@ -25,8 +25,6 @@
 
 /* The following definitions come from winbindd/winbindd.c  */
 struct imessaging_context *winbind_imessaging_context(void);
-void request_error(struct winbindd_cli_state *state);
-void request_ok(struct winbindd_cli_state *state);
 bool winbindd_setup_sig_term_handler(bool parent);
 bool winbindd_setup_stdin_handler(bool parent, bool foreground);
 bool winbindd_setup_sig_hup_handler(const char *lfile);
@@ -173,10 +171,10 @@ void wcache_store_ndr(struct winbindd_domain *domain, uint32_t opnum,
 
 /* The following definitions come from winbindd/winbindd_ccache_access.c  */
 
-void winbindd_ccache_ntlm_auth(struct winbindd_cli_state *state);
+bool winbindd_ccache_ntlm_auth(struct winbindd_cli_state *state);
 enum winbindd_result winbindd_dual_ccache_ntlm_auth(struct winbindd_domain *domain,
 						struct winbindd_cli_state *state);
-void winbindd_ccache_save(struct winbindd_cli_state *state);
+bool winbindd_ccache_save(struct winbindd_cli_state *state);
 
 /* The following definitions come from winbindd/winbindd_cm.c  */
 void winbind_msg_domain_offline(struct messaging_context *msg_ctx,
@@ -381,18 +379,16 @@ struct dcerpc_binding_handle *locator_child_handle(void);
 
 /* The following definitions come from winbindd/winbindd_misc.c  */
 
-void winbindd_list_trusted_domains(struct winbindd_cli_state *state);
+bool winbindd_list_trusted_domains(struct winbindd_cli_state *state);
 enum winbindd_result winbindd_dual_list_trusted_domains(struct winbindd_domain *domain,
 							struct winbindd_cli_state *state);
-void winbindd_show_sequence(struct winbindd_cli_state *state);
-void winbindd_domain_info(struct winbindd_cli_state *state);
-void winbindd_dc_info(struct winbindd_cli_state *state);
-void winbindd_ping(struct winbindd_cli_state *state);
-void winbindd_info(struct winbindd_cli_state *state);
-void winbindd_interface_version(struct winbindd_cli_state *state);
-void winbindd_domain_name(struct winbindd_cli_state *state);
-void winbindd_netbios_name(struct winbindd_cli_state *state);
-void winbindd_priv_pipe_dir(struct winbindd_cli_state *state);
+bool winbindd_dc_info(struct winbindd_cli_state *state);
+bool winbindd_ping(struct winbindd_cli_state *state);
+bool winbindd_info(struct winbindd_cli_state *state);
+bool winbindd_interface_version(struct winbindd_cli_state *state);
+bool winbindd_domain_name(struct winbindd_cli_state *state);
+bool winbindd_netbios_name(struct winbindd_cli_state *state);
+bool winbindd_priv_pipe_dir(struct winbindd_cli_state *state);
 
 /* The following definitions come from winbindd/winbindd_ndr.c  */
 struct ndr_print;
@@ -485,7 +481,6 @@ bool canonicalize_username(fstring username_inout,
 			   fstring namespace,
 			   fstring domain,
 			   fstring user);
-void fill_domain_username(fstring name, const char *domain, const char *user, bool can_assume);
 char *fill_domain_username_talloc(TALLOC_CTX *ctx,
 				  const char *domain,
 				  const char *user,
@@ -941,7 +936,13 @@ struct tevent_req *winbindd_wins_byname_send(TALLOC_CTX *mem_ctx,
 					     struct winbindd_request *request);
 NTSTATUS winbindd_wins_byname_recv(struct tevent_req *req,
 				   struct winbindd_response *presp);
-
+struct tevent_req *winbindd_domain_info_send(
+	TALLOC_CTX *mem_ctx,
+	struct tevent_context *ev,
+	struct winbindd_cli_state *cli,
+	struct winbindd_request *request);
+NTSTATUS winbindd_domain_info_recv(struct tevent_req *req,
+				   struct winbindd_response *response);
 
 /* The following definitions come from winbindd/winbindd_samr.c  */
 

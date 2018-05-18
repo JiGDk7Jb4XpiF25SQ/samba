@@ -99,9 +99,15 @@ setup_script_options ()
 setup_dbdir ()
 {
 	export CTDB_DBDIR_BASE="${EVENTSCRIPTS_TESTS_VAR_DIR}/db"
-	export CTDB_DBDIR="${CTDB_DBDIR_BASE}/volatile"
-	export CTDB_DBDIR_PERSISTENT="${CTDB_DBDIR_BASE}/persistent"
-	export CTDB_DBDIR_STATE="${CTDB_DBDIR_BASE}/state"
+	CTDB_DBDIR="${CTDB_DBDIR_BASE}/volatile"
+	CTDB_DBDIR_PERSISTENT="${CTDB_DBDIR_BASE}/persistent"
+	CTDB_DBDIR_STATE="${CTDB_DBDIR_BASE}/state"
+	cat >>"${CTDB_BASE}/ctdb.conf" <<EOF
+[database]
+	volatile database directory = ${CTDB_DBDIR}
+	persistent database directory = ${CTDB_DBDIR_PERSISTENT}
+	state database directory = ${CTDB_DBDIR_STATE}
+EOF
 	mkdir -p "$CTDB_DBDIR"
 	mkdir -p "$CTDB_DBDIR_PERSISTENT"
 	mkdir -p "$CTDB_DBDIR_STATE"
