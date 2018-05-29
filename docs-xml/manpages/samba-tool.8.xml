@@ -334,6 +334,51 @@
 </refsect3>
 
 <refsect3>
+	<title>domain passwordsettings pso</title>
+	<para>Manage fine-grained Password Settings Objects (PSOs).</para>
+</refsect3>
+
+<refsect3>
+	<title>domain passwordsettings pso apply <replaceable>pso-name</replaceable> <replaceable>user-or-group-name</replaceable> [options]</title>
+	<para>Applies a PSO's password policy to a user or group.</para>
+</refsect3>
+
+<refsect3>
+	<title>domain passwordsettings pso create <replaceable>pso-name</replaceable> <replaceable>precedence</replaceable> [options]</title>
+	<para>Creates a new Password Settings Object (PSO).</para>
+</refsect3>
+
+<refsect3>
+	<title>domain passwordsettings pso delete <replaceable>pso-name</replaceable> [options]</title>
+	<para>Deletes a Password Settings Object (PSO).</para>
+</refsect3>
+
+<refsect3>
+	<title>domain passwordsettings pso list [options]</title>
+	<para>Lists all Password Settings Objects (PSOs).</para>
+</refsect3>
+
+<refsect3>
+	<title>domain passwordsettings pso set <replaceable>pso-name</replaceable> [options]</title>
+	<para>Modifies a Password Settings Object (PSO).</para>
+</refsect3>
+
+<refsect3>
+	<title>domain passwordsettings pso show <replaceable>user-name</replaceable> [options]</title>
+	<para>Displays a Password Settings Object (PSO).</para>
+</refsect3>
+
+<refsect3>
+	<title>domain passwordsettings pso show-user <replaceable>pso-name</replaceable> [options]</title>
+	<para>Displays the Password Settings that apply to a user.</para>
+</refsect3>
+
+<refsect3>
+	<title>domain passwordsettings pso unapply <replaceable>pso-name</replaceable> <replaceable>user-or-group-name</replaceable> [options]</title>
+	<para>Updates a PSO to no longer apply to a user or group.</para>
+</refsect3>
+
+<refsect3>
 	<title>domain provision</title>
 	<para>Promote an existing domain member or NT4 PDC to an AD DC.</para>
 </refsect3>
@@ -412,6 +457,26 @@
 <refsect3>
 	<title>dsacl set</title>
 	<para>Modify access list on a directory object.</para>
+</refsect3>
+
+<refsect2>
+	<title>forest</title>
+	<para>Manage Forest configuration.</para>
+</refsect2>
+
+<refsect3>
+	<title>forest directory_service</title>
+	<para>Manage directory_service behaviour for the forest.</para>
+</refsect3>
+
+<refsect3>
+	<title>forest directory_service dsheuristics <replaceable>VALUE</replaceable></title>
+	<para>Modify dsheuristics directory_service configuration for the forest.</para>
+</refsect3>
+
+<refsect3>
+	<title>forest directory_service show</title>
+	<para>Show current directory_service configuration for the forest.</para>
 </refsect3>
 
 <refsect2>
@@ -545,6 +610,11 @@
 	<para>Remove members from the specified AD group.</para>
 </refsect3>
 
+<refsect3>
+	<title>group show <replaceable>groupname</replaceable> [options]</title>
+	<para>Show group object and it's attributes.</para>
+</refsect3>
+
 <refsect2>
 	<title>ldapcmp <replaceable>URL1</replaceable> <replaceable>URL2</replaceable> <replaceable>domain|configuration|schema|dnsdomain|dnsforest</replaceable> [options] </title>
 	<para>Compare two LDAP databases.</para>
@@ -665,6 +735,31 @@
 <refsect3>
 	<title>rodc preload <replaceable>SID</replaceable>|<replaceable>DN</replaceable>|<replaceable>accountname</replaceable> [options]</title>
 	<para>Preload one account for an RODC.</para>
+</refsect3>
+
+<refsect2>
+	<title>schema</title>
+	<para>Manage and query schema.</para>
+</refsect2>
+
+<refsect3>
+	<title>schema attribute modify <replaceable>attribute</replaceable> [options]</title>
+	<para>Modify the behaviour of an attribute in schema.</para>
+</refsect3>
+
+<refsect3>
+	<title>schema attribute show <replaceable>attribute</replaceable> [options]</title>
+	<para>Display an attribute schema definition.</para>
+</refsect3>
+
+<refsect3>
+	<title>schema attribute show_oc <replaceable>attribute</replaceable> [options]</title>
+	<para>Show objectclasses that MAY or MUST contain this attribute.</para>
+</refsect3>
+
+<refsect3>
+	<title>schema objectclass show <replaceable>objectclass</replaceable> [options]</title>
+	<para>Display an objectclass schema definition.</para>
 </refsect3>
 
 <refsect2>

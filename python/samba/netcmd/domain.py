@@ -99,6 +99,8 @@ from samba.provision.common import (
     FILL_DRS
 )
 
+from samba.netcmd.pso import cmd_domain_passwordsettings_pso
+
 string_version_to_constant = {
     "2008_R2" : DS_DOMAIN_FUNCTION_2008_R2,
     "2012": DS_DOMAIN_FUNCTION_2012,
@@ -1530,6 +1532,7 @@ class cmd_domain_passwordsettings(SuperCommand):
     """Manage password policy settings."""
 
     subcommands = {}
+    subcommands["pso"] = cmd_domain_passwordsettings_pso()
     subcommands["show"] = cmd_domain_passwordsettings_show()
     subcommands["set"] = cmd_domain_passwordsettings_set()
 
@@ -3906,15 +3909,6 @@ class ldif_schema_update:
         self.dn = None
         self.ldif = ""
 
-    def _ldap_schemaUpdateNow(self, samdb):
-        ldif = """
-dn:
-changetype: modify
-add: schemaUpdateNow
-schemaUpdateNow: 1
-"""
-        samdb.modify_ldif(ldif)
-
     def can_ignore_failure(self, error):
         """Checks if we can safely ignore failure to apply an LDIF update"""
         (num, errstr) = error.args
@@ -3943,7 +3937,7 @@ schemaUpdateNow: 1
                     # Otherwise the OID-to-attribute mapping in
                     # _apply_updates_in_file() won't work, because it
                     # can't lookup the new OID in the schema
-                    self._ldap_schemaUpdateNow(samdb)
+                    samdb.set_schema_update_now()
 
                     samdb.modify_ldif(self.ldif, controls=['relax:0'])
                 else:

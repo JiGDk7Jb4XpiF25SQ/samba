@@ -2530,7 +2530,6 @@ static void setup_kernel_oplock_poll_open(struct timeval request_time,
 static bool open_match_attributes(connection_struct *conn,
 				  uint32_t old_dos_attr,
 				  uint32_t new_dos_attr,
-				  mode_t existing_unx_mode,
 				  mode_t new_unx_mode,
 				  mode_t *returned_unx_mode)
 {
@@ -2547,10 +2546,9 @@ static bool open_match_attributes(connection_struct *conn,
 	}
 
 	DEBUG(10,("open_match_attributes: old_dos_attr = 0x%x, "
-		  "existing_unx_mode = 0%o, new_dos_attr = 0x%x "
+		  "new_dos_attr = 0x%x "
 		  "returned_unx_mode = 0%o\n",
 		  (unsigned int)old_dos_attr,
-		  (unsigned int)existing_unx_mode,
 		  (unsigned int)new_dos_attr,
 		  (unsigned int)*returned_unx_mode ));
 
@@ -3174,7 +3172,6 @@ static NTSTATUS open_file_ntcreate(connection_struct *conn,
 	     (create_disposition == FILE_OVERWRITE_IF))) {
 		if (!open_match_attributes(conn, existing_dos_attributes,
 					   new_dos_attributes,
-					   smb_fname->st.st_ex_mode,
 					   unx_mode, &new_unx_mode)) {
 			DEBUG(5,("open_file_ntcreate: attributes mismatch "
 				 "for file %s (%x %x) (0%o, 0%o)\n",
@@ -3779,43 +3776,46 @@ static NTSTATUS open_file_ntcreate(connection_struct *conn,
 	 */
 
 	if (!posix_open && new_file_created && !def_acl) {
-
-		int saved_errno = errno; /* We might get ENOSYS in the next
-					  * call.. */
-
-		if (SMB_VFS_FCHMOD_ACL(fsp, unx_mode) == -1 &&
-		    errno == ENOSYS) {
-			errno = saved_errno; /* Ignore ENOSYS */
-		}
-
-	} else if (new_unx_mode) {
-
-		int ret = -1;
-
-		/* Attributes need changing. File already existed. */
-
-		{
-			int saved_errno = errno; /* We might get ENOSYS in the
-						  * next call.. */
-			ret = SMB_VFS_FCHMOD_ACL(fsp, new_unx_mode);
-
-			if (ret == -1 && errno == ENOSYS) {
-				errno = saved_errno; /* Ignore ENOSYS */
-			} else {
-				DEBUG(5, ("open_file_ntcreate: reset "
-					  "attributes of file %s to 0%o\n",
-					  smb_fname_str_dbg(smb_fname),
-					  (unsigned int)new_unx_mode));
-				ret = 0; /* Don't do the fchmod below. */
+		if (unx_mode != smb_fname->st.st_ex_mode) {
+			int ret = SMB_VFS_FCHMOD(fsp, unx_mode);
+			if (ret == -1) {
+				DBG_INFO("failed to reset "
+				  "attributes of file %s to 0%o\n",
+				  smb_fname_str_dbg(smb_fname),
+				  (unsigned int)unx_mode);
 			}
 		}
 
-		if ((ret == -1) &&
-		    (SMB_VFS_FCHMOD(fsp, new_unx_mode) == -1))
-			DEBUG(5, ("open_file_ntcreate: failed to reset "
+	} else if (new_unx_mode) {
+		/*
+		 * We only get here in the case of:
+		 *
+		 * a). Not a POSIX open.
+		 * b). File already existed.
+		 * c). File was overwritten.
+		 * d). Requested DOS attributes didn't match
+		 *     the DOS attributes on the existing file.
+		 *
+		 * In that case new_unx_mode has been set
+		 * equal to the calculated mode (including
+		 * possible inheritance of the mode from the
+		 * containing directory).
+		 *
+		 * Note this mode was calculated with the
+		 * DOS attribute FILE_ATTRIBUTE_ARCHIVE added,
+		 * so the mode change here is suitable for
+		 * an overwritten file.
+		 */
+
+		if (new_unx_mode != smb_fname->st.st_ex_mode) {
+			int ret = SMB_VFS_FCHMOD(fsp, new_unx_mode);
+			if (ret == -1) {
+				DBG_INFO("failed to reset "
 				  "attributes of file %s to 0%o\n",
 				  smb_fname_str_dbg(smb_fname),
-				  (unsigned int)new_unx_mode));
+				  (unsigned int)new_unx_mode);
+			}
+		}
 	}
 
 	{

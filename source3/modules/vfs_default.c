@@ -498,7 +498,6 @@ static int vfswrap_mkdir(vfs_handle_struct *handle,
 			mode_t mode)
 {
 	int result;
-	bool has_dacl = False;
 	const char *path = smb_fname->base_name;
 	char *parent = NULL;
 
@@ -506,28 +505,13 @@ static int vfswrap_mkdir(vfs_handle_struct *handle,
 
 	if (lp_inherit_acls(SNUM(handle->conn))
 	    && parent_dirname(talloc_tos(), path, &parent, NULL)
-	    && (has_dacl = directory_has_default_acl(handle->conn, parent))) {
+	    && directory_has_default_acl(handle->conn, parent)) {
 		mode = (0777 & lp_directory_mask(SNUM(handle->conn)));
 	}
 
 	TALLOC_FREE(parent);
 
 	result = mkdir(path, mode);
-
-	if (result == 0 && !has_dacl) {
-		/*
-		 * We need to do this as the default behavior of POSIX ACLs
-		 * is to set the mask to be the requested group permission
-		 * bits, not the group permission bits to be the requested
-		 * group permission bits. This is not what we want, as it will
-		 * mess up any inherited ACL bits that were set. JRA.
-		 */
-		int saved_errno = errno; /* We may get ENOSYS */
-		if ((SMB_VFS_CHMOD_ACL(handle->conn, smb_fname, mode) == -1) &&
-				(errno == ENOSYS)) {
-			errno = saved_errno;
-		}
-	}
 
 	END_PROFILE(syscall_mkdir);
 	return result;
@@ -1999,27 +1983,6 @@ static int vfswrap_chmod(vfs_handle_struct *handle,
 	int result;
 
 	START_PROFILE(syscall_chmod);
-
-	/*
-	 * We need to do this due to the fact that the default POSIX ACL
-	 * chmod modifies the ACL *mask* for the group owner, not the
-	 * group owner bits directly. JRA.
-	 */
-
-
-	{
-		int saved_errno = errno; /* We might get ENOSYS */
-		result = SMB_VFS_CHMOD_ACL(handle->conn,
-				smb_fname,
-				mode);
-		if (result == 0) {
-			END_PROFILE(syscall_chmod);
-			return result;
-		}
-		/* Error - return the old errno. */
-		errno = saved_errno;
-	}
-
 	result = chmod(smb_fname->base_name, mode);
 	END_PROFILE(syscall_chmod);
 	return result;
@@ -2030,23 +1993,6 @@ static int vfswrap_fchmod(vfs_handle_struct *handle, files_struct *fsp, mode_t m
 	int result;
 
 	START_PROFILE(syscall_fchmod);
-
-	/*
-	 * We need to do this due to the fact that the default POSIX ACL
-	 * chmod modifies the ACL *mask* for the group owner, not the
-	 * group owner bits directly. JRA.
-	 */
-
-	{
-		int saved_errno = errno; /* We might get ENOSYS */
-		if ((result = SMB_VFS_FCHMOD_ACL(fsp, mode)) == 0) {
-			END_PROFILE(syscall_fchmod);
-			return result;
-		}
-		/* Error - return the old errno. */
-		errno = saved_errno;
-	}
-
 #if defined(HAVE_FCHMOD)
 	result = fchmod(fsp->fh->fd, mode);
 #else
@@ -2728,38 +2674,6 @@ static NTSTATUS vfswrap_audit_file(struct vfs_handle_struct *handle,
 	return NT_STATUS_OK; /* Nothing to do here ... */
 }
 
-static int vfswrap_chmod_acl(vfs_handle_struct *handle,
-				const struct smb_filename *smb_fname,
-				mode_t mode)
-{
-#ifdef HAVE_NO_ACL
-	errno = ENOSYS;
-	return -1;
-#else
-	int result;
-
-	START_PROFILE(chmod_acl);
-	result = chmod_acl(handle->conn, smb_fname, mode);
-	END_PROFILE(chmod_acl);
-	return result;
-#endif
-}
-
-static int vfswrap_fchmod_acl(vfs_handle_struct *handle, files_struct *fsp, mode_t mode)
-{
-#ifdef HAVE_NO_ACL
-	errno = ENOSYS;
-	return -1;
-#else
-	int result;
-
-	START_PROFILE(fchmod_acl);
-	result = fchmod_acl(fsp, mode);
-	END_PROFILE(fchmod_acl);
-	return result;
-#endif
-}
-
 static SMB_ACL_T vfswrap_sys_acl_get_file(vfs_handle_struct *handle,
 					  const struct smb_filename *smb_fname,
 					  SMB_ACL_TYPE_T type,
@@ -3020,9 +2934,6 @@ static struct vfs_fn_pointers vfs_default_fns = {
 	.audit_file_fn = vfswrap_audit_file,
 
 	/* POSIX ACL operations. */
-
-	.chmod_acl_fn = vfswrap_chmod_acl,
-	.fchmod_acl_fn = vfswrap_fchmod_acl,
 
 	.sys_acl_get_file_fn = vfswrap_sys_acl_get_file,
 	.sys_acl_get_fd_fn = vfswrap_sys_acl_get_fd,

@@ -173,6 +173,7 @@ uint64_t sys_disk_free(connection_struct *conn, struct smb_filename *fname,
 		       uint64_t *bsize, uint64_t *dfree, uint64_t *dsize);
 uint64_t get_dfree_info(connection_struct *conn, struct smb_filename *fname,
 			uint64_t *bsize, uint64_t *dfree, uint64_t *dsize);
+void flush_dfree_cache(void);
 
 /* The following definitions come from smbd/dir.c  */
 
@@ -762,6 +763,8 @@ void reply_pipe_read_and_X(struct smb_request *req);
 
 /* The following definitions come from smbd/posix_acls.c  */
 
+mode_t unix_perms_to_acl_perms(mode_t mode, int r_mask, int w_mask, int x_mask);
+int map_acl_perms_to_permset(mode_t mode, SMB_ACL_PERMSET_T *p_permset);
 uint32_t map_canon_ace_perms(int snum,
                                 enum security_ace_type *pacl_type,
                                 mode_t perms,
@@ -782,14 +785,10 @@ NTSTATUS set_nt_acl(files_struct *fsp, uint32_t security_info_sent, const struct
 int get_acl_group_bits( connection_struct *conn,
 			const struct smb_filename *smb_fname,
 			mode_t *mode);
-int chmod_acl(connection_struct *conn,
-			const struct smb_filename *smb_fname,
-			mode_t mode);
 int inherit_access_posix_acl(connection_struct *conn,
 			const char *inherit_from_dir,
 			const struct smb_filename *smb_fname,
 			mode_t mode);
-int fchmod_acl(files_struct *fsp, mode_t mode);
 bool set_unix_posix_default_acl(connection_struct *conn,
 				const struct smb_filename *smb_fname,
 				uint16_t num_def_acls, const char *pdata);

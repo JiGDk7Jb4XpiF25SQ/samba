@@ -930,67 +930,6 @@ static NTSTATUS cmd_fchmod(struct vfs_state *vfs, TALLOC_CTX *mem_ctx, int argc,
 	return NT_STATUS_OK;
 }
 
-
-static NTSTATUS cmd_chmod_acl(struct vfs_state *vfs, TALLOC_CTX *mem_ctx, int argc, const char **argv)
-{
-	struct smb_filename *smb_fname = NULL;
-	mode_t mode;
-	if (argc != 3) {
-		printf("Usage: chmod_acl <path> <mode>\n");
-		return NT_STATUS_OK;
-	}
-
-	mode = atoi(argv[2]);
-
-	smb_fname = synthetic_smb_fname(talloc_tos(),
-					argv[1],
-					NULL,
-					NULL,
-					ssf_flags());
-	if (smb_fname == NULL) {
-		return NT_STATUS_NO_MEMORY;
-	}
-
-	if (SMB_VFS_CHMOD_ACL(vfs->conn, smb_fname, mode) == -1) {
-		printf("chmod_acl: error=%d (%s)\n", errno, strerror(errno));
-		return NT_STATUS_UNSUCCESSFUL;
-	}
-
-	printf("chmod_acl: ok\n");
-	return NT_STATUS_OK;
-}
-
-
-static NTSTATUS cmd_fchmod_acl(struct vfs_state *vfs, TALLOC_CTX *mem_ctx, int argc, const char **argv)
-{
-	int fd;
-	mode_t mode;
-	if (argc != 3) {
-		printf("Usage: fchmod_acl <fd> <mode>\n");
-		return NT_STATUS_OK;
-	}
-
-	fd = atoi(argv[1]);
-	mode = atoi(argv[2]);
-	if (fd < 0 || fd >= 1024) {
-		printf("fchmod_acl: error=%d (file descriptor out of range)\n", EBADF);
-		return NT_STATUS_OK;
-	}
-	if (vfs->files[fd] == NULL) {
-		printf("fchmod_acl: error=%d (invalid file descriptor)\n", EBADF);
-		return NT_STATUS_OK;
-	}
-
-	if (SMB_VFS_FCHMOD_ACL(vfs->files[fd], mode) == -1) {
-		printf("fchmod_acl: error=%d (%s)\n", errno, strerror(errno));
-		return NT_STATUS_UNSUCCESSFUL;
-	}
-
-	printf("fchmod_acl: ok\n");
-	return NT_STATUS_OK;
-}
-
-
 static NTSTATUS cmd_chown(struct vfs_state *vfs, TALLOC_CTX *mem_ctx, int argc, const char **argv)
 {
 	struct smb_filename *smb_fname = NULL;
@@ -2054,8 +1993,6 @@ struct cmd_set vfs_commands[] = {
 	  "fset_nt_acl <fd>\n" },
 	{ "set_nt_acl", cmd_set_nt_acl, "VFS open() and fset_nt_acl()", 
 	  "set_nt_acl <file>\n" },
-	{ "fchmod_acl",   cmd_fchmod_acl,   "VFS fchmod_acl()",    "fchmod_acl <fd> <mode>" },
-	{ "chmod_acl",   cmd_chmod_acl,   "VFS chmod_acl()",    "chmod_acl <path> <mode>" },
 	{ "sys_acl_get_file", cmd_sys_acl_get_file, "VFS sys_acl_get_file()", "sys_acl_get_file <path>" },
 	{ "sys_acl_get_fd", cmd_sys_acl_get_fd, "VFS sys_acl_get_fd()", "sys_acl_get_fd <fd>" },
 	{ "sys_acl_blob_get_file", cmd_sys_acl_blob_get_file,

@@ -41,7 +41,6 @@
         <member>chdir</member>
         <member>chflags</member>
         <member>chmod</member>
-        <member>chmod_acl</member>
         <member>chown</member>
         <member>close</member>
         <member>closedir</member>
@@ -51,7 +50,6 @@
         <member>disconnect</member>
         <member>disk_free</member>
         <member>fchmod</member>
-        <member>fchmod_acl</member>
         <member>fchown</member>
         <member>fget_nt_acl</member>
         <member>fgetxattr</member>

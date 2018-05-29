@@ -870,7 +870,7 @@ static mode_t convert_permset_to_mode_t(SMB_ACL_PERMSET_T permset)
  Map generic UNIX permissions to canon_ace permissions (a mode_t containing only S_(R|W|X)USR bits).
 ****************************************************************************/
 
-static mode_t unix_perms_to_acl_perms(mode_t mode, int r_mask, int w_mask, int x_mask)
+mode_t unix_perms_to_acl_perms(mode_t mode, int r_mask, int w_mask, int x_mask)
 {
 	mode_t ret = 0;
 
@@ -889,7 +889,7 @@ static mode_t unix_perms_to_acl_perms(mode_t mode, int r_mask, int w_mask, int x
  an SMB_ACL_PERMSET_T.
 ****************************************************************************/
 
-static int map_acl_perms_to_permset(connection_struct *conn, mode_t mode, SMB_ACL_PERMSET_T *p_permset)
+int map_acl_perms_to_permset(mode_t mode, SMB_ACL_PERMSET_T *p_permset)
 {
 	if (sys_acl_clear_perms(*p_permset) ==  -1)
 		return -1;
@@ -2918,7 +2918,7 @@ static bool set_canon_ace_list(files_struct *fsp,
 			goto fail;
 		}
 
-		if (map_acl_perms_to_permset(conn, p_ace->perms, &the_permset) == -1) {
+		if (map_acl_perms_to_permset(p_ace->perms, &the_permset) == -1) {
 			DEBUG(0,("set_canon_ace_list: Failed to create permset for mode (%u) on entry %d. (%s)\n",
 				(unsigned int)p_ace->perms, i, strerror(errno) ));
 			goto fail;
@@ -2955,7 +2955,7 @@ static bool set_canon_ace_list(files_struct *fsp,
 			goto fail;
 		}
 
-		if (map_acl_perms_to_permset(conn, S_IRUSR|S_IWUSR|S_IXUSR, &mask_permset) == -1) {
+		if (map_acl_perms_to_permset(S_IRUSR|S_IWUSR|S_IXUSR, &mask_permset) == -1) {
 			DEBUG(0,("set_canon_ace_list: Failed to create mask permset. (%s)\n", strerror(errno) ));
 			goto fail;
 		}
@@ -4053,7 +4053,7 @@ static int chmod_acl_internals( connection_struct *conn, SMB_ACL_T posix_acl, mo
 				continue;
 		}
 
-		if (map_acl_perms_to_permset(conn, perms, &permset) == -1)
+		if (map_acl_perms_to_permset(perms, &permset) == -1)
 			return -1;
 
 		if (sys_acl_set_permset(entry, permset) == -1)
@@ -4103,19 +4103,6 @@ static int copy_access_posix_acl(connection_struct *conn,
 }
 
 /****************************************************************************
- Do a chmod by setting the ACL USER_OBJ, GROUP_OBJ and OTHER bits in an ACL
- and set the mask to rwx. Needed to preserve complex ACLs set by NT.
- Note that name is in UNIX character set.
-****************************************************************************/
-
-int chmod_acl(connection_struct *conn,
-			const struct smb_filename *smb_fname,
-			mode_t mode)
-{
-	return copy_access_posix_acl(conn, smb_fname, smb_fname, mode);
-}
-
-/****************************************************************************
  Check for an existing default POSIX ACL on a directory.
 ****************************************************************************/
 
@@ -4162,31 +4149,6 @@ int inherit_access_posix_acl(connection_struct *conn,
 		return 0;
 
 	return copy_access_posix_acl(conn, inherit_from_fname, smb_fname, mode);
-}
-
-/****************************************************************************
- Do an fchmod by setting the ACL USER_OBJ, GROUP_OBJ and OTHER bits in an ACL
- and set the mask to rwx. Needed to preserve complex ACLs set by NT.
-****************************************************************************/
-
-int fchmod_acl(files_struct *fsp, mode_t mode)
-{
-	connection_struct *conn = fsp->conn;
-	SMB_ACL_T posix_acl = NULL;
-	int ret = -1;
-
-	if ((posix_acl = SMB_VFS_SYS_ACL_GET_FD(fsp, talloc_tos())) == NULL)
-		return -1;
-
-	if ((ret = chmod_acl_internals(conn, posix_acl, mode)) == -1)
-		goto done;
-
-	ret = SMB_VFS_SYS_ACL_SET_FD(fsp, posix_acl);
-
-  done:
-
-	TALLOC_FREE(posix_acl);
-	return ret;
 }
 
 /****************************************************************************

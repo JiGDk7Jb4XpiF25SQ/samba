@@ -63,12 +63,14 @@ class cmd_sambatool(SuperCommand):
     subcommands["domain"] = None
     subcommands["drs"] = None
     subcommands["dsacl"] = None
+    subcommands["forest"] = None
     subcommands["fsmo"] = None
     subcommands["gpo"] = None
     subcommands["group"] = None
     subcommands["ldapcmp"] = None
     subcommands["ntacl"] = None
     subcommands["rodc"] = None
+    subcommands["schema"] = None
     subcommands["sites"] = None
     subcommands["spn"] = None
     subcommands["testparm"] = None

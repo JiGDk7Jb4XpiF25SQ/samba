@@ -251,6 +251,10 @@
 		All users are now pread or async versions. */
 /* Version 39 - Remove SMB_VFS_WRITE
 		All users are now pwrite or async versions. */
+/* Version 39 - Remove SMB_VFS_CHMOD_ACL - no longer used. */
+/* Version 39 - Remove SMB_VFS_FCHMOD_ACL - no longer used. */
+/* Version 39 - Remove struct dfree_cached_info pointer from
+		connection struct */
 
 #define SMB_VFS_INTERFACE_VERSION 39
 
@@ -409,14 +413,6 @@ typedef struct {
 	bool is_wild;
 } name_compare_entry;
 
-struct dfree_cached_info {
-	time_t last_dfree_time;
-	uint64_t dfree_ret;
-	uint64_t bsize;
-	uint64_t dfree;
-	uint64_t dsize;
-};
-
 struct share_params {
 	int service;
 };
@@ -479,7 +475,6 @@ typedef struct connection_struct {
 	name_compare_entry *veto_list; /* Per-share list of files to veto (never show). */
 	name_compare_entry *veto_oplock_list; /* Per-share list of files to refuse oplocks on. */       
 	name_compare_entry *aio_write_behind_list; /* Per-share list of files to use aio write behind on. */       
-	struct dfree_cached_info *dfree_info;
 	struct trans_state *pending_trans;
 
 	struct rpc_pipe_client *spoolss_pipe;
@@ -915,11 +910,6 @@ struct vfs_fn_pointers {
 				  uint32_t access_denied);
 
 	/* POSIX ACL operations. */
-
-	int (*chmod_acl_fn)(struct vfs_handle_struct *handle,
-					const struct smb_filename *smb_fname,
-					mode_t mode);
-	int (*fchmod_acl_fn)(struct vfs_handle_struct *handle, struct files_struct *fsp, mode_t mode);
 
 	SMB_ACL_T (*sys_acl_get_file_fn)(struct vfs_handle_struct *handle,
 					 const struct smb_filename *smb_fname,
@@ -1410,8 +1400,6 @@ NTSTATUS smb_vfs_call_audit_file(struct vfs_handle_struct *handle,
 int smb_vfs_call_chmod_acl(struct vfs_handle_struct *handle,
 				const struct smb_filename *file,
 				mode_t mode);
-int smb_vfs_call_fchmod_acl(struct vfs_handle_struct *handle,
-			    struct files_struct *fsp, mode_t mode);
 SMB_ACL_T smb_vfs_call_sys_acl_get_file(struct vfs_handle_struct *handle,
 					const struct smb_filename *smb_fname,
 					SMB_ACL_TYPE_T type,
