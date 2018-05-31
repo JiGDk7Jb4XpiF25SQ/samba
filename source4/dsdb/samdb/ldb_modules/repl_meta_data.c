@@ -3976,7 +3976,12 @@ static int replmd_delete_internals(struct ldb_module *module, struct ldb_request
 		"*",
 		NULL
 	};
-	unsigned int i, el_count = 0;
+	static const struct ldb_val true_val = {
+		.data = discard_const_p(uint8_t, "TRUE"),
+		.length = 4
+	};
+	
+	unsigned int i;
 	uint32_t dsdb_flags = 0;
 	struct replmd_private *replmd_private;
 	enum deletion_state deletion_state, next_deletion_state;
@@ -4127,6 +4132,7 @@ static int replmd_delete_internals(struct ldb_module *module, struct ldb_request
 	guid = samdb_result_guid(old_msg, "objectGUID");
 
 	if (deletion_state == OBJECT_NOT_DELETED) {
+		struct ldb_message_element *is_deleted_el;
 
 		ret = replmd_make_deleted_child_dn(tmp_ctx,
 						   ldb,
@@ -4139,14 +4145,15 @@ static int replmd_delete_internals(struct ldb_module *module, struct ldb_request
 			return ret;
 		}
 
-		ret = ldb_msg_add_string(msg, "isDeleted", "TRUE");
+		ret = ldb_msg_add_value(msg, "isDeleted", &true_val,
+					&is_deleted_el);
 		if (ret != LDB_SUCCESS) {
 			ldb_asprintf_errstring(ldb, __location__
 					       ": Failed to add isDeleted string to the msg");
 			talloc_free(tmp_ctx);
 			return ret;
 		}
-		msg->elements[el_count++].flags = LDB_FLAG_MOD_REPLACE;
+		is_deleted_el->flags = LDB_FLAG_MOD_REPLACE;
 	} else {
 		/*
 		 * No matter what has happened with other renames etc, try again to
@@ -4195,6 +4202,7 @@ static int replmd_delete_internals(struct ldb_module *module, struct ldb_request
 	if (deletion_state == OBJECT_NOT_DELETED) {
 		struct ldb_dn *parent_dn = ldb_dn_get_parent(tmp_ctx, old_dn);
 		char *parent_dn_str = NULL;
+		struct ldb_message_element *p_el;
 
 		/* we need the storage form of the parent GUID */
 		ret = dsdb_module_search_dn(module, tmp_ctx, &parent_res,
@@ -4238,7 +4246,13 @@ static int replmd_delete_internals(struct ldb_module *module, struct ldb_request
 			talloc_free(tmp_ctx);
 			return ret;
 		}
-		msg->elements[el_count++].flags = LDB_FLAG_MOD_REPLACE;
+		p_el = ldb_msg_find_element(msg,
+					    "lastKnownParent");
+		if (p_el == NULL) {
+			talloc_free(tmp_ctx);
+			return ldb_module_operr(module);
+		}
+		p_el->flags = LDB_FLAG_MOD_REPLACE;
 
 		if (next_deletion_state == OBJECT_DELETED) {
 			ret = ldb_msg_add_value(msg, "msDS-LastKnownRDN", rdn_value, NULL);
@@ -4250,7 +4264,13 @@ static int replmd_delete_internals(struct ldb_module *module, struct ldb_request
 				talloc_free(tmp_ctx);
 				return ret;
 			}
-			msg->elements[el_count++].flags = LDB_FLAG_MOD_ADD;
+			p_el = ldb_msg_find_element(msg,
+						    "msDS-LastKnownRDN");
+			if (p_el == NULL) {
+				talloc_free(tmp_ctx);
+				return ldb_module_operr(module);
+			}
+			p_el->flags = LDB_FLAG_MOD_ADD;
 		}
 	}
 
@@ -4279,14 +4299,17 @@ static int replmd_delete_internals(struct ldb_module *module, struct ldb_request
 		 * not activated and what ever the forest level is.
 		 */
 		if (dsdb_attribute_by_lDAPDisplayName(schema, "isRecycled") != NULL) {
-			ret = ldb_msg_add_string(msg, "isRecycled", "TRUE");
+			struct ldb_message_element *is_recycled_el;
+
+			ret = ldb_msg_add_value(msg, "isRecycled", &true_val,
+						&is_recycled_el);
 			if (ret != LDB_SUCCESS) {
 				DEBUG(0,(__location__ ": Failed to add isRecycled string to the msg\n"));
 				ldb_module_oom(module);
 				talloc_free(tmp_ctx);
 				return ret;
 			}
-			msg->elements[el_count++].flags = LDB_FLAG_MOD_REPLACE;
+			is_recycled_el->flags = LDB_FLAG_MOD_REPLACE;
 		}
 
 		replmd_private = talloc_get_type(ldb_module_get_private(module),
@@ -7226,6 +7249,19 @@ linked_attributes[0]:
 		return LDB_ERR_OPERATIONS_ERROR;
 	}
 
+	/*
+	 * All attributes listed here must be dealt with in some way
+	 * by replmd_process_linked_attribute() otherwise in the case
+	 * of isDeleted: FALSE the modify will fail with:
+	 *
+	 * Failed to apply linked attribute change 'attribute 'isDeleted':
+	 * invalid modify flags on
+	 * 'CN=g1_1527570609273,CN=Users,DC=samba,DC=example,DC=com':
+	 * 0x0'
+	 *
+	 * This is becaue isDeleted is a Boolean, so FALSE is a
+	 * legitimate value (set by Samba's deletetest.py)
+	 */
 	attrs[0] = attr->lDAPDisplayName;
 	attrs[1] = "isDeleted";
 	attrs[2] = "isRecycled";
@@ -7606,6 +7642,9 @@ static int replmd_process_linked_attribute(struct ldb_module *module,
 	 * recycled and tombstone objects.  We don't have to delete
 	 * any existing link, that should have happened when the
 	 * object deletion was replicated or initiated.
+	 *
+	 * This needs isDeleted and isRecycled to be included as
+	 * attributes in the search and so in msg if set.
 	 */
 	replmd_deletion_state(module, msg, &deletion_state, NULL);
 
@@ -7613,6 +7652,24 @@ static int replmd_process_linked_attribute(struct ldb_module *module,
 		talloc_free(tmp_ctx);
 		return LDB_SUCCESS;
 	}
+
+	/*
+	 * Now that we know the deletion_state, remove the extra
+	 * attributes added for that purpose.  We need to do this
+	 * otherwise in the case of isDeleted: FALSE the modify will
+	 * fail with:
+	 *
+	 * Failed to apply linked attribute change 'attribute 'isDeleted':
+	 * invalid modify flags on
+	 * 'CN=g1_1527570609273,CN=Users,DC=samba,DC=example,DC=com':
+	 * 0x0'
+	 *
+	 * This is becaue isDeleted is a Boolean, so FALSE is a
+	 * legitimate value (set by Samba's deletetest.py)
+	 */
+
+	ldb_msg_remove_attr(msg, "isDeleted");
+	ldb_msg_remove_attr(msg, "isRecycled");
 
 	old_el = ldb_msg_find_element(msg, attr->lDAPDisplayName);
 	if (old_el == NULL) {

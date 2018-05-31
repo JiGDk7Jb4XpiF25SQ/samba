@@ -22,8 +22,6 @@ from __future__ import print_function
 import os
 import itertools
 
-from samba.kcc.debug import null_debug, PURPLE, MAGENTA, DARK_YELLOW, RED
-from samba.kcc.debug import DARK_GREEN, C_NORMAL, GREY
 from samba.graph import dot_graph
 
 
@@ -65,9 +63,8 @@ def verify_graph_connected(edges, vertices, edge_vertices):
     if not edges:
         if len(vertices) <= 1:
             return
-        raise GraphError("disconnected vertices were found:\n"
-                         "vertices: %s\n edges: %s" %
-                         (sorted(vertices), sorted(edges)))
+        raise GraphError("all vertices are disconnected because "
+                         "there are no edges:")
 
     remaining_edges = list(edges)
     reached = set(remaining_edges.pop())
@@ -87,16 +84,23 @@ def verify_graph_connected(edges, vertices, edge_vertices):
             del remaining_edges[i]
 
     if remaining_edges or reached != set(vertices):
-        raise GraphError("graph is not connected:\n vertices: %s\n edges: %s\n"
-                         " reached: %s\n remaining edges: %s" %
-                         (sorted(vertices), sorted(edges),
-                          sorted(reached), sorted(remaining_edges)))
+        s = ("the graph is not connected, "
+             "as the following vertices are unreachable:\n ")
+        s += '\n '.join(v for v in sorted(vertices)
+                        if v not in reached)
+        raise GraphError(s)
 
 
 def verify_graph_connected_under_edge_failures(edges, vertices, edge_vertices):
     """The graph stays connected when any single edge is removed."""
     for subset in itertools.combinations(edges, len(edges) - 1):
-        verify_graph_connected(subset, vertices, edge_vertices)
+        try:
+            verify_graph_connected(subset, vertices, edge_vertices)
+        except GraphError as e:
+            for edge in edges:
+                if edge not in subset:
+                    raise GraphError("The graph will be disconnected when the "
+                                     "connection from %s to %s fails" % edge)
 
 
 def verify_graph_connected_under_vertex_failures(edges, vertices,
@@ -109,8 +113,7 @@ def verify_graph_connected_under_vertex_failures(edges, vertices,
 
 
 def verify_graph_forest(edges, vertices, edge_vertices):
-    """The graph contains no loops. A forest that is also connected is a
-    tree."""
+    """The graph contains no loops."""
     trees = [set(e) for e in edges]
     while True:
         for a, b in itertools.combinations(trees, 2):
@@ -274,12 +277,8 @@ def verify_graph_directed_double_ring_or_small(edges, vertices, edge_vertices):
     return verify_graph_directed_double_ring(edges, vertices, edge_vertices)
 
 
-def verify_graph(title, edges, vertices=None, directed=False, properties=(),
-                 fatal=True, debug=null_debug):
+def verify_graph(edges, vertices=None, directed=False, properties=()):
     errors = []
-    debug("%sStarting verify_graph for %s%s%s" % (PURPLE, MAGENTA, title,
-                                                  C_NORMAL))
-
     properties = [x.replace(' ', '_') for x in properties]
 
     edge_vertices = set()
@@ -291,31 +290,16 @@ def verify_graph(title, edges, vertices=None, directed=False, properties=(),
         vertices = edge_vertices
     else:
         vertices = set(vertices)
-        if vertices != edge_vertices:
-            debug("vertices in edges don't match given vertices:\n %s != %s" %
-                  (sorted(edge_vertices), sorted(vertices)))
 
     for p in properties:
         fn = 'verify_graph_%s' % p
-        try:
-            f = globals()[fn]
-        except KeyError:
-            errors.append((p, "There is no verification check for '%s'" % p))
+        f = globals()[fn]
         try:
             f(edges, vertices, edge_vertices)
-            debug(" %s%18s:%s verified!" % (DARK_GREEN, p, C_NORMAL))
         except GraphError as e:
-            errors.append((p, e))
+            errors.append((p, e, f.__doc__))
 
-    if errors:
-        if fatal:
-            raise GraphError("The '%s' graph lacks the following properties:"
-                             "\n%s" %
-                             (title, '\n'.join('%s: %s' % x for x in errors)))
-        debug(("%s%s%s FAILED:" % (MAGENTA, title, RED)))
-        for p, e in errors:
-            debug(" %18s: %s%s%s" % (p, DARK_YELLOW, e, RED))
-        debug(C_NORMAL)
+    return errors
 
 
 def verify_and_dot(basename, edges, vertices=None, label=None,
@@ -325,10 +309,6 @@ def verify_and_dot(basename, edges, vertices=None, label=None,
                    edge_colors=None, edge_labels=None,
                    vertex_colors=None):
 
-    title = '%s %s' % (basename, label or '')
-    if verify:
-        verify_graph(title, edges, vertices, properties=properties,
-                     fatal=fatal, debug=debug)
     if dot_file_dir is not None:
         write_dot_file(basename, edges, vertices=vertices, label=label,
                        dot_file_dir=dot_file_dir,
@@ -336,12 +316,26 @@ def verify_and_dot(basename, edges, vertices=None, label=None,
                        debug=debug, edge_colors=edge_colors,
                        edge_labels=edge_labels, vertex_colors=vertex_colors)
 
+    if verify:
+        errors = verify_graph(edges, vertices,
+                              properties=properties)
+        if errors:
+            title = '%s %s' % (basename, label or '')
+            debug("%s FAILED:" % title)
+            for p, e, doc in errors:
+                debug(" %18s: %s" % (p, e))
+            if fatal:
+                raise GraphError("The '%s' graph lacks the following "
+                                 "properties:\n%s" %
+                                 (title, '\n'.join('%s: %s' % (p, e)
+                                                   for p, e, doc in errors)))
+
 
 def list_verify_tests():
     for k, v in sorted(globals().items()):
         if k.startswith('verify_graph_'):
             print(k.replace('verify_graph_', ''))
             if v.__doc__:
-                print('    %s%s%s' % (GREY, v.__doc__.rstrip(), C_NORMAL))
+                print('    %s' % (v.__doc__.rstrip()))
             else:
                 print()

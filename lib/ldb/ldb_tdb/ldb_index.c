@@ -1310,6 +1310,9 @@ static bool list_union(struct ldb_context *ldb,
 	/*
 	 * Sort the lists (if not in GUID DN mode) so we can do
 	 * the de-duplication during the merge
+	 *
+	 * NOTE: This can sort the in-memory index values, as list or
+	 * list2 might not be a copy!
 	 */
 	ltdb_dn_list_sort(ltdb, list);
 	ltdb_dn_list_sort(ltdb, list2);
@@ -1717,26 +1720,61 @@ static int ltdb_index_filter(struct ltdb_private *ltdb,
 			     uint32_t *match_count,
 			     enum key_truncation scope_one_truncation)
 {
-	struct ldb_context *ldb;
+	struct ldb_context *ldb = ldb_module_get_ctx(ac->module);
 	struct ldb_message *msg;
 	struct ldb_message *filtered_msg;
 	unsigned int i;
+	unsigned int num_keys = 0;
 	uint8_t previous_guid_key[LTDB_GUID_KEY_SIZE] = {};
+	TDB_DATA *keys = NULL;
 
-	ldb = ldb_module_get_ctx(ac->module);
+	/*
+	 * We have to allocate the key list (rather than just walk the
+	 * caller supplied list) as the callback could change the list
+	 * (by modifying an indexed attribute hosted in the in-memory
+	 * index cache!)
+	 */
+	keys = talloc_array(ac, TDB_DATA, dn_list->count);
+	if (keys == NULL) {
+		return ldb_module_oom(ac->module);
+	}
+
+	if (ltdb->cache->GUID_index_attribute != NULL) {
+		/*
+		 * We speculate that the keys will be GUID based and so
+		 * pre-fill in enough space for a GUID (avoiding a pile of
+		 * small allocations)
+		 */
+		struct guid_tdb_key {
+			uint8_t guid_key[LTDB_GUID_KEY_SIZE];
+		} *key_values = NULL;
+
+		key_values = talloc_array(keys,
+					  struct guid_tdb_key,
+					  dn_list->count);
+
+		for (i = 0; i < dn_list->count; i++) {
+			keys[i].dptr = key_values[i].guid_key;
+			keys[i].dsize = sizeof(key_values[i].guid_key);
+		}
+		if (key_values == NULL) {
+			return ldb_module_oom(ac->module);
+		}
+	} else {
+		for (i = 0; i < dn_list->count; i++) {
+			keys[i].dptr = NULL;
+			keys[i].dsize = 0;
+		}
+	}
 
 	for (i = 0; i < dn_list->count; i++) {
-		uint8_t guid_key[LTDB_GUID_KEY_SIZE];
-		TDB_DATA tdb_key = {
-			.dptr = guid_key,
-			.dsize = sizeof(guid_key)
-		};
 		int ret;
-		bool matched;
 
-		ret = ltdb_idx_to_key(ac->module, ltdb,
-				      ac, &dn_list->dn[i],
-				      &tdb_key);
+		ret = ltdb_idx_to_key(ac->module,
+				      ltdb,
+				      keys,
+				      &dn_list->dn[i],
+				      &keys[num_keys]);
 		if (ret != LDB_SUCCESS) {
 			return ret;
 		}
@@ -1753,30 +1791,42 @@ static int ltdb_index_filter(struct ltdb_private *ltdb,
 			 * LDB_FLAG_INTERNAL_DISABLE_SINGLE_VALUE_CHECK
 			 */
 
-			if (memcmp(previous_guid_key, tdb_key.dptr,
+			if (memcmp(previous_guid_key,
+				   keys[num_keys].dptr,
 				   sizeof(previous_guid_key)) == 0) {
 				continue;
 			}
 
-			memcpy(previous_guid_key, tdb_key.dptr,
+			memcpy(previous_guid_key,
+			       keys[num_keys].dptr,
 			       sizeof(previous_guid_key));
 		}
+		num_keys++;
+	}
 
+
+	/*
+	 * Now that the list is a safe copy, send the callbacks
+	 */
+	for (i = 0; i < num_keys; i++) {
+		int ret;
+		bool matched;
 		msg = ldb_msg_new(ac);
 		if (!msg) {
 			return LDB_ERR_OPERATIONS_ERROR;
 		}
 
-
 		ret = ltdb_search_key(ac->module, ltdb,
-				      tdb_key, msg,
+				      keys[i], msg,
 				      LDB_UNPACK_DATA_FLAG_NO_DATA_ALLOC|
 				      LDB_UNPACK_DATA_FLAG_NO_VALUES_ALLOC);
-		if (tdb_key.dptr != guid_key) {
-			TALLOC_FREE(tdb_key.dptr);
-		}
 		if (ret == LDB_ERR_NO_SUCH_OBJECT) {
-			/* the record has disappeared? yes, this can happen */
+			/*
+			 * the record has disappeared? yes, this can
+			 * happen if the entry is deleted by something
+			 * operating in the callback (not another
+			 * process, as we have a read lock)
+			 */
 			talloc_free(msg);
 			continue;
 		}
@@ -1834,6 +1884,7 @@ static int ltdb_index_filter(struct ltdb_private *ltdb,
 		(*match_count)++;
 	}
 
+	TALLOC_FREE(keys);
 	return LDB_SUCCESS;
 }
 
@@ -1943,20 +1994,21 @@ int ltdb_search_indexed(struct ltdb_context *ac, uint32_t *match_count)
 			}
 			/*
 			 * Here we load the index for the tree.
+			 *
+			 * We only care if this is successful, if the
+			 * index can't trim the result list down then
+			 * the ONELEVEL index is still good enough.
 			 */
 			ret = ltdb_index_dn(ac->module, ltdb, ac->tree,
 					    idx_one_tree_list);
-			if (ret != LDB_SUCCESS) {
-				talloc_free(idx_one_tree_list);
-				talloc_free(dn_list);
-				return ret;
-			}
-
-			if (!list_intersect(ldb, ltdb,
-					    dn_list, idx_one_tree_list)) {
-				talloc_free(idx_one_tree_list);
-				talloc_free(dn_list);
-				return LDB_ERR_OPERATIONS_ERROR;
+			if (ret == LDB_SUCCESS) {
+				if (!list_intersect(ldb, ltdb,
+						    dn_list,
+						    idx_one_tree_list)) {
+					talloc_free(idx_one_tree_list);
+					talloc_free(dn_list);
+					return LDB_ERR_OPERATIONS_ERROR;
+				}
 			}
 		}
 		break;

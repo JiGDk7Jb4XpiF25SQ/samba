@@ -92,7 +92,7 @@ class PasswordSettingsTestCase(PasswordTestCase):
 
     def add_user(self, username):
         # add a new user to the DB under our top-level OU
-        userou = self.ou.split(',')[0]
+        userou = "ou=%s" % self.ou.get_component_value(0)
         return TestUser(username, self.ldb, userou=userou)
 
     def assert_password_invalid(self, user, password):
@@ -565,6 +565,9 @@ class PasswordSettingsTestCase(PasswordTestCase):
         admin_pso.apply_to(admin_users)
         self.assert_PSO_applied(user, admin_pso)
 
+        # restore the default primaryGroupID so we can safely delete the group
+        user.set_primary_group(domain_users)
+
     def test_pso_none_applied(self):
         """Tests cases where no Resultant PSO should be returned"""
 
@@ -574,7 +577,7 @@ class PasswordSettingsTestCase(PasswordTestCase):
 
         # you can apply a PSO to other objects (like OUs), but the resultantPSO
         # attribute should only be returned for users
-        dummy_pso.apply_to(self.ou)
+        dummy_pso.apply_to(str(self.ou))
         res = self.ldb.search(self.ou, attrs=['msDS-ResultantPSO'])
         self.assertFalse('msDS-ResultantPSO' in res[0])
 

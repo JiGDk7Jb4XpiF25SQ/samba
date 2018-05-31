@@ -22,6 +22,7 @@ from __future__ import print_function
 import os
 import sys
 from collections import defaultdict
+import subprocess
 
 import tempfile
 import samba
@@ -32,7 +33,8 @@ from samba.graph import dot_graph
 from samba.graph import distance_matrix, COLOUR_SETS
 from ldb import SCOPE_BASE, SCOPE_SUBTREE, LdbError
 import time
-from samba.kcc import KCC
+import re
+from samba.kcc import KCC, ldif_import_export
 from samba.kcc.kcc_utils import KCCError
 from samba.compat import text_type
 
@@ -43,6 +45,8 @@ COMMON_OPTIONS = [
            type=str, metavar="FILE", default=None),
     Option("--dot", help="Graphviz dot output", dest='format',
            const='dot', action='store_const'),
+    Option("--xdot", help="attempt to call Graphviz xdot", dest='format',
+           const='xdot', action='store_const'),
     Option("--distance", help="Distance matrix graph output (default)",
            dest='format', const='distance', action='store_const'),
     Option("--utf8", help="Use utf-8 Unicode characters",
@@ -132,7 +136,20 @@ class GraphCommand(Command):
                 return 'dot'
             else:
                 return 'distance'
+
+        if format == 'xdot':
+            return 'dot'
+
         return format
+
+    def call_xdot(self, s, output):
+        if output is None:
+            fn = self.write(s, TEMP_FILE)
+        else:
+            fn = self.write(s, output)
+        xdot = os.environ.get('SAMBA_TOOL_XDOT_PATH', '/usr/bin/xdot')
+        subprocess.call([xdot, fn])
+        os.remove(fn)
 
     def calc_distance_color_scheme(self, color, color_scheme, output):
         """Heuristics to work out the colour scheme for distance matrices.
@@ -156,6 +173,16 @@ class GraphCommand(Command):
             return 'ansi'
 
         return color_scheme
+
+
+def get_dnstr_site(dn):
+    """Helper function for sorting and grouping DNs by site, if
+    possible."""
+    m = re.search(r'CN=Servers,CN=\s*([^,]+)\s*,CN=Sites', dn)
+    if m:
+        return m.group(1)
+    # Oh well, let it sort by DN
+    return dn
 
 
 def colour_hash(x):
@@ -200,7 +227,7 @@ class cmd_reps(GraphCommand):
             key=True, talk_to_remote=False,
             sambaopts=None, credopts=None, versionopts=None,
             mode='self', partition=None, color=None, color_scheme=None,
-            utf8=None, format=None):
+            utf8=None, format=None, xdot=False):
         # We use the KCC libraries in readonly mode to get the
         # replication graph.
         lp = sambaopts.get_loadparm()
@@ -316,7 +343,8 @@ class cmd_reps(GraphCommand):
                                             utf8=utf8,
                                             colour=color_scheme,
                                             shorten_names=shorten_names,
-                                            generate_key=key)
+                                            generate_key=key,
+                                            grouping_function=get_dnstr_site)
 
                         s = "\n%s\n%s" % (header_strings[direction] % part, s)
                         self.write(s, output)
@@ -365,7 +393,10 @@ class cmd_reps(GraphCommand):
                       shorten_names=shorten_names,
                       key_items=key_items)
 
-        self.write(s, output)
+        if format == 'xdot':
+            self.call_xdot(s, output)
+        else:
+            self.write(s, output)
 
 
 class NTDSConn(object):
@@ -388,13 +419,32 @@ class NTDSConn(object):
 
 class cmd_ntdsconn(GraphCommand):
     "Draw the NTDSConnection graph"
+    takes_options = COMMON_OPTIONS + [
+        Option("--importldif", help="graph from samba_kcc generated ldif",
+               default=None),
+    ]
+
+    def import_ldif_db(self, ldif, lp):
+        d = tempfile.mkdtemp(prefix='samba-tool-visualise')
+        fn = os.path.join(d, 'imported.ldb')
+        self._tmp_fn_to_delete = fn
+        samdb = ldif_import_export.ldif_to_samdb(fn, lp, ldif)
+        return fn
+
     def run(self, H=None, output=None, shorten_names=False,
             key=True, talk_to_remote=False,
             sambaopts=None, credopts=None, versionopts=None,
             color=None, color_scheme=None,
-            utf8=None, format=None):
+            utf8=None, format=None, importldif=None,
+            xdot=False):
+
         lp = sambaopts.get_loadparm()
-        creds = credopts.get_credentials(lp, fallback_machine=True)
+        if importldif is None:
+            creds = credopts.get_credentials(lp, fallback_machine=True)
+        else:
+            creds = None
+            H = self.import_ldif_db(importldif, lp)
+
         local_kcc, dsas = self.get_kcc_and_dsas(H, lp, creds)
         local_dsa_dn = local_kcc.my_dsa_dnstr.split(',', 1)[1]
         vertices = set()
@@ -420,7 +470,13 @@ class cmd_ntdsconn(GraphCommand):
                 ntds_dn = 'CN=NTDS Settings,' + dsa_dn
                 dn = dsa_dn
 
-            vertices.add(ntds_dn)
+            res = samdb.search(ntds_dn,
+                               scope=SCOPE_BASE,
+                               attrs=["msDS-isRODC"])
+
+            is_rodc = res[0]["msDS-isRODC"][0] == 'TRUE'
+
+            vertices.add((ntds_dn, 'RODC' if is_rodc else ''))
             # XXX we could also look at schedule
             res = samdb.search(dn,
                                scope=SCOPE_SUBTREE,
@@ -437,6 +493,10 @@ class cmd_ntdsconn(GraphCommand):
                 attested_edges.append((msg['fromServer'][0],
                                        dest_dn, ntds_dn))
 
+        if importldif and H == self._tmp_fn_to_delete:
+            os.remove(H)
+            os.rmdir(os.path.dirname(H))
+
         # now we overlay all the graphs and generate styles accordingly
         edges = {}
         for src, dest, attester in attested_edges:
@@ -448,16 +508,25 @@ class cmd_ntdsconn(GraphCommand):
                 edges[k] = e
             e.attest(attester)
 
+        vertices, rodc_status = zip(*sorted(vertices))
+
         if self.calc_output_format(format, output) == 'distance':
             color_scheme = self.calc_distance_color_scheme(color,
                                                            color_scheme,
                                                            output)
+            colours = COLOUR_SETS[color_scheme]
+            c_header = colours.get('header', '')
+            c_reset = colours.get('reset', '')
+
+            epilog = []
+            if 'RODC' in rodc_status:
+                epilog.append('No outbound connections are expected from RODCs')
+
             if not talk_to_remote:
                 # If we are not talking to remote servers, we list all
                 # the connections.
                 graph_edges = edges.keys()
                 title = 'NTDS Connections known to %s' % local_dsa_dn
-                epilog = ''
 
             else:
                 # If we are talking to the remotes, there are
@@ -487,7 +556,7 @@ class cmd_ntdsconn(GraphCommand):
                         both_deny.append(e)
 
                 title = 'NTDS Connections known to each destination DC'
-                epilog = []
+
                 if both_deny:
                     epilog.append('The following connections are alleged by '
                                   'DCs other than the source and '
@@ -506,14 +575,25 @@ class cmd_ntdsconn(GraphCommand):
                                   'are not known to the source DC:\n')
                     for e in source_denies:
                         epilog.append('  %s -> %s\n' % e)
-                epilog = ''.join(epilog)
 
-            s = distance_matrix(sorted(vertices), graph_edges,
+
+            s = distance_matrix(vertices, graph_edges,
                                 utf8=utf8,
                                 colour=color_scheme,
                                 shorten_names=shorten_names,
-                                generate_key=key)
-            self.write('\n%s\n%s\n%s' % (title, s, epilog), output)
+                                generate_key=key,
+                                grouping_function=get_dnstr_site,
+                                row_comments=rodc_status)
+
+            epilog = ''.join(epilog)
+            if epilog:
+                epilog = '\n%sNOTES%s\n%s' % (c_header,
+                                              c_reset,
+                                              epilog)
+
+            self.write('\n%s\n\n%s\n%s' % (title,
+                                           s,
+                                           epilog), output)
             return
 
         dot_edges = []
@@ -570,7 +650,11 @@ class cmd_ntdsconn(GraphCommand):
                       edge_styles=edge_styles,
                       shorten_names=shorten_names,
                       key_items=key_items)
-        self.write(s, output)
+
+        if format == 'xdot':
+            self.call_xdot(s, output)
+        else:
+            self.write(s, output)
 
 
 class cmd_visualize(SuperCommand):
