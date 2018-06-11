@@ -29,12 +29,6 @@ die ()
     echo "$1" >&2 ; exit ${2:-1}
 }
 
-# Print a message and return failure
-fail ()
-{
-    echo "$1" >&2 ; return ${2:-1}
-}
-
 ######################################################################
 
 with_summary=true
@@ -148,7 +142,12 @@ ctdb_test_run ()
     $no_header || ctdb_test_begin "$name"
 
     local status=0
-    timeout $TEST_TIMEOUT "$@" || status=$?
+    if [ -x "$1" ] ; then
+	    timeout $TEST_TIMEOUT "$@" || status=$?
+    else
+	    echo "TEST IS NOT EXECUTABLE"
+	    status=1
+    fi
 
     $no_header || ctdb_test_end "$name" "$status" "$*"
 
@@ -194,11 +193,7 @@ run_one_test ()
 
     tests_total=$(($tests_total + 1))
 
-    if [ -x "$f" ] ; then
-	ctdb_test_run "$f" | tee "$tf" | show_progress
-    else
-	ctdb_test_run "$f" fail "TEST NOT EXECUTABLE"
-    fi
+    ctdb_test_run "$f" | tee "$tf" | show_progress
     status=$?
     if [ $status -eq 0 ] ; then
 	tests_passed=$(($tests_passed + 1))

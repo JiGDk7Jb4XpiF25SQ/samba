@@ -292,7 +292,8 @@ static int samba_dsdb_init(struct ldb_module *module)
 					     "extended_dn_store",
 					     NULL };
 	/* extended_dn_in or extended_dn_in_openldap goes here */
-	static const char *modules_list1a[] = {"objectclass",
+	static const char *modules_list1a[] = {"audit_log",
+					     "objectclass",
 					     "tombstone_reanimate",
 					     "descriptor",
 					     "acl",
@@ -312,6 +313,7 @@ static int samba_dsdb_init(struct ldb_module *module)
 		"rdn_name",
 		"subtree_delete",
 		"repl_meta_data",
+		"group_audit_log",
 		"encrypted_secrets",
 		"operational",
 		"unique_object_sids",

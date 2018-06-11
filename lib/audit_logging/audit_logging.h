@@ -21,14 +21,12 @@
 #include "lib/messaging/irpc.h"
 #include "lib/tsocket/tsocket.h"
 
-char* audit_get_timestamp(
-	TALLOC_CTX *frame);
+char* audit_get_timestamp(TALLOC_CTX *frame);
+void audit_log_human_text(const char *prefix,
+			  const char *message,
+			  int debug_class,
+			  int debug_level);
 
-void audit_message_send(
-	struct imessaging_context *msg_ctx,
-	const char *server_name,
-	uint32_t message_type,
-	const char *message);
 #ifdef HAVE_JANSSON
 #include <jansson.h>
 /*
@@ -40,50 +38,54 @@ struct json_object {
 	bool error;
 };
 
+void audit_log_json(const char *prefix,
+		    struct json_object *message,
+		    int debug_class,
+		    int debug_level);
+void audit_message_send(struct imessaging_context *msg_ctx,
+			const char *server_name,
+			uint32_t message_type,
+			struct json_object *message);
 struct json_object json_new_object(void);
 struct json_object json_new_array(void);
 void json_free(struct json_object *object);
 void json_assert_is_array(struct json_object *array);
 bool json_is_invalid(struct json_object *object);
 
-void json_add_int(
-	struct json_object *object,
-	const char* name,
-	const int value);
-void json_add_bool(
-	struct json_object *object,
-	const char* name,
-	const bool value);
-void json_add_string(
-	struct json_object *object,
-	const char* name,
-	const char* value);
-void json_add_object(
-	struct json_object *object,
-	const char* name,
-	struct json_object *value);
-void json_add_stringn(
-	struct json_object *object,
-	const char *name,
-	const char *value,
-	const size_t len);
-void json_add_version(
-	struct json_object *object,
-	int major,
-	int minor);
+void json_add_int(struct json_object *object,
+		  const char* name,
+		  const int value);
+void json_add_bool(struct json_object *object,
+		   const char* name,
+		   const bool value);
+void json_add_string(struct json_object *object,
+		     const char* name,
+		     const char* value);
+void json_add_object(struct json_object *object,
+		     const char* name,
+		     struct json_object *value);
+void json_add_stringn(struct json_object *object,
+		      const char *name,
+		      const char *value,
+		      const size_t len);
+void json_add_version(struct json_object *object,
+		      int major,
+		      int minor);
 void json_add_timestamp(struct json_object *object);
-void json_add_address(
-	struct json_object *object,
-	const char *name,
-	const struct tsocket_address *address);
-void json_add_sid(
-	struct json_object *object,
-	const char *name,
-	const struct dom_sid *sid);
-void json_add_guid(
-	struct json_object *object,
-	const char *name,
-	const struct GUID *guid);
+void json_add_address(struct json_object *object,
+		      const char *name,
+		      const struct tsocket_address *address);
+void json_add_sid(struct json_object *object,
+		  const char *name,
+		  const struct dom_sid *sid);
+void json_add_guid(struct json_object *object,
+		   const char *name,
+		   const struct GUID *guid);
 
-char *json_to_string(TALLOC_CTX *mem_ctx, struct json_object *object);
+struct json_object json_get_array(struct json_object *object,
+				  const char* name);
+struct json_object json_get_object(struct json_object *object,
+				   const char* name);
+char *json_to_string(TALLOC_CTX *mem_ctx,
+		     struct json_object *object);
 #endif

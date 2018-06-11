@@ -685,6 +685,18 @@ if have_heimdal_support:
                            extra_args=['-U"$USERNAME%$PASSWORD"'],
                            environ={'CLIENT_IP': '127.0.0.11',
                                     'SOCKET_WRAPPER_DEFAULT_IFACE': 11})
+    planoldpythontestsuite("ad_dc:local", "samba.tests.audit_log_pass_change",
+                           extra_args=['-U"$USERNAME%$PASSWORD"'],
+                           environ={'CLIENT_IP': '127.0.0.11',
+                                    'SOCKET_WRAPPER_DEFAULT_IFACE': 11})
+    planoldpythontestsuite("ad_dc:local", "samba.tests.audit_log_dsdb",
+                           extra_args=['-U"$USERNAME%$PASSWORD"'],
+                           environ={'CLIENT_IP': '127.0.0.11',
+                                    'SOCKET_WRAPPER_DEFAULT_IFACE': 11})
+    planoldpythontestsuite("ad_dc:local", "samba.tests.group_audit",
+                           extra_args=['-U"$USERNAME%$PASSWORD"'],
+                           environ={'CLIENT_IP': '127.0.0.11',
+                                    'SOCKET_WRAPPER_DEFAULT_IFACE': 11})
 
 planoldpythontestsuite("fl2008r2dc:local",
                        "samba.tests.getdcname",
@@ -1053,8 +1065,14 @@ for env in [ "ktest", "ad_member", "ad_dc_no_ntlm" ]:
 
 # Demote the vampire DC, it must be the last test each DC, before the dbcheck
 for env in ['vampire_dc', 'promoted_dc', 'rodc']:
-    plantestsuite("samba4.blackbox.samba_tool_demote(%s)" % env, env, [os.path.join(samba4srcdir, "utils/tests/test_demote.sh"), '$SERVER', '$SERVER_IP', '$USERNAME', '$PASSWORD', '$DOMAIN', '$DC_SERVER', '$PREFIX/%s' % env, smbclient4])
-
+    planoldpythontestsuite(env, "samba.tests.samba_tool.demote",
+                           name="samba.tests.samba_tool.demote",
+                           environ={
+                               'CONFIGFILE': '$PREFIX/%s/etc/smb.conf' % env
+                           },
+                           extra_args=['-U"$USERNAME%$PASSWORD"'],
+                           extra_path=[os.path.join(srcdir(), "samba/python")]
+                           )
 # TODO: Verifying the databases really should be a part of the
 # environment teardown.
 # check the databases are all OK. PLEASE LEAVE THIS AS THE LAST TEST
@@ -1069,3 +1087,7 @@ plantestsuite("samba4.dsdb.samdb.ldb_modules.encrypted_secrets", "none",
                   [os.path.join(bindir(), "test_encrypted_secrets")])
 plantestsuite("lib.audit_logging.audit_logging", "none",
                   [os.path.join(bindir(), "audit_logging_test")])
+plantestsuite("samba4.dsdb.samdb.ldb_modules.audit_util", "none",
+                  [os.path.join(bindir(), "test_audit_util")])
+plantestsuite("samba4.dsdb.samdb.ldb_modules.audit_log", "none",
+                  [os.path.join(bindir(), "test_audit_log")])

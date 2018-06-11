@@ -50,6 +50,7 @@ struct eventd_client {
 };
 
 struct eventd_context {
+	struct run_proc_context *run_proc_ctx;
 	struct run_event_context *run_ctx;
 
 	/* result of last execution */
@@ -78,7 +79,16 @@ static int eventd_context_init(TALLOC_CTX *mem_ctx,
 		return ENOMEM;
 	}
 
-	ret = run_event_init(ectx, ev, script_dir, debug_script,
+	ret = run_proc_init(ectx, ev, &ectx->run_proc_ctx);
+	if (ret != 0) {
+		talloc_free(ectx);
+		return ret;
+	}
+
+	ret = run_event_init(ectx,
+			     ectx->run_proc_ctx,
+			     script_dir,
+			     debug_script,
 			     &ectx->run_ctx);
 	if (ret != 0) {
 		talloc_free(ectx);
@@ -261,7 +271,8 @@ static struct tevent_req *command_run_send(TALLOC_CTX *mem_ctx,
 				eventd_run_context(state->ectx),
 				ctdb_event_to_string(state->event),
 				request->rdata.data.run->arg_str,
-				tevent_timeval_current_ofs(timeout, 0));
+				tevent_timeval_current_ofs(timeout, 0),
+				false);
 	if (tevent_req_nomem(subreq, req)) {
 		return tevent_req_post(req, ev);
 	}
@@ -426,8 +437,7 @@ static struct tevent_req *command_script_list_send(
 		return tevent_req_post(req, ev);
 	}
 
-	ret = run_event_script_list(eventd_run_context(ectx), state->reply,
-				    &s);
+	ret = run_event_list(eventd_run_context(ectx), state->reply, &s);
 	if (ret != 0) {
 		tevent_req_error(req, ret);
 		return tevent_req_post(req, ev);
