@@ -729,7 +729,16 @@ static bool init_gluster_aio(struct vfs_handle_struct *handle)
 	read_fd = fds[0];
 	write_fd = fds[1];
 
-	aio_read_event = tevent_add_fd(handle->conn->sconn->ev_ctx,
+	/*
+	 * We use the raw tevent context here,
+	 * as this is a global event handler.
+	 *
+	 * The tevent_req_defer_callback()
+	 * calls will make sure the results
+	 * of async calls are propagated
+	 * to the correct tevent_context.
+	 */
+	aio_read_event = tevent_add_fd(handle->conn->sconn->raw_ev_ctx,
 					NULL,
 					read_fd,
 					TEVENT_FD_READ,
@@ -803,6 +812,14 @@ static struct tevent_req *vfs_gluster_pread_send(struct vfs_handle_struct
 		return tevent_req_post(req, ev);
 	}
 
+	/*
+	 * aio_glusterfs_done and aio_tevent_fd_done()
+	 * use the raw tevent context. We need to use
+	 * tevent_req_defer_callback() in order to
+	 * use the event context we're started with.
+	 */
+	tevent_req_defer_callback(req, ev);
+
 	PROFILE_TIMESTAMP(&state->start);
 	ret = glfs_pread_async(*(glfs_fd_t **)VFS_FETCH_FSP_EXTENSION(handle,
 				fsp), data, n, offset, 0, aio_glusterfs_done,
@@ -838,6 +855,14 @@ static struct tevent_req *vfs_gluster_pwrite_send(struct vfs_handle_struct
 		tevent_req_error(req, EIO);
 		return tevent_req_post(req, ev);
 	}
+
+	/*
+	 * aio_glusterfs_done and aio_tevent_fd_done()
+	 * use the raw tevent context. We need to use
+	 * tevent_req_defer_callback() in order to
+	 * use the event context we're started with.
+	 */
+	tevent_req_defer_callback(req, ev);
 
 	PROFILE_TIMESTAMP(&state->start);
 	ret = glfs_pwrite_async(*(glfs_fd_t **)VFS_FETCH_FSP_EXTENSION(handle,
@@ -940,6 +965,14 @@ static struct tevent_req *vfs_gluster_fsync_send(struct vfs_handle_struct
 		tevent_req_error(req, EIO);
 		return tevent_req_post(req, ev);
 	}
+
+	/*
+	 * aio_glusterfs_done and aio_tevent_fd_done()
+	 * use the raw tevent context. We need to use
+	 * tevent_req_defer_callback() in order to
+	 * use the event context we're started with.
+	 */
+	tevent_req_defer_callback(req, ev);
 
 	PROFILE_TIMESTAMP(&state->start);
 	ret = glfs_fsync_async(*(glfs_fd_t **)VFS_FETCH_FSP_EXTENSION(handle,

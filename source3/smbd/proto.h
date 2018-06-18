@@ -320,10 +320,7 @@ NTSTATUS can_set_delete_on_close(files_struct *fsp, uint32_t dosmode);
 /* The following definitions come from smbd/fileio.c  */
 
 ssize_t read_file(files_struct *fsp,char *data,off_t pos,size_t n);
-void update_write_time_handler(struct tevent_context *ctx,
-                                      struct tevent_timer *te,
-                                      struct timeval now,
-                                      void *private_data);
+void fsp_flush_write_time_update(struct files_struct *fsp);
 void trigger_write_time_update(struct files_struct *fsp);
 void trigger_write_time_update_immediate(struct files_struct *fsp);
 void mark_file_modified(files_struct *fsp);
@@ -499,21 +496,22 @@ NTSTATUS resolve_dfspath_wcard(TALLOC_CTX *ctx,
 				bool allow_broken_path,
 				char **pp_name_out,
 				bool *ppath_contains_wcard);
-NTSTATUS create_conn_struct(TALLOC_CTX *ctx,
-			    struct tevent_context *ev,
-			    struct messaging_context *msg,
-			    connection_struct **pconn,
-			    int snum,
-			    const char *path,
-			    const struct auth_session_info *session_info);
-NTSTATUS create_conn_struct_cwd(TALLOC_CTX *ctx,
-				struct tevent_context *ev,
-				struct messaging_context *msg,
-				connection_struct **pconn,
+struct connection_struct;
+struct smb_filename;
+struct conn_struct_tos {
+	struct connection_struct *conn;
+	struct smb_filename *oldcwd_fname;
+};
+NTSTATUS create_conn_struct_tos(struct messaging_context *msg,
 				int snum,
 				const char *path,
 				const struct auth_session_info *session_info,
-				struct smb_filename **poldcwd_fname);
+				struct conn_struct_tos **_c);
+NTSTATUS create_conn_struct_tos_cwd(struct messaging_context *msg,
+				    int snum,
+				    const char *path,
+				    const struct auth_session_info *session_info,
+				    struct conn_struct_tos **_c);
 
 /* The following definitions come from smbd/negprot.c  */
 
@@ -588,7 +586,6 @@ int fam_watch(TALLOC_CTX *mem_ctx,
 
 struct notify_context *notify_init(
 	TALLOC_CTX *mem_ctx, struct messaging_context *msg,
-	struct tevent_context *ev,
 	struct smbd_server_connection *sconn,
 	void (*callback)(struct smbd_server_connection *sconn,
 			 void *, struct timespec,
@@ -823,8 +820,6 @@ NTSTATUS make_default_filesystem_acl(
 
 /* The following definitions come from smbd/process.c  */
 
-void smbd_setup_sig_term_handler(struct smbd_server_connection *sconn);
-void smbd_setup_sig_hup_handler(struct smbd_server_connection *sconn);
 bool srv_send_smb(struct smbXsrv_connection *xconn, char *buffer,
 		  bool no_signing, uint32_t seqnum,
 		  bool do_encrypt,
@@ -1051,8 +1046,7 @@ const struct security_token *sec_ctx_active_token(void);
 
 struct memcache *smbd_memcache(void);
 bool snum_is_shared_printer(int snum);
-void delete_and_reload_printers(struct tevent_context *ev,
-				struct messaging_context *msg_ctx);
+void delete_and_reload_printers(void);
 bool reload_services(struct smbd_server_connection *sconn,
 		     bool (*snumused) (struct smbd_server_connection *, int),
 		     bool test);
@@ -1066,7 +1060,8 @@ void smbd_exit_server_cleanly(const char *const reason) _NORETURN_;
 
 bool set_conn_connectpath(connection_struct *conn, const char *connectpath);
 NTSTATUS set_conn_force_user_group(connection_struct *conn, int snum);
-bool set_current_service(connection_struct *conn, uint16_t flags, bool do_chdir);
+void set_current_case_sensitive(connection_struct *conn, uint16_t flags);
+bool chdir_current_service(connection_struct *conn);
 void load_registry_shares(void);
 int add_home_service(const char *service, const char *username, const char *homedir);
 int find_service(TALLOC_CTX *ctx, const char *service, char **p_service_out);
@@ -1200,6 +1195,7 @@ NTSTATUS check_user_share_access(connection_struct *conn,
 				uint32_t *p_share_access,
 				bool *p_readonly_share);
 bool change_to_user(connection_struct *conn, uint64_t vuid);
+bool change_to_user_by_fsp(struct files_struct *fsp);
 bool smbd_change_to_root_user(void);
 bool smbd_become_authenticated_pipe_user(struct auth_session_info *session_info);
 bool smbd_unbecome_authenticated_pipe_user(void);
@@ -1208,6 +1204,7 @@ void unbecome_root(void);
 void smbd_become_root(void);
 void smbd_unbecome_root(void);
 bool become_user(connection_struct *conn, uint64_t vuid);
+bool become_user_by_fsp(struct files_struct *fsp);
 bool become_user_by_session(connection_struct *conn,
 			    const struct auth_session_info *session_info);
 bool unbecome_user(void);

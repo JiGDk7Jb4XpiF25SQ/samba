@@ -338,6 +338,11 @@ static void lease_timeout_handler(struct tevent_context *ctx,
 	struct share_mode_lock *lck;
 	uint16_t old_epoch = lease->lease.lease_epoch;
 
+	/*
+	 * This function runs without any specific impersonation
+	 * and must not call any SMB_VFS operations!
+	 */
+
 	fsp = file_find_one_fsp_from_lease_key(lease->sconn,
 					       &lease->lease.lease_key);
 	if (fsp == NULL) {
@@ -429,7 +434,12 @@ bool fsp_lease_update(struct share_mode_lock *lck,
 
 			DEBUG(10,("%s: setup timeout handler\n", __func__));
 
-			lease->timeout = tevent_add_timer(lease->sconn->ev_ctx,
+			/*
+			 * lease_timeout_handler() only accesses locking.tdb
+			 * so we don't use any impersonation and use
+			 * the raw tevent context.
+			 */
+			lease->timeout = tevent_add_timer(lease->sconn->raw_ev_ctx,
 							  lease, t,
 							  lease_timeout_handler,
 							  lease);
@@ -576,7 +586,8 @@ NTSTATUS downgrade_lease(struct smbXsrv_connection *xconn,
 			lck->data->modified = true;
 		}
 
-		tevent_schedule_immediate(state->im, xconn->ev_ctx,
+		tevent_schedule_immediate(state->im,
+					  xconn->client->raw_ev_ctx,
 					  downgrade_lease_additional_trigger,
 					  state);
 	}
@@ -716,6 +727,11 @@ static void oplock_timeout_handler(struct tevent_context *ctx,
 {
 	files_struct *fsp = (files_struct *)private_data;
 
+	/*
+	 * Note this function doesn't run under any specific impersonation and
+	 * is not expected to call any SMB_VFS operation!
+	 */
+
 	SMB_ASSERT(fsp->sent_oplock_break != NO_BREAK_SENT);
 
 	/* Remove the timed event handler. */
@@ -750,8 +766,15 @@ static void add_oplock_timeout_handler(files_struct *fsp)
 			  "around\n"));
 	}
 
+	/*
+	 * For now we keep the logic and use the
+	 * raw event context. We're called from
+	 * the messaging system from a raw event context.
+	 * Also oplock_timeout_handler doesn't invoke
+	 * SMB_VFS calls.
+	 */
 	fsp->oplock_timeout =
-		tevent_add_timer(fsp->conn->sconn->ev_ctx, fsp,
+		tevent_add_timer(fsp->conn->sconn->raw_ev_ctx, fsp,
 				 timeval_current_ofs(OPLOCK_BREAK_TIMEOUT, 0),
 				 oplock_timeout_handler, fsp);
 
@@ -1127,7 +1150,15 @@ static void contend_level2_oplocks_begin_default(files_struct *fsp,
 		TALLOC_FREE(state);
 		return;
 	}
-	tevent_schedule_immediate(im, sconn->ev_ctx, do_break_to_none, state);
+
+	/*
+	 * do_break_to_none() only operates on the
+	 * locking.tdb and send network packets to
+	 * the client. That doesn't require any
+	 * impersonation, so we just use the
+	 * raw tevent context here.
+	 */
+	tevent_schedule_immediate(im, sconn->raw_ev_ctx, do_break_to_none, state);
 }
 
 static void send_break_to_none(struct messaging_context *msg_ctx,
@@ -1153,6 +1184,11 @@ static void do_break_to_none(struct tevent_context *ctx,
 	uint32_t i;
 	struct share_mode_lock *lck;
 	struct share_mode_data *d;
+
+	/*
+	 * Note this function doesn't run under any specific impersonation and
+	 * is not expected to call any SMB_VFS operation!
+	 */
 
 	lck = get_existing_share_mode_lock(talloc_tos(), state->id);
 	if (lck == NULL) {

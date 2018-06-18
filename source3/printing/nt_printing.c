@@ -980,18 +980,19 @@ static int file_version_is_newer(connection_struct *conn, fstring new_file, fstr
 /****************************************************************************
 Determine the correct cVersion associated with an architecture and driver
 ****************************************************************************/
-static uint32_t get_correct_cversion(struct auth_session_info *session_info,
+static uint32_t get_correct_cversion(const struct auth_session_info *session_info,
 				   const char *architecture,
 				   const char *driverpath_in,
 				   const char *driver_directory,
 				   WERROR *perr)
 {
+	TALLOC_CTX *frame = talloc_stackframe();
 	int cversion = -1;
 	NTSTATUS          nt_status;
 	struct smb_filename *smb_fname = NULL;
 	files_struct      *fsp = NULL;
+	struct conn_struct_tos *c = NULL;
 	connection_struct *conn = NULL;
-	struct smb_filename *oldcwd_fname = NULL;
 	char *printdollar = NULL;
 	char *printdollar_path = NULL;
 	char *working_dir = NULL;
@@ -1003,6 +1004,7 @@ static uint32_t get_correct_cversion(struct auth_session_info *session_info,
 	if (strcmp(architecture, SPL_ARCH_WIN40) == 0) {
 		DEBUG(10,("get_correct_cversion: Driver is Win9x, cversion = 0\n"));
 		*perr = WERR_OK;
+		TALLOC_FREE(frame);
 		return 0;
 	}
 
@@ -1010,26 +1012,30 @@ static uint32_t get_correct_cversion(struct auth_session_info *session_info,
 	if (strcmp(architecture, SPL_ARCH_X64) == 0) {
 		DEBUG(10,("get_correct_cversion: Driver is x64, cversion = 3\n"));
 		*perr = WERR_OK;
+		TALLOC_FREE(frame);
 		return 3;
 	}
 
-	printdollar_snum = find_service(talloc_tos(), "print$", &printdollar);
+	printdollar_snum = find_service(frame, "print$", &printdollar);
 	if (!printdollar) {
 		*perr = WERR_NOT_ENOUGH_MEMORY;
+		TALLOC_FREE(frame);
 		return -1;
 	}
 	if (printdollar_snum == -1) {
 		*perr = WERR_BAD_NET_NAME;
+		TALLOC_FREE(frame);
 		return -1;
 	}
 
-	printdollar_path = lp_path(talloc_tos(), printdollar_snum);
+	printdollar_path = lp_path(frame, printdollar_snum);
 	if (printdollar_path == NULL) {
 		*perr = WERR_NOT_ENOUGH_MEMORY;
+		TALLOC_FREE(frame);
 		return -1;
 	}
 
-	working_dir = talloc_asprintf(talloc_tos(),
+	working_dir = talloc_asprintf(frame,
 				      "%s/%s",
 				      printdollar_path,
 				      architecture);
@@ -1038,25 +1044,25 @@ static uint32_t get_correct_cversion(struct auth_session_info *session_info,
 	 * directory, switch to the driver directory.
 	 */
 	if (driver_directory != NULL) {
-		working_dir = talloc_asprintf(talloc_tos(), "%s/%s/%s",
+		working_dir = talloc_asprintf(frame, "%s/%s/%s",
 					      printdollar_path,
 					      architecture,
 					      driver_directory);
 	}
 
-	nt_status = create_conn_struct_cwd(talloc_tos(),
-					   server_event_context(),
-					   server_messaging_context(),
-					   &conn,
-					   printdollar_snum,
-					   working_dir,
-					   session_info, &oldcwd_fname);
+	nt_status = create_conn_struct_tos_cwd(server_messaging_context(),
+					       printdollar_snum,
+					       working_dir,
+					       session_info,
+					       &c);
 	if (!NT_STATUS_IS_OK(nt_status)) {
 		DEBUG(0,("get_correct_cversion: create_conn_struct "
 			 "returned %s\n", nt_errstr(nt_status)));
 		*perr = ntstatus_to_werror(nt_status);
+		TALLOC_FREE(frame);
 		return -1;
 	}
+	conn = c->conn;
 
 	nt_status = set_conn_force_user_group(conn, printdollar_snum);
 	if (!NT_STATUS_IS_OK(nt_status)) {
@@ -1163,20 +1169,14 @@ static uint32_t get_correct_cversion(struct auth_session_info *session_info,
  error_exit:
 	unbecome_user();
  error_free_conn:
-	TALLOC_FREE(smb_fname);
 	if (fsp != NULL) {
 		close_file(NULL, fsp, NORMAL_CLOSE);
-	}
-	if (conn != NULL) {
-		vfs_ChDir(conn, oldcwd_fname);
-		TALLOC_FREE(oldcwd_fname);
-		SMB_VFS_DISCONNECT(conn);
-		conn_free(conn);
 	}
 	if (!W_ERROR_IS_OK(*perr)) {
 		cversion = -1;
 	}
 
+	TALLOC_FREE(frame);
 	return cversion;
 }
 
@@ -1191,7 +1191,7 @@ static uint32_t get_correct_cversion(struct auth_session_info *session_info,
 } while (0);
 
 static WERROR clean_up_driver_struct_level(TALLOC_CTX *mem_ctx,
-					   struct auth_session_info *session_info,
+					   const struct auth_session_info *session_info,
 					   const char *architecture,
 					   const char **driver_path,
 					   const char **data_file,
@@ -1306,8 +1306,8 @@ static WERROR clean_up_driver_struct_level(TALLOC_CTX *mem_ctx,
 ****************************************************************************/
 
 WERROR clean_up_driver_struct(TALLOC_CTX *mem_ctx,
-			      struct auth_session_info *session_info,
-			      struct spoolss_AddDriverInfoCtr *r,
+			      const struct auth_session_info *session_info,
+			      const struct spoolss_AddDriverInfoCtr *r,
 			      uint32_t flags,
 			      const char **driver_directory)
 {
@@ -1472,21 +1472,21 @@ static WERROR move_driver_file_to_download_area(TALLOC_CTX *mem_ctx,
 	return ret;
 }
 
-WERROR move_driver_to_download_area(struct auth_session_info *session_info,
-				    struct spoolss_AddDriverInfoCtr *r,
+WERROR move_driver_to_download_area(const struct auth_session_info *session_info,
+				    const struct spoolss_AddDriverInfoCtr *r,
 				    const char *driver_directory)
 {
+	TALLOC_CTX *frame = talloc_stackframe();
 	struct spoolss_AddDriverInfo3 *driver;
 	struct spoolss_AddDriverInfo3 converted_driver;
 	const char *short_architecture;
 	struct smb_filename *smb_dname = NULL;
 	char *new_dir = NULL;
+	struct conn_struct_tos *c = NULL;
 	connection_struct *conn = NULL;
 	NTSTATUS nt_status;
 	int i;
-	TALLOC_CTX *ctx = talloc_tos();
 	int ver = 0;
-	struct smb_filename *oldcwd_fname = NULL;
 	char *printdollar = NULL;
 	int printdollar_snum;
 	WERROR err = WERR_OK;
@@ -1505,35 +1505,39 @@ WERROR move_driver_to_download_area(struct auth_session_info *session_info,
 		break;
 	default:
 		DEBUG(0,("move_driver_to_download_area: Unknown info level (%u)\n", (unsigned int)r->level));
+		TALLOC_FREE(frame);
 		return WERR_INVALID_LEVEL;
 	}
 
 	short_architecture = get_short_archi(driver->architecture);
 	if (!short_architecture) {
+		TALLOC_FREE(frame);
 		return WERR_UNKNOWN_PRINTER_DRIVER;
 	}
 
-	printdollar_snum = find_service(ctx, "print$", &printdollar);
+	printdollar_snum = find_service(frame, "print$", &printdollar);
 	if (!printdollar) {
+		TALLOC_FREE(frame);
 		return WERR_NOT_ENOUGH_MEMORY;
 	}
 	if (printdollar_snum == -1) {
+		TALLOC_FREE(frame);
 		return WERR_BAD_NET_NAME;
 	}
 
-	nt_status = create_conn_struct_cwd(talloc_tos(),
-					   server_event_context(),
-					   server_messaging_context(),
-					   &conn,
-					   printdollar_snum,
-					   lp_path(talloc_tos(), printdollar_snum),
-					   session_info, &oldcwd_fname);
+	nt_status = create_conn_struct_tos_cwd(server_messaging_context(),
+					       printdollar_snum,
+					       lp_path(frame, printdollar_snum),
+					       session_info,
+					       &c);
 	if (!NT_STATUS_IS_OK(nt_status)) {
 		DEBUG(0,("move_driver_to_download_area: create_conn_struct "
 			 "returned %s\n", nt_errstr(nt_status)));
 		err = ntstatus_to_werror(nt_status);
+		TALLOC_FREE(frame);
 		return err;
 	}
+	conn = c->conn;
 
 	nt_status = set_conn_force_user_group(conn, printdollar_snum);
 	if (!NT_STATUS_IS_OK(nt_status)) {
@@ -1548,7 +1552,7 @@ WERROR move_driver_to_download_area(struct auth_session_info *session_info,
 		goto err_free_conn;
 	}
 
-	new_dir = talloc_asprintf(ctx,
+	new_dir = talloc_asprintf(frame,
 				"%s/%d",
 				short_architecture,
 				driver->version);
@@ -1594,7 +1598,7 @@ WERROR move_driver_to_download_area(struct auth_session_info *session_info,
 
 	if (driver->driver_path && strlen(driver->driver_path)) {
 
-		err = move_driver_file_to_download_area(ctx,
+		err = move_driver_file_to_download_area(frame,
 							conn,
 							driver->driver_path,
 							short_architecture,
@@ -1609,7 +1613,7 @@ WERROR move_driver_to_download_area(struct auth_session_info *session_info,
 	if (driver->data_file && strlen(driver->data_file)) {
 		if (!strequal(driver->data_file, driver->driver_path)) {
 
-			err = move_driver_file_to_download_area(ctx,
+			err = move_driver_file_to_download_area(frame,
 								conn,
 								driver->data_file,
 								short_architecture,
@@ -1626,7 +1630,7 @@ WERROR move_driver_to_download_area(struct auth_session_info *session_info,
 		if (!strequal(driver->config_file, driver->driver_path) &&
 		    !strequal(driver->config_file, driver->data_file)) {
 
-			err = move_driver_file_to_download_area(ctx,
+			err = move_driver_file_to_download_area(frame,
 								conn,
 								driver->config_file,
 								short_architecture,
@@ -1644,7 +1648,7 @@ WERROR move_driver_to_download_area(struct auth_session_info *session_info,
 		    !strequal(driver->help_file, driver->data_file) &&
 		    !strequal(driver->help_file, driver->config_file)) {
 
-			err = move_driver_file_to_download_area(ctx,
+			err = move_driver_file_to_download_area(frame,
 								conn,
 								driver->help_file,
 								short_architecture,
@@ -1670,7 +1674,7 @@ WERROR move_driver_to_download_area(struct auth_session_info *session_info,
 					}
 				}
 
-				err = move_driver_file_to_download_area(ctx,
+				err = move_driver_file_to_download_area(frame,
 									conn,
 									driver->dependent_files->string[i],
 									short_architecture,
@@ -1689,15 +1693,7 @@ WERROR move_driver_to_download_area(struct auth_session_info *session_info,
  err_exit:
 	unbecome_user();
  err_free_conn:
-	TALLOC_FREE(smb_dname);
-
-	if (conn != NULL) {
-		vfs_ChDir(conn, oldcwd_fname);
-		TALLOC_FREE(oldcwd_fname);
-		SMB_VFS_DISCONNECT(conn);
-		conn_free(conn);
-	}
-
+	TALLOC_FREE(frame);
 	return err;
 }
 
@@ -2044,41 +2040,45 @@ err_out:
 bool delete_driver_files(const struct auth_session_info *session_info,
 			 const struct spoolss_DriverInfo8 *r)
 {
+	TALLOC_CTX *frame = talloc_stackframe();
 	const char *short_arch;
-	connection_struct *conn;
+	struct conn_struct_tos *c = NULL;
+	connection_struct *conn = NULL;
 	NTSTATUS nt_status;
-	struct smb_filename *oldcwd_fname = NULL;
 	char *printdollar = NULL;
 	int printdollar_snum;
 	bool ret = false;
 
 	if (!r) {
+		TALLOC_FREE(frame);
 		return false;
 	}
 
 	DEBUG(6,("delete_driver_files: deleting driver [%s] - version [%d]\n",
 		r->driver_name, r->version));
 
-	printdollar_snum = find_service(talloc_tos(), "print$", &printdollar);
+	printdollar_snum = find_service(frame, "print$", &printdollar);
 	if (!printdollar) {
+		TALLOC_FREE(frame);
 		return false;
 	}
 	if (printdollar_snum == -1) {
+		TALLOC_FREE(frame);
 		return false;
 	}
 
-	nt_status = create_conn_struct_cwd(talloc_tos(),
-					   server_event_context(),
-					   server_messaging_context(),
-					   &conn,
-					   printdollar_snum,
-					   lp_path(talloc_tos(), printdollar_snum),
-					   session_info, &oldcwd_fname);
+	nt_status = create_conn_struct_tos_cwd(server_messaging_context(),
+					       printdollar_snum,
+					       lp_path(frame, printdollar_snum),
+					       session_info,
+					       &c);
 	if (!NT_STATUS_IS_OK(nt_status)) {
 		DEBUG(0,("delete_driver_files: create_conn_struct "
 			 "returned %s\n", nt_errstr(nt_status)));
+		TALLOC_FREE(frame);
 		return false;
 	}
+	conn = c->conn;
 
 	nt_status = set_conn_force_user_group(conn, printdollar_snum);
 	if (!NT_STATUS_IS_OK(nt_status)) {
@@ -2141,12 +2141,7 @@ bool delete_driver_files(const struct auth_session_info *session_info,
  err_out:
 	unbecome_user();
  err_free_conn:
-	if (conn != NULL) {
-		vfs_ChDir(conn, oldcwd_fname);
-		TALLOC_FREE(oldcwd_fname);
-		SMB_VFS_DISCONNECT(conn);
-		conn_free(conn);
-	}
+	TALLOC_FREE(frame);
 	return ret;
 }
 

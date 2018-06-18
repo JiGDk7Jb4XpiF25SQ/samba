@@ -90,40 +90,17 @@ bool set_conn_connectpath(connection_struct *conn, const char *connectpath)
  Load parameters specific to a connection/service.
 ****************************************************************************/
 
-bool set_current_service(connection_struct *conn, uint16_t flags, bool do_chdir)
+void set_current_case_sensitive(connection_struct *conn, uint16_t flags)
 {
 	int snum;
 	enum remote_arch_types ra_type;
 
-	if (!conn)  {
-		last_conn = NULL;
-		return(False);
-	}
-
-	conn->lastused_count++;
+	SMB_ASSERT(conn != NULL);
 
 	snum = SNUM(conn);
 
-	{
-		struct smb_filename connectpath_fname = {
-			.base_name = conn->connectpath
-		};
-		struct smb_filename origpath_fname = {
-			.base_name = conn->origpath
-		};
-
-		if (do_chdir &&
-		    vfs_ChDir(conn, &connectpath_fname) != 0 &&
-		    vfs_ChDir(conn, &origpath_fname) != 0) {
-			DEBUG(((errno!=EACCES)?0:3),
-				("chdir (%s) failed, reason: %s\n",
-				conn->connectpath, strerror(errno)));
-			return(False);
-		}
-	}
-
 	if ((conn == last_conn) && (last_flags == flags)) {
-		return(True);
+		return;
 	}
 
 	last_conn = conn;
@@ -157,6 +134,37 @@ bool set_current_service(connection_struct *conn, uint16_t flags, bool do_chdir)
 		conn->case_sensitive = false;
 		break;
 	}
+	return;
+}
+
+bool chdir_current_service(connection_struct *conn)
+{
+	const struct smb_filename connectpath_fname = {
+		.base_name = conn->connectpath,
+	};
+	const struct smb_filename origpath_fname = {
+		.base_name = conn->origpath,
+	};
+	int ret;
+
+	conn->lastused_count++;
+
+	ret = vfs_ChDir(conn, &connectpath_fname);
+	if (ret != 0) {
+		DEBUG(((errno!=EACCES)?0:3),
+		      ("chdir (%s) failed, reason: %s\n",
+		       conn->connectpath, strerror(errno)));
+		return false;
+	}
+
+	ret = vfs_ChDir(conn, &origpath_fname);
+	if (ret != 0) {
+		DEBUG(((errno!=EACCES)?0:3),
+			("chdir (%s) failed, reason: %s\n",
+			conn->origpath, strerror(errno)));
+		return false;
+	}
+
 	return true;
 }
 
@@ -450,7 +458,7 @@ static NTSTATUS notify_init_sconn(struct smbd_server_connection *sconn)
 		return NT_STATUS_OK;
 	}
 
-	sconn->notify_ctx = notify_init(sconn, sconn->msg_ctx, sconn->ev_ctx,
+	sconn->notify_ctx = notify_init(sconn, sconn->msg_ctx,
 					sconn, notify_callback);
 	if (sconn->notify_ctx == NULL) {
 		return NT_STATUS_NO_MEMORY;
@@ -851,7 +859,8 @@ static NTSTATUS make_connection_snum(struct smbXsrv_connection *xconn,
 		dbgtext( "(pid %d)\n", (int)getpid() );
 	}
 
-	return status;
+	conn->tcon_done = true;
+	return NT_STATUS_OK;
 
   err_root_exit:
 

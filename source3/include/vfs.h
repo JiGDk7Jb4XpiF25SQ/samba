@@ -398,6 +398,7 @@ typedef struct files_struct {
 
 struct vuid_cache_entry {
 	struct auth_session_info *session_info;
+	struct tevent_context *user_ev_ctx;
 	uint64_t vuid; /* SMB2 compat */
 	bool read_only;
 	uint32_t share_access;
@@ -436,6 +437,7 @@ typedef struct connection_struct {
 	char *connectpath;
 	char *origpath;
 	struct smb_filename *cwd_fname; /* Working directory. */
+	bool tcon_done;
 
 	struct vfs_handle_struct *vfs_handles;		/* for the new plugins */
 
@@ -444,6 +446,7 @@ typedef struct connection_struct {
 	 * on the vuid using this tid, this might change per SMB request.
 	 */
 	struct auth_session_info *session_info;
+	struct tevent_context *user_ev_ctx;
 
 	/*
 	 * If the "force group" parameter is set, this is the primary gid that
@@ -511,6 +514,8 @@ struct smb_request {
 
 	size_t unread_bytes;
 	bool encrypted;
+	/* the tevent_context (wrapper) the request operates on */
+	struct tevent_context *ev_ctx;
 	connection_struct *conn;
 	struct smbd_server_connection *sconn;
 	struct smbXsrv_connection *xconn;

@@ -123,7 +123,7 @@ static void delete_and_reload_printers_full(struct tevent_context *ev,
 	}
 
 	/* finally, purge old snums */
-	delete_and_reload_printers(ev, msg_ctx);
+	delete_and_reload_printers();
 
 	TALLOC_FREE(session_info);
 }
@@ -484,7 +484,7 @@ void printing_subsystem_update(struct tevent_context *ev_ctx,
 {
 	if (background_lpq_updater_pid != -1) {
 		if (pcap_cache_loaded(NULL)) {
-			load_printers(ev_ctx, msg_ctx);
+			load_printers();
 		}
 		if (force) {
 			/* Send a sighup to the background process.

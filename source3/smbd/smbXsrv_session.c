@@ -258,7 +258,9 @@ static NTSTATUS smbXsrv_session_table_init(struct smbXsrv_connection *conn,
 
 	table->global.db_ctx = smbXsrv_session_global_db_ctx;
 
-	subreq = messaging_read_send(table, client->ev_ctx, client->msg_ctx,
+	subreq = messaging_read_send(table,
+				     client->raw_ev_ctx,
+				     client->msg_ctx,
 				     MSG_SMBXSRV_SESSION_CLOSE);
 	if (subreq == NULL) {
 		TALLOC_FREE(table);
@@ -376,7 +378,7 @@ static void smbXsrv_session_close_loop(struct tevent_req *subreq)
 		goto next;
 	}
 
-	subreq = smb2srv_session_shutdown_send(session, client->ev_ctx,
+	subreq = smb2srv_session_shutdown_send(session, client->raw_ev_ctx,
 					       session, NULL);
 	if (subreq == NULL) {
 		status = NT_STATUS_NO_MEMORY;
@@ -396,7 +398,9 @@ static void smbXsrv_session_close_loop(struct tevent_req *subreq)
 next:
 	TALLOC_FREE(rec);
 
-	subreq = messaging_read_send(table, client->ev_ctx, client->msg_ctx,
+	subreq = messaging_read_send(table,
+				     client->raw_ev_ctx,
+				     client->msg_ctx,
 				     MSG_SMBXSRV_SESSION_CLOSE);
 	if (subreq == NULL) {
 		const char *r;
@@ -1106,7 +1110,7 @@ static void smb2srv_session_close_previous_check(struct tevent_req *req)
 		return;
 	}
 
-	status = messaging_send(conn->msg_ctx,
+	status = messaging_send(conn->client->msg_ctx,
 				global->channels[0].server_id,
 				MSG_SMBXSRV_SESSION_CLOSE, &blob);
 	TALLOC_FREE(state->db_rec);
@@ -1358,7 +1362,7 @@ NTSTATUS smbXsrv_session_add_channel(struct smbXsrv_session *session,
 	c = &global->channels[global->num_channels];
 	ZERO_STRUCTP(c);
 
-	c->server_id = messaging_server_id(conn->msg_ctx);
+	c->server_id = messaging_server_id(conn->client->msg_ctx);
 	c->local_address = tsocket_address_string(conn->local_address,
 						  global->channels);
 	if (c->local_address == NULL) {

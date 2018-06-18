@@ -160,12 +160,12 @@ static int wcp_file_size_change(files_struct *fsp)
 	return ret;
 }
 
-void update_write_time_handler(struct tevent_context *ctx,
-				      struct tevent_timer *te,
-				      struct timeval now,
-				      void *private_data)
+void fsp_flush_write_time_update(struct files_struct *fsp)
 {
-	files_struct *fsp = (files_struct *)private_data;
+	/*
+	 * Note this won't expect any impersonation!
+	 * So don't call any SMB_VFS operations here!
+	 */
 
 	DEBUG(5, ("Update write time on %s\n", fsp_str_dbg(fsp)));
 
@@ -178,6 +178,15 @@ void update_write_time_handler(struct tevent_context *ctx,
 
 	/* Remove the timed event handler. */
 	TALLOC_FREE(fsp->update_write_time_event);
+}
+
+static void update_write_time_handler(struct tevent_context *ctx,
+				      struct tevent_timer *te,
+				      struct timeval now,
+				      void *private_data)
+{
+	files_struct *fsp = (files_struct *)private_data;
+	fsp_flush_write_time_update(fsp);
 }
 
 /*********************************************************
@@ -223,9 +232,17 @@ void trigger_write_time_update(struct files_struct *fsp)
 	DEBUG(5, ("Update write time %d usec later on %s\n",
 		  delay, fsp_str_dbg(fsp)));
 
-	/* trigger the update 2 seconds later */
+	/*
+	 * trigger the update 2 seconds later
+	 *
+	 * Note that update_write_time_handler()
+	 * => fsp_flush_write_time_update()
+	 * won't do any SMB_VFS calls and don't
+	 * need impersonation. So we use the
+	 * raw event context for this.
+	 */
 	fsp->update_write_time_event =
-		tevent_add_timer(fsp->conn->sconn->ev_ctx, NULL,
+		tevent_add_timer(fsp->conn->sconn->raw_ev_ctx, NULL,
 				 timeval_current_ofs_usec(delay),
 				 update_write_time_handler, fsp);
 }

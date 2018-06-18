@@ -4002,6 +4002,11 @@ static ssize_t fruit_pread_meta(vfs_handle_struct *handle,
 		return 0;
 	}
 
+	if (fio == NULL) {
+		DBG_ERR("Failed to fetch fsp extension");
+		return -1;
+	}
+
 	/* Yes, macOS always reads from offset 0 */
 	offset = 0;
 	to_return = MIN(n, AFP_INFO_SIZE);
@@ -4328,6 +4333,11 @@ static ssize_t fruit_pwrite_meta(vfs_handle_struct *handle,
 		return -1;
 	}
 
+	if (fio == NULL) {
+		DBG_ERR("Failed to fetch fsp extension");
+		return -1;
+	}
+
 	switch (fio->config->meta) {
 	case FRUIT_META_STREAM:
 		nwritten = fruit_pwrite_meta_stream(handle, fsp, data,
@@ -4404,6 +4414,11 @@ static ssize_t fruit_pwrite_rsrc(vfs_handle_struct *handle,
 {
 	struct fio *fio = (struct fio *)VFS_FETCH_FSP_EXTENSION(handle, fsp);
 	ssize_t nwritten;
+
+	if (fio == NULL) {
+		DBG_ERR("Failed to fetch fsp extension");
+		return -1;
+	}
 
 	switch (fio->config->rsrc) {
 	case FRUIT_RSRC_STREAM:
@@ -5490,6 +5505,11 @@ static int fruit_ftruncate_rsrc(struct vfs_handle_struct *handle,
 {
 	struct fio *fio = (struct fio *)VFS_FETCH_FSP_EXTENSION(handle, fsp);
 	int ret;
+
+	if (fio == NULL) {
+		DBG_ERR("Failed to fetch fsp extension");
+		return -1;
+	}
 
 	switch (fio->config->rsrc) {
 	case FRUIT_RSRC_XATTR:

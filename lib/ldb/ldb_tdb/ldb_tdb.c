@@ -485,6 +485,7 @@ int ltdb_store(struct ldb_module *module, const struct ldb_message *msg, int flg
 	}
 
 	if (ltdb->read_only) {
+		talloc_free(tdb_key_ctx);
 		return LDB_ERR_UNWILLING_TO_PERFORM;
 	}
 
@@ -626,7 +627,7 @@ static int ltdb_add_internal(struct ldb_module *module,
 			if (mem_ctx == NULL) {
 				return ldb_module_operr(module);
 			}
-			ret2 = ltdb_search_base(module, module,
+			ret2 = ltdb_search_base(module, mem_ctx,
 						msg->dn, &dn2);
 			TALLOC_FREE(mem_ctx);
 			if (ret2 == LDB_SUCCESS) {
@@ -732,6 +733,7 @@ int ltdb_delete_noindex(struct ldb_module *module,
 	}
 
 	if (ltdb->read_only) {
+		talloc_free(tdb_key_ctx);
 		return LDB_ERR_UNWILLING_TO_PERFORM;
 	}
 
