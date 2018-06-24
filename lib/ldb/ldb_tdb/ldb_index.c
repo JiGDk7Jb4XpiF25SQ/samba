@@ -450,6 +450,10 @@ normal_index:
 
 		list->count = el->values[0].length / LTDB_GUID_SIZE;
 		list->dn = talloc_array(list, struct ldb_val, list->count);
+		if (list->dn == NULL) {
+			talloc_free(msg);
+			return LDB_ERR_OPERATIONS_ERROR;
+		}
 
 		/*
 		 * The actual data is on msg, due to
@@ -715,6 +719,9 @@ static int ltdb_dn_list_store(struct ldb_module *module, struct ldb_dn *dn,
 	}
 
 	key.dptr = discard_const_p(unsigned char, ldb_dn_get_linearized(dn));
+	if (key.dptr == NULL) {
+		return LDB_ERR_OPERATIONS_ERROR;
+	}
 	key.dsize = strlen((char *)key.dptr);
 
 	rec = tdb_fetch(ltdb->idxptr->itdb, key);
@@ -1758,12 +1765,13 @@ static int ltdb_index_filter(struct ltdb_private *ltdb,
 					  struct guid_tdb_key,
 					  dn_list->count);
 
+		if (key_values == NULL) {
+			talloc_free(keys);
+			return ldb_module_oom(ac->module);
+		}
 		for (i = 0; i < dn_list->count; i++) {
 			keys[i].dptr = key_values[i].guid_key;
 			keys[i].dsize = sizeof(key_values[i].guid_key);
-		}
-		if (key_values == NULL) {
-			return ldb_module_oom(ac->module);
 		}
 	} else {
 		for (i = 0; i < dn_list->count; i++) {
@@ -1781,6 +1789,7 @@ static int ltdb_index_filter(struct ltdb_private *ltdb,
 				      &dn_list->dn[i],
 				      &keys[num_keys]);
 		if (ret != LDB_SUCCESS) {
+			talloc_free(keys);
 			return ret;
 		}
 
@@ -1818,6 +1827,7 @@ static int ltdb_index_filter(struct ltdb_private *ltdb,
 		bool matched;
 		msg = ldb_msg_new(ac);
 		if (!msg) {
+			talloc_free(keys);
 			return LDB_ERR_OPERATIONS_ERROR;
 		}
 
@@ -1838,6 +1848,7 @@ static int ltdb_index_filter(struct ltdb_private *ltdb,
 
 		if (ret != LDB_SUCCESS && ret != LDB_ERR_NO_SUCH_OBJECT) {
 			/* an internal error */
+			talloc_free(keys);
 			talloc_free(msg);
 			return LDB_ERR_OPERATIONS_ERROR;
 		}
@@ -1860,6 +1871,7 @@ static int ltdb_index_filter(struct ltdb_private *ltdb,
 		}
 
 		if (ret != LDB_SUCCESS) {
+			talloc_free(keys);
 			talloc_free(msg);
 			return ret;
 		}
@@ -1874,6 +1886,7 @@ static int ltdb_index_filter(struct ltdb_private *ltdb,
 		talloc_free(msg);
 
 		if (ret == -1) {
+			talloc_free(keys);
 			return LDB_ERR_OPERATIONS_ERROR;
 		}
 
@@ -1883,6 +1896,7 @@ static int ltdb_index_filter(struct ltdb_private *ltdb,
 			 * is the callbacks responsiblity, and should
 			 * not be talloc_free()'ed */
 			ac->request_terminated = true;
+			talloc_free(keys);
 			return ret;
 		}
 
