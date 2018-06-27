@@ -173,7 +173,7 @@ static NTSTATUS get_event_server(
 	if (!NT_STATUS_IS_OK(status)) {
 		DBG_NOTICE(
 			"Failed to find '%s' registered on the message bus to "
-			"send audit events to: %s\n",
+			"send JSON audit events to: %s\n",
 			server_name,
 			nt_errstr(status));
 		TALLOC_FREE(frame);
@@ -199,7 +199,7 @@ static NTSTATUS get_event_server(
 	}
 	DBG_NOTICE(
 		"Failed to find '%s' registered on the message bus to "
-		"send audit events to: %s\n",
+		"send JSON audit events to: %s\n",
 		server_name,
 		nt_errstr(status));
 	TALLOC_FREE(frame);
@@ -230,7 +230,7 @@ void audit_message_send(
 	uint32_t message_type,
 	struct json_object *message)
 {
-	struct server_id event_server;
+	struct server_id event_server = {};
 	NTSTATUS status;
 
 	const char *message_string = NULL;
@@ -248,11 +248,7 @@ void audit_message_send(
 	 * messages may get lost
 	 */
 	status = get_event_server(msg_ctx, server_name, &event_server);
-	if (!NT_STATUS_IS_OK(status) &&
-	    !NT_STATUS_EQUAL(status, NT_STATUS_OBJECT_NAME_NOT_FOUND)) {
-		DBG_ERR("get_event_server for %s returned (%s)\n",
-			server_name,
-			nt_errstr(status));
+	if (!NT_STATUS_IS_OK(status)) {
 		TALLOC_FREE(ctx);
 		return;
 	}
@@ -270,11 +266,7 @@ void audit_message_send(
 	 */
 	if (NT_STATUS_EQUAL(status, NT_STATUS_OBJECT_NAME_NOT_FOUND)) {
 		status = get_event_server(msg_ctx, server_name, &event_server);
-		if (!NT_STATUS_IS_OK(status) &&
-		    !NT_STATUS_EQUAL(status, NT_STATUS_OBJECT_NAME_NOT_FOUND)) {
-			DBG_ERR("get_event_server for %s returned (%s)\n",
-				server_name,
-				nt_errstr(status));
+		if (!NT_STATUS_IS_OK(status)) {
 			TALLOC_FREE(ctx);
 			return;
 		}

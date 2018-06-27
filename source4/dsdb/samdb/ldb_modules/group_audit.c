@@ -28,6 +28,7 @@
 
 #include "dsdb/samdb/samdb.h"
 #include "dsdb/samdb/ldb_modules/util.h"
+#include "dsdb/samdb/ldb_modules/audit_util_proto.h"
 #include "libcli/security/dom_sid.h"
 #include "auth/common_auth.h"
 #include "param/param.h"
@@ -1331,7 +1332,7 @@ static int group_init(struct ldb_module *module)
 		= talloc_get_type_abort(
 			ldb_get_opaque(ldb, "loadparm"),
 			struct loadparm_context);
-	struct tevent_context *ec = ldb_get_event_context(ldb);
+	struct tevent_context *ev = ldb_get_event_context(ldb);
 
 	context = talloc_zero(module, struct audit_context);
 	if (context == NULL) {
@@ -1340,7 +1341,9 @@ static int group_init(struct ldb_module *module)
 
 	if (lp_ctx && lpcfg_dsdb_group_change_notification(lp_ctx)) {
 		context->send_events = true;
-		context->msg_ctx = imessaging_client_init(ec, lp_ctx, ec);
+		context->msg_ctx = imessaging_client_init(context,
+							  lp_ctx,
+							  ev);
 	}
 
 	ldb_module_set_private(module, context);
