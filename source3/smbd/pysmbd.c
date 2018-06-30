@@ -37,6 +37,13 @@ extern const struct generic_mapping file_generic_mapping;
 #undef  DBGC_CLASS
 #define DBGC_CLASS DBGC_ACLS
 
+#ifdef O_DIRECTORY
+#define DIRECTORY_FLAGS O_RDONLY|O_DIRECTORY
+#else
+/* POSIX allows us to open a directory with O_RDONLY. */
+#define DIRECTORY_FLAGS O_RDONLY
+#endif
+
 static connection_struct *get_conn_tos(const char *service)
 {
 	struct conn_struct_tos *c = NULL;
@@ -100,25 +107,24 @@ static int set_sys_acl_conn(const char *fname,
 	return ret;
 }
 
-static NTSTATUS set_nt_acl_conn(const char *fname,
-				uint32_t security_info_sent, const struct security_descriptor *sd,
-				connection_struct *conn)
-{
-	TALLOC_CTX *frame = talloc_stackframe();
-	NTSTATUS status = NT_STATUS_OK;
-	files_struct *fsp;
-	struct smb_filename *smb_fname = NULL;
-	int flags, ret;
-	mode_t saved_umask;
 
-	fsp = talloc_zero(frame, struct files_struct);
+static NTSTATUS init_files_struct(TALLOC_CTX *mem_ctx,
+				  const char *fname,
+				  struct connection_struct *conn,
+				  int flags,
+				  struct files_struct **_fsp)
+{
+	struct smb_filename *smb_fname = NULL;
+	int ret;
+	mode_t saved_umask;
+	struct files_struct *fsp;
+
+	fsp = talloc_zero(mem_ctx, struct files_struct);
 	if (fsp == NULL) {
-		TALLOC_FREE(frame);
 		return NT_STATUS_NO_MEMORY;
 	}
 	fsp->fh = talloc(fsp, struct fd_handle);
 	if (fsp->fh == NULL) {
-		TALLOC_FREE(frame);
 		return NT_STATUS_NO_MEMORY;
 	}
 	fsp->conn = conn;
@@ -128,42 +134,26 @@ static NTSTATUS set_nt_acl_conn(const char *fname,
 	saved_umask = umask(0);
 
 	smb_fname = synthetic_smb_fname_split(fsp,
-					fname,
-					lp_posix_pathnames());
+					      fname,
+					      lp_posix_pathnames());
 	if (smb_fname == NULL) {
-		TALLOC_FREE(frame);
 		umask(saved_umask);
 		return NT_STATUS_NO_MEMORY;
 	}
 
 	fsp->fsp_name = smb_fname;
-
-#ifdef O_DIRECTORY
-	flags = O_RDONLY|O_DIRECTORY;
-#else
-	/* POSIX allows us to open a directory with O_RDONLY. */
-	flags = O_RDONLY;
-#endif
-
-	fsp->fh->fd = SMB_VFS_OPEN(conn, smb_fname, fsp, O_RDWR, 00400);
-	if (fsp->fh->fd == -1 && errno == EISDIR) {
-		fsp->fh->fd = SMB_VFS_OPEN(conn, smb_fname, fsp, flags, 00400);
-	}
+	fsp->fh->fd = SMB_VFS_OPEN(conn, smb_fname, fsp, flags, 00644);
 	if (fsp->fh->fd == -1) {
-		printf("open: error=%d (%s)\n", errno, strerror(errno));
-		TALLOC_FREE(frame);
 		umask(saved_umask);
-		return NT_STATUS_UNSUCCESSFUL;
+		return NT_STATUS_INVALID_PARAMETER;
 	}
 
 	ret = SMB_VFS_FSTAT(fsp, &smb_fname->st);
 	if (ret == -1) {
 		/* If we have an fd, this stat should succeed. */
-		DEBUG(0,("Error doing fstat on open file %s "
-			"(%s)\n",
-			smb_fname_str_dbg(smb_fname),
-			strerror(errno) ));
-		TALLOC_FREE(frame);
+		DEBUG(0,("Error doing fstat on open file %s (%s)\n",
+			 smb_fname_str_dbg(smb_fname),
+			 strerror(errno) ));
 		umask(saved_umask);
 		return map_nt_error_from_unix(errno);
 	}
@@ -179,7 +169,42 @@ static NTSTATUS set_nt_acl_conn(const char *fname,
 	fsp->sent_oplock_break = NO_BREAK_SENT;
 	fsp->is_directory = S_ISDIR(smb_fname->st.st_ex_mode);
 
-	status = SMB_VFS_FSET_NT_ACL( fsp, security_info_sent, sd);
+	*_fsp = fsp;
+
+	return NT_STATUS_OK;
+}
+
+static NTSTATUS set_nt_acl_conn(const char *fname,
+				uint32_t security_info_sent, const struct security_descriptor *sd,
+				connection_struct *conn)
+{
+	TALLOC_CTX *frame = talloc_stackframe();
+	struct files_struct *fsp = NULL;
+	NTSTATUS status = NT_STATUS_OK;
+
+	/* first, try to open it as a file with flag O_RDWR */
+	status = init_files_struct(frame,
+				   fname,
+				   conn,
+				   O_RDWR,
+				   &fsp);
+	if (!NT_STATUS_IS_OK(status) && errno == EISDIR) {
+		/* if fail, try to open as dir */
+		status = init_files_struct(frame,
+					   fname,
+					   conn,
+					   DIRECTORY_FLAGS,
+					   &fsp);
+	}
+
+	if (!NT_STATUS_IS_OK(status)) {
+		printf("open: error=%d (%s)\n", errno, strerror(errno));
+		SMB_VFS_CLOSE(fsp);
+		TALLOC_FREE(frame);
+		return status;
+	}
+
+	status = SMB_VFS_FSET_NT_ACL(fsp, security_info_sent, sd);
 	if (!NT_STATUS_IS_OK(status)) {
 		DEBUG(0,("set_nt_acl_no_snum: fset_nt_acl returned %s.\n", nt_errstr(status)));
 	}
@@ -187,8 +212,6 @@ static NTSTATUS set_nt_acl_conn(const char *fname,
 	SMB_VFS_CLOSE(fsp);
 
 	TALLOC_FREE(frame);
-
-	umask(saved_umask);
 	return status;
 }
 
@@ -697,6 +720,99 @@ static PyObject *py_smbd_get_sys_acl(PyObject *self, PyObject *args, PyObject *k
 	return py_acl;
 }
 
+static PyObject *py_smbd_mkdir(PyObject *self, PyObject *args, PyObject *kwargs)
+{
+	const char * const kwnames[] = { "fname", "service", NULL };
+	char *fname, *service = NULL;
+	TALLOC_CTX *frame = talloc_stackframe();
+	struct connection_struct *conn = NULL;
+	struct smb_filename *smb_fname = NULL;
+
+	if (!PyArg_ParseTupleAndKeywords(args,
+					 kwargs,
+					 "s|z",
+					 discard_const_p(char *,
+							 kwnames),
+					 &fname,
+					 &service)) {
+		TALLOC_FREE(frame);
+		return NULL;
+	}
+
+	conn = get_conn_tos(service);
+	if (!conn) {
+		TALLOC_FREE(frame);
+		return NULL;
+	}
+
+	smb_fname = synthetic_smb_fname(talloc_tos(),
+					fname,
+					NULL,
+					NULL,
+					lp_posix_pathnames() ?
+					SMB_FILENAME_POSIX_PATH : 0);
+
+	if (smb_fname == NULL) {
+		TALLOC_FREE(frame);
+		return NULL;
+	}
+
+
+	if (SMB_VFS_MKDIR(conn, smb_fname, 00755) == -1) {
+		DBG_ERR("mkdir error=%d (%s)\n", errno, strerror(errno));
+		TALLOC_FREE(frame);
+		return NULL;
+	}
+
+	TALLOC_FREE(frame);
+	Py_RETURN_NONE;
+}
+
+
+/*
+  Create an empty file
+ */
+static PyObject *py_smbd_create_file(PyObject *self, PyObject *args, PyObject *kwargs)
+{
+	const char * const kwnames[] = { "fname", "service", NULL };
+	char *fname, *service = NULL;
+	TALLOC_CTX *frame = talloc_stackframe();
+	struct connection_struct *conn = NULL;
+	struct files_struct *fsp = NULL;
+	NTSTATUS status;
+
+	if (!PyArg_ParseTupleAndKeywords(args,
+					 kwargs,
+					 "s|z",
+					 discard_const_p(char *,
+							 kwnames),
+					 &fname,
+					 &service)) {
+		TALLOC_FREE(frame);
+		return NULL;
+	}
+
+	conn = get_conn_tos(service);
+	if (!conn) {
+		TALLOC_FREE(frame);
+		return NULL;
+	}
+
+	status = init_files_struct(frame,
+				   fname,
+				   conn,
+				   O_CREAT|O_EXCL|O_RDWR,
+				   &fsp);
+	if (!NT_STATUS_IS_OK(status)) {
+		DBG_ERR("init_files_struct failed: %s\n",
+			nt_errstr(status));
+	}
+
+	TALLOC_FREE(frame);
+	Py_RETURN_NONE;
+}
+
+
 static PyMethodDef py_smbd_methods[] = {
 	{ "have_posix_acls",
 		(PyCFunction)py_smbd_have_posix_acls, METH_NOARGS,
@@ -721,6 +837,12 @@ static PyMethodDef py_smbd_methods[] = {
 		NULL },
 	{ "unlink",
 		(PyCFunction)py_smbd_unlink, METH_VARARGS|METH_KEYWORDS,
+		NULL },
+	{ "mkdir",
+		(PyCFunction)py_smbd_mkdir, METH_VARARGS|METH_KEYWORDS,
+		NULL },
+	{ "create_file",
+		(PyCFunction)py_smbd_create_file, METH_VARARGS|METH_KEYWORDS,
 		NULL },
 	{ NULL }
 };

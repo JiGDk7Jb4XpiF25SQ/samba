@@ -18,7 +18,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
-
 import samba.getopt as options
 import ldb
 import logging
@@ -38,7 +37,9 @@ from samba.dcerpc import drsuapi, misc
 from samba.join import join_clone
 from samba.ndr import ndr_unpack
 from samba.dcerpc import drsblobs
+from samba import colour
 import logging
+
 
 def drsuapi_connect(ctx):
     '''make a DRSUAPI connection to the server'''
@@ -99,26 +100,51 @@ class cmd_drs_showrepl(Command):
     takes_options = [
         Option("--json", help="replication details in JSON format",
                dest='format', action='store_const', const='json'),
+        Option("--summary", help=("summarize overall DRS health as seen "
+                                  "from this server"),
+               dest='format', action='store_const', const='summary'),
+        Option("--pull-summary", help=("Have we successfully replicated "
+                                       "from all relevent servers?"),
+               dest='format', action='store_const', const='pull_summary'),
+        Option("--notify-summary", action='store_const',
+               const='notify_summary', dest='format',
+               help=("Have we successfully notified all relevent servers of "
+                     "local changes, and did they say they successfully "
+                     "replicated?")),
         Option("--classic", help="print local replication details",
                dest='format', action='store_const', const='classic',
                default=DEFAULT_SHOWREPL_FORMAT),
         Option("-v", "--verbose", help="Be verbose", action="store_true"),
+        Option("--color", help="Use colour output (yes|no|auto)",
+               default='no'),
     ]
 
     takes_args = ["DC?"]
 
     def parse_neighbour(self, n):
         """Convert an ldb neighbour object into a python dictionary"""
+        dsa_objectguid = str(n.source_dsa_obj_guid)
         d = {
             'NC dn': n.naming_context_dn,
-            "DSA objectGUID": str(n.source_dsa_obj_guid),
+            "DSA objectGUID": dsa_objectguid,
             "last attempt time": nttime2string(n.last_attempt),
             "last attempt message": drs_errmsg(n.result_last_attempt),
             "consecutive failures": n.consecutive_sync_failures,
             "last success": nttime2string(n.last_success),
-            "NTDS DN": str(n.source_dsa_obj_dn)
+            "NTDS DN": str(n.source_dsa_obj_dn),
+            'is deleted': False
         }
 
+        try:
+            self.samdb.search(base="<GUID=%s>" % dsa_objectguid,
+                              scope=ldb.SCOPE_BASE,
+                              attrs=[])
+        except ldb.LdbError as e:
+            (errno, _) = e.args
+            if errno == ldb.ERR_NO_SUCH_OBJECT:
+                d['is deleted'] = True
+            else:
+                raise
         try:
             (site, server) = drs_parse_ntds_dn(n.source_dsa_obj_dn)
             d["DSA"] = "%s\%s" % (site, server)
@@ -141,9 +167,7 @@ class cmd_drs_showrepl(Command):
         self.message("\t\tLast success @ %s" % d['last success'])
         self.message("")
 
-    def drsuapi_ReplicaInfo(self, info_type):
-        '''call a DsReplicaInfo'''
-
+    def get_neighbours(self, info_type):
         req1 = drsuapi.DsReplicaGetInfoRequest1()
         req1.info_type = info_type
         try:
@@ -151,12 +175,15 @@ class cmd_drs_showrepl(Command):
                 self.drsuapi_handle, 1, req1)
         except Exception as e:
             raise CommandError("DsReplicaGetInfo of type %u failed" % info_type, e)
-        return (info_type, info)
+
+        reps = [self.parse_neighbour(n) for n in info.array]
+        return reps
 
     def run(self, DC=None, sambaopts=None,
             credopts=None, versionopts=None,
             format=DEFAULT_SHOWREPL_FORMAT,
-            verbose=False):
+            verbose=False, color='no'):
+        self.apply_colour_choice(color)
         self.lp = sambaopts.get_loadparm()
         if DC is None:
             DC = common.netcmd_dnsname(self.lp)
@@ -165,6 +192,9 @@ class cmd_drs_showrepl(Command):
         self.verbose = verbose
 
         output_function = {
+            'summary': self.summary_output,
+            'notify_summary': self.notify_summary_output,
+            'pull_summary': self.pull_summary_output,
             'json': self.json_output,
             'classic': self.classic_output,
         }.get(format)
@@ -178,6 +208,53 @@ class cmd_drs_showrepl(Command):
         del data['site']
         del data['server']
         json.dump(data, self.outf, indent=2)
+
+    def summary_output_handler(self, typeof_output):
+        """Print a short message if every seems fine, but print details of any
+        links that seem broken."""
+        failing_repsto = []
+        failing_repsfrom = []
+
+        local_data = self.get_local_repl_data()
+
+        if typeof_output != "pull_summary":
+            for rep in local_data['repsTo']:
+                if rep['is deleted']:
+                    continue
+                if rep["consecutive failures"] != 0 or rep["last success"] == 0:
+                    failing_repsto.append(rep)
+
+        if typeof_output != "notify_summary":
+            for rep in local_data['repsFrom']:
+                if rep['is deleted']:
+                    continue
+                if rep["consecutive failures"] != 0 or rep["last success"] == 0:
+                    failing_repsto.append(rep)
+
+        if failing_repsto or failing_repsfrom:
+            self.message(colour.c_RED("There are failing connections"))
+            if failing_repsto:
+                self.message(colour.c_RED("Failing outbound connections:"))
+                for rep in failing_repsto:
+                    self.print_neighbour(rep)
+            if failing_repsfrom:
+                self.message(colour.c_RED("Failing inbound connection:"))
+                for rep in failing_repsfrom:
+                    self.print_neighbour(rep)
+
+            return 1
+
+        self.message(colour.c_GREEN("[ALL GOOD]"))
+
+
+    def summary_output(self):
+        return self.summary_output_handler("summary")
+
+    def notify_summary_output(self):
+        return self.summary_output_handler("notify_summary")
+
+    def pull_summary_output(self):
+        return self.summary_output_handler("pull_summary")
 
     def get_local_repl_data(self):
         drsuapi_connect(self)
@@ -201,12 +278,8 @@ class cmd_drs_showrepl(Command):
         }
 
         conn = self.samdb.search(base=ntds_dn, expression="(objectClass=nTDSConnection)")
-        info = self.drsuapi_ReplicaInfo(
-            drsuapi.DRSUAPI_DS_REPLICA_INFO_NEIGHBORS)[1]
-        repsfrom =  [self.parse_neighbour(n) for n in info.array]
-        info = self.drsuapi_ReplicaInfo(
-            drsuapi.DRSUAPI_DS_REPLICA_INFO_REPSTO)[1]
-        repsto = [self.parse_neighbour(n) for n in info.array]
+        repsfrom = self.get_neighbours(drsuapi.DRSUAPI_DS_REPLICA_INFO_NEIGHBORS)
+        repsto = self.get_neighbours(drsuapi.DRSUAPI_DS_REPLICA_INFO_REPSTO)
 
         conn_details = []
         for c in conn:

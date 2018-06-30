@@ -641,6 +641,10 @@ planoldpythontestsuite(
     "ad_dc_ntvfs:local", "samba.tests.dcerpc.registry",
     extra_args=['-U"$USERNAME%$PASSWORD"'], py3_compatible=True)
 
+planoldpythontestsuite(
+    "ad_dc:local", "samba.tests.ntacls_backup",
+    extra_args=['-U"$USERNAME%$PASSWORD"'], py3_compatible=True)
+
 planoldpythontestsuite("ad_dc_ntvfs", "samba.tests.dcerpc.dnsserver", extra_args=['-U"$USERNAME%$PASSWORD"'])
 planoldpythontestsuite("ad_dc", "samba.tests.dcerpc.dnsserver", extra_args=['-U"$USERNAME%$PASSWORD"'])
 planoldpythontestsuite("chgdcpass", "samba.tests.dcerpc.raw_protocol", extra_args=['-U"$USERNAME%$PASSWORD"'])
@@ -771,6 +775,8 @@ planoldpythontestsuite("ad_dc_ntvfs",
 planoldpythontestsuite("ad_dc_ntvfs",
                        "samba.tests.blackbox.traffic_summary",
                        extra_args=['-U"$USERNAME%$PASSWORD"'])
+planoldpythontestsuite("none", "samba.tests.loadparm")
+
 #
 # Want a selection of environments across the process models
 #
@@ -860,6 +866,11 @@ plantestsuite("samba4.blackbox.supported_features", "none",
               ["PYTHON=%s" % python,
                os.path.join(samba4srcdir,
                             "setup/tests/blackbox_supported_features.sh"),
+               '$PREFIX/provision'])
+plantestsuite("samba4.blackbox.start_backup", "none",
+              ["PYTHON=%s" % python,
+               os.path.join(samba4srcdir,
+                            "setup/tests/blackbox_start_backup.sh"),
                '$PREFIX/provision'])
 plantestsuite("samba4.blackbox.upgradeprovision.current", "none", ["PYTHON=%s" % python, os.path.join(samba4srcdir, "setup/tests/blackbox_upgradeprovision.sh"), '$PREFIX/provision'])
 plantestsuite("samba4.blackbox.setpassword.py", "none", ["PYTHON=%s" % python, os.path.join(samba4srcdir, "setup/tests/blackbox_setpassword.sh"), '$PREFIX/provision'])
