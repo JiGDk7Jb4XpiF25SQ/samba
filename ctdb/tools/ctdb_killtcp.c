@@ -17,11 +17,11 @@
    along with this program; if not, see <http://www.gnu.org/licenses/>.
 */
 
-#include <talloc.h>
-#include <tevent.h>
-
 #include "replace.h"
 #include "system/network.h"
+
+#include <talloc.h>
+#include <tevent.h>
 
 #include "lib/util/debug.h"
 #include "lib/util/tevent_unix.h"
@@ -30,7 +30,7 @@
 #include "protocol/protocol_util.h"
 
 #include "common/db_hash.h"
-#include "common/system.h"
+#include "common/system_socket.h"
 #include "common/logging.h"
 
 

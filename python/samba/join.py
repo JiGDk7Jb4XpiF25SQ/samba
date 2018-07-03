@@ -50,18 +50,16 @@ class DCJoinException(Exception):
         super(DCJoinException, self).__init__("Can't join, error: %s" % msg)
 
 
-class dc_join(object):
+class DCJoinContext(object):
     """Perform a DC join."""
 
     def __init__(ctx, logger=None, server=None, creds=None, lp=None, site=None,
                  netbios_name=None, targetdir=None, domain=None,
                  machinepass=None, use_ntvfs=False, dns_backend=None,
-                 promote_existing=False, clone_only=False,
-                 plaintext_secrets=False, backend_store=None):
+                 promote_existing=False, plaintext_secrets=False,
+                 backend_store=None, forced_local_samdb=None):
         if site is None:
             site = "Default-First-Site-Name"
-
-        ctx.clone_only=clone_only
 
         ctx.logger = logger
         ctx.creds = creds
@@ -81,16 +79,20 @@ class dc_join(object):
         ctx.creds.set_gensec_features(creds.get_gensec_features() | gensec.FEATURE_SEAL)
         ctx.net = Net(creds=ctx.creds, lp=ctx.lp)
 
-        if server is not None:
-            ctx.server = server
-        else:
-            ctx.logger.info("Finding a writeable DC for domain '%s'" % domain)
-            ctx.server = ctx.find_dc(domain)
-            ctx.logger.info("Found DC %s" % ctx.server)
+        ctx.server = server
+        ctx.forced_local_samdb = forced_local_samdb
 
-        ctx.samdb = SamDB(url="ldap://%s" % ctx.server,
-                          session_info=system_session(),
-                          credentials=ctx.creds, lp=ctx.lp)
+        if forced_local_samdb:
+            ctx.samdb = forced_local_samdb
+            ctx.server = ctx.samdb.url
+        else:
+            if not ctx.server:
+                ctx.logger.info("Finding a writeable DC for domain '%s'" % domain)
+                ctx.server = ctx.find_dc(domain)
+                ctx.logger.info("Found DC %s" % ctx.server)
+            ctx.samdb = SamDB(url="ldap://%s" % ctx.server,
+                              session_info=system_session(),
+                              credentials=ctx.creds, lp=ctx.lp)
 
         try:
             ctx.samdb.search(scope=ldb.SCOPE_ONELEVEL, attrs=["dn"])
@@ -119,18 +121,10 @@ class dc_join(object):
             ctx.acct_pass = samba.generate_random_machine_password(128, 255)
 
         ctx.dnsdomain = ctx.samdb.domain_dns_name()
-        if clone_only:
-            # As we don't want to create or delete these DNs, we set them to None
-            ctx.server_dn = None
-            ctx.ntds_dn = None
-            ctx.acct_dn = None
-            ctx.myname = ctx.server.split('.')[0]
-            ctx.ntds_guid = None
-            ctx.rid_manager_dn = None
 
-            # Save this early
-            ctx.remote_dc_ntds_guid = ctx.samdb.get_ntds_GUID()
-        else:
+        # the following are all dependent on the new DC's netbios_name (which
+        # we expect to always be specified, except when cloning a DC)
+        if netbios_name:
             # work out the DNs of all the objects we will be adding
             ctx.myname = netbios_name
             ctx.samname = "%s$" % ctx.myname
@@ -573,7 +567,9 @@ class dc_join(object):
         '''add the ntdsdsa object'''
 
         rec = ctx.join_ntdsdsa_obj()
-        if ctx.RODC:
+        if ctx.forced_local_samdb:
+            ctx.samdb.add(rec, controls=["relax:0"])
+        elif ctx.RODC:
             ctx.samdb.add(rec, ["rodc_join:1:1"])
         else:
             ctx.DsAddEntry([rec])
@@ -582,7 +578,7 @@ class dc_join(object):
         res = ctx.samdb.search(base=ctx.ntds_dn, scope=ldb.SCOPE_BASE, attrs=["objectGUID"])
         ctx.ntds_guid = misc.GUID(ctx.samdb.schema_format_value("objectGUID", res[0]["objectGUID"][0]))
 
-    def join_add_objects(ctx):
+    def join_add_objects(ctx, specified_sid=None):
         '''add the various objects needed for the join'''
         if ctx.acct_dn:
             print("Adding %s" % ctx.acct_dn)
@@ -612,12 +608,18 @@ class dc_join(object):
             elif ctx.promote_existing:
                 rec["msDS-RevealOnDemandGroup"] = []
 
+            if specified_sid:
+                rec["objectSid"] = ndr_pack(specified_sid)
+
             if ctx.promote_existing:
                 if ctx.promote_from_dn != ctx.acct_dn:
                     ctx.samdb.rename(ctx.promote_from_dn, ctx.acct_dn)
                 ctx.samdb.modify(ldb.Message.from_dict(ctx.samdb, rec, ldb.FLAG_MOD_REPLACE))
             else:
-                ctx.samdb.add(rec)
+                controls = None
+                if specified_sid is not None:
+                    controls = ["relax:0"]
+                ctx.samdb.add(rec, controls=controls)
 
         if ctx.krbtgt_dn:
             ctx.add_krbtgt_account()
@@ -1188,12 +1190,11 @@ class dc_join(object):
         # DC we just replicated from then we don't need to send the updatereplicateref
         # as replication between sites is time based and on the initiative of the
         # requesting DC
-        if not ctx.clone_only:
-            ctx.logger.info("Sending DsReplicaUpdateRefs for all the replicated partitions")
-            for nc in ctx.nc_list:
-                ctx.send_DsReplicaUpdateRefs(nc)
+        ctx.logger.info("Sending DsReplicaUpdateRefs for all the replicated partitions")
+        for nc in ctx.nc_list:
+            ctx.send_DsReplicaUpdateRefs(nc)
 
-        if not ctx.clone_only and ctx.RODC:
+        if ctx.RODC:
             print("Setting RODC invocationId")
             ctx.local_samdb.set_invocation_id(str(ctx.invocation_id))
             ctx.local_samdb.set_opaque_integer("domainFunctionality",
@@ -1224,17 +1225,12 @@ class dc_join(object):
         m.dn = ldb.Dn(ctx.local_samdb, '@ROOTDSE')
         m["isSynchronized"] = ldb.MessageElement("TRUE", ldb.FLAG_MOD_REPLACE, "isSynchronized")
 
-        # We want to appear to be the server we just cloned
-        if ctx.clone_only:
-            guid = ctx.remote_dc_ntds_guid
-        else:
-            guid = ctx.ntds_guid
-
+        guid = ctx.ntds_guid
         m["dsServiceName"] = ldb.MessageElement("<GUID=%s>" % str(guid),
                                                 ldb.FLAG_MOD_REPLACE, "dsServiceName")
         ctx.local_samdb.modify(m)
 
-        if ctx.clone_only or ctx.subdomain:
+        if ctx.subdomain:
             return
 
         secrets_ldb = Ldb(ctx.paths.secrets, session_info=system_session(), lp=ctx.lp)
@@ -1359,7 +1355,7 @@ class dc_join(object):
         ctx.local_samdb.add(rec)
 
 
-    def do_join(ctx):
+    def build_nc_lists(ctx):
         # nc_list is the list of naming context (NC) for which we will
         # replicate in and send a updateRef command to the partner DC
 
@@ -1380,23 +1376,24 @@ class dc_join(object):
                 ctx.full_nc_list += [ctx.domaindns_zone]
                 ctx.full_nc_list += [ctx.forestdns_zone]
 
-        if not ctx.clone_only:
-            if ctx.promote_existing:
-                ctx.promote_possible()
-            else:
-                ctx.cleanup_old_join()
+    def do_join(ctx):
+        ctx.build_nc_lists()
+
+        if ctx.promote_existing:
+            ctx.promote_possible()
+        else:
+            ctx.cleanup_old_join()
 
         try:
-            if not ctx.clone_only:
-                ctx.join_add_objects()
+            ctx.join_add_objects()
             ctx.join_provision()
             ctx.join_replicate()
-            if (not ctx.clone_only and ctx.subdomain):
+            if ctx.subdomain:
                 ctx.join_add_objects2()
                 ctx.join_provision_own_domain()
                 ctx.join_setup_trusts()
 
-            if not ctx.clone_only and ctx.dns_backend != "NONE":
+            if ctx.dns_backend != "NONE":
                 ctx.join_add_dns_records()
                 ctx.join_replicate_new_dns_records()
 
@@ -1406,8 +1403,7 @@ class dc_join(object):
                 print("Join failed - cleaning up")
             except IOError:
                 pass
-            if not ctx.clone_only:
-                ctx.cleanup_old_join()
+            ctx.cleanup_old_join()
             raise
 
 
@@ -1418,9 +1414,10 @@ def join_RODC(logger=None, server=None, creds=None, lp=None, site=None, netbios_
               backend_store=None):
     """Join as a RODC."""
 
-    ctx = dc_join(logger, server, creds, lp, site, netbios_name, targetdir, domain,
-                  machinepass, use_ntvfs, dns_backend, promote_existing,
-                  plaintext_secrets, backend_store=backend_store)
+    ctx = DCJoinContext(logger, server, creds, lp, site, netbios_name,
+                        targetdir, domain, machinepass, use_ntvfs, dns_backend,
+                        promote_existing, plaintext_secrets,
+                        backend_store=backend_store)
 
     lp.set("workgroup", ctx.domain_name)
     logger.info("workgroup is %s" % ctx.domain_name)
@@ -1470,9 +1467,10 @@ def join_DC(logger=None, server=None, creds=None, lp=None, site=None, netbios_na
             promote_existing=False, plaintext_secrets=False,
             backend_store=None):
     """Join as a DC."""
-    ctx = dc_join(logger, server, creds, lp, site, netbios_name, targetdir, domain,
-                  machinepass, use_ntvfs, dns_backend, promote_existing,
-                  plaintext_secrets, backend_store=backend_store)
+    ctx = DCJoinContext(logger, server, creds, lp, site, netbios_name,
+                        targetdir, domain, machinepass, use_ntvfs, dns_backend,
+                        promote_existing, plaintext_secrets,
+                        backend_store=backend_store)
 
     lp.set("workgroup", ctx.domain_name)
     logger.info("workgroup is %s" % ctx.domain_name)
@@ -1495,10 +1493,12 @@ def join_DC(logger=None, server=None, creds=None, lp=None, site=None, netbios_na
     logger.info("Joined domain %s (SID %s) as a DC" % (ctx.domain_name, ctx.domsid))
 
 def join_clone(logger=None, server=None, creds=None, lp=None,
-               targetdir=None, domain=None, include_secrets=False):
-    """Join as a DC."""
-    ctx = dc_join(logger, server, creds, lp, site=None, netbios_name=None, targetdir=targetdir, domain=domain,
-                  machinepass=None, use_ntvfs=False, dns_backend="NONE", promote_existing=False, clone_only=True)
+               targetdir=None, domain=None, include_secrets=False,
+               dns_backend="NONE"):
+    """Creates a local clone of a remote DC."""
+    ctx = DCCloneContext(logger, server, creds, lp, targetdir=targetdir,
+                         domain=domain, dns_backend=dns_backend,
+                         include_secrets=include_secrets)
 
     lp.set("workgroup", ctx.domain_name)
     logger.info("workgroup is %s" % ctx.domain_name)
@@ -1506,14 +1506,9 @@ def join_clone(logger=None, server=None, creds=None, lp=None,
     lp.set("realm", ctx.realm)
     logger.info("realm is %s" % ctx.realm)
 
-    ctx.replica_flags |= (drsuapi.DRSUAPI_DRS_WRIT_REP |
-                          drsuapi.DRSUAPI_DRS_FULL_SYNC_IN_PROGRESS)
-    if not include_secrets:
-        ctx.replica_flags |= drsuapi.DRSUAPI_DRS_SPECIAL_SECRET_PROCESSING
-    ctx.domain_replica_flags = ctx.replica_flags
-
     ctx.do_join()
     logger.info("Cloned domain %s (SID %s)" % (ctx.domain_name, ctx.domsid))
+    return ctx
 
 def join_subdomain(logger=None, server=None, creds=None, lp=None, site=None,
         netbios_name=None, targetdir=None, parent_domain=None, dnsdomain=None,
@@ -1521,9 +1516,10 @@ def join_subdomain(logger=None, server=None, creds=None, lp=None, site=None,
         dns_backend=None, plaintext_secrets=False,
         backend_store=None):
     """Join as a DC."""
-    ctx = dc_join(logger, server, creds, lp, site, netbios_name, targetdir, parent_domain,
-                  machinepass, use_ntvfs, dns_backend, plaintext_secrets,
-                  backend_store=backend_store)
+    ctx = DCJoinContext(logger, server, creds, lp, site, netbios_name,
+                        targetdir, parent_domain, machinepass, use_ntvfs,
+                        dns_backend, plaintext_secrets,
+                        backend_store=backend_store)
     ctx.subdomain = True
     if adminpass is None:
         ctx.adminpass = samba.generate_random_password(12, 32)
@@ -1567,3 +1563,54 @@ def join_subdomain(logger=None, server=None, creds=None, lp=None, site=None,
 
     ctx.do_join()
     ctx.logger.info("Created domain %s (SID %s) as a DC" % (ctx.domain_name, ctx.domsid))
+
+
+class DCCloneContext(DCJoinContext):
+    """Clones a remote DC."""
+
+    def __init__(ctx, logger=None, server=None, creds=None, lp=None,
+                 targetdir=None, domain=None, dns_backend=None,
+                 include_secrets=False):
+        super(DCCloneContext, ctx).__init__(logger, server, creds, lp,
+                                            targetdir=targetdir, domain=domain,
+                                            dns_backend=dns_backend)
+
+        # As we don't want to create or delete these DNs, we set them to None
+        ctx.server_dn = None
+        ctx.ntds_dn = None
+        ctx.acct_dn = None
+        ctx.myname = ctx.server.split('.')[0]
+        ctx.ntds_guid = None
+        ctx.rid_manager_dn = None
+
+        # Save this early
+        ctx.remote_dc_ntds_guid = ctx.samdb.get_ntds_GUID()
+
+        ctx.replica_flags |= (drsuapi.DRSUAPI_DRS_WRIT_REP |
+                              drsuapi.DRSUAPI_DRS_FULL_SYNC_IN_PROGRESS)
+        if not include_secrets:
+            ctx.replica_flags |= drsuapi.DRSUAPI_DRS_SPECIAL_SECRET_PROCESSING
+        ctx.domain_replica_flags = ctx.replica_flags
+
+    def join_finalise(ctx):
+        ctx.logger.info("Setting isSynchronized and dsServiceName")
+        m = ldb.Message()
+        m.dn = ldb.Dn(ctx.local_samdb, '@ROOTDSE')
+        m["isSynchronized"] = ldb.MessageElement("TRUE", ldb.FLAG_MOD_REPLACE,
+                                                 "isSynchronized")
+
+        # We want to appear to be the server we just cloned
+        guid = ctx.remote_dc_ntds_guid
+        m["dsServiceName"] = ldb.MessageElement("<GUID=%s>" % str(guid),
+                                                ldb.FLAG_MOD_REPLACE,
+                                                "dsServiceName")
+        ctx.local_samdb.modify(m)
+
+    def do_join(ctx):
+        ctx.build_nc_lists()
+
+        # When cloning a DC, we just want to provision a DC locally, then
+        # grab the remote DC's entire DB via DRS replication
+        ctx.join_provision()
+        ctx.join_replicate()
+        ctx.join_finalise()
