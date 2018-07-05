@@ -19,12 +19,13 @@ import tarfile
 import os
 import shutil
 from samba.tests.samba_tool.base import SambaToolCmdTest
-from samba.tests import TestCaseInTempDir, env_loadparm
+from samba.tests import TestCaseInTempDir, env_loadparm, create_test_ou
 import ldb
 from samba.samdb import SamDB
 from samba.auth import system_session
 from samba import Ldb, dn_from_dns_name
 from samba.netcmd.fsmo import get_fsmo_roleowner
+import re
 
 
 def get_prim_dom(secrets_path, lp):
@@ -36,10 +37,10 @@ def get_prim_dom(secrets_path, lp):
                               expression="(objectClass=kerberosSecret)")
 
 
-class DomainBackup(SambaToolCmdTest, TestCaseInTempDir):
+class DomainBackupBase(SambaToolCmdTest, TestCaseInTempDir):
 
     def setUp(self):
-        super(DomainBackup, self).setUp()
+        super(DomainBackupBase, self).setUp()
 
         server = os.environ["DC_SERVER"]
         self.user_auth = "-U%s%%%s" % (os.environ["DC_USERNAME"],
@@ -50,6 +51,10 @@ class DomainBackup(SambaToolCmdTest, TestCaseInTempDir):
                                  self.user_auth)
         self.new_server = "BACKUPSERV"
         self.server = server.upper()
+        self.base_cmd = None
+        self.backup_markers = ['sidForRestore', 'backupDate']
+        self.restore_domain = os.environ["DOMAIN"]
+        self.restore_realm = os.environ["REALM"]
 
     def assert_partitions_present(self, samdb):
         """Asserts all expected partitions are present in the backup samdb"""
@@ -97,7 +102,7 @@ class DomainBackup(SambaToolCmdTest, TestCaseInTempDir):
         with tarfile.open(backup_file) as tf:
             tf.extractall(extract_dir)
 
-    def test_backup_untar(self):
+    def _test_backup_untar(self):
         """Creates a backup, untars the raw files, and sanity-checks the DB"""
         backup_file = self.create_backup()
         self.untar_backup(backup_file)
@@ -110,10 +115,11 @@ class DomainBackup(SambaToolCmdTest, TestCaseInTempDir):
         # check that backup markers were added to the DB
         res = samdb.search(base=ldb.Dn(samdb, "@SAMBA_DSDB"),
                            scope=ldb.SCOPE_BASE,
-                           attrs=['sidForRestore', 'backupDate'])
+                           attrs=self.backup_markers)
         self.assertEqual(len(res), 1)
-        self.assertIsNotNone(res[0].get('sidForRestore'))
-        self.assertIsNotNone(res[0].get('backupDate'))
+        for marker in self.backup_markers:
+            self.assertIsNotNone(res[0].get(marker),
+                                 "%s backup marker missing" % marker)
 
         # We have no secrets.ldb entry as we never got that during the backup.
         secrets_path = os.path.join(private_dir, "secrets.ldb")
@@ -123,7 +129,7 @@ class DomainBackup(SambaToolCmdTest, TestCaseInTempDir):
         # sanity-check that all the partitions got backed up
         self.assert_partitions_present(samdb)
 
-    def test_backup_restore(self):
+    def _test_backup_restore(self):
         """Does a backup/restore, with specific checks of the resulting DB"""
         backup_file = self.create_backup()
         self.restore_backup(backup_file)
@@ -151,7 +157,7 @@ class DomainBackup(SambaToolCmdTest, TestCaseInTempDir):
         self.addCleanup(os.remove, new_smbconf)
         return new_smbconf
 
-    def test_backup_restore_with_conf(self):
+    def _test_backup_restore_with_conf(self):
         """Checks smb.conf values passed to the restore are retained"""
         backup_file = self.create_backup()
 
@@ -159,7 +165,9 @@ class DomainBackup(SambaToolCmdTest, TestCaseInTempDir):
         # dir should get overridden by the restore, the other settings should
         # trickle through into the restored dir's smb.conf
         settings = {'state directory': '/var/run',
-                    'netbios name': 'FOOBAR'}
+                    'netbios name': 'FOOBAR',
+                    'workgroup': 'NOTMYDOMAIN',
+                    'realm': 'NOT.MY.REALM'}
         assert_settings = {'drs: max link sync': '275',
                            'prefork children': '7'}
         settings.update(assert_settings)
@@ -181,6 +189,8 @@ class DomainBackup(SambaToolCmdTest, TestCaseInTempDir):
         smbconf = os.path.join(self.restore_dir(), "etc", "smb.conf")
         bkp_lp = param.LoadParm(filename_for_non_global_lp=smbconf)
         self.assertEqual(bkp_lp.get('netbios name'), self.new_server)
+        self.assertEqual(bkp_lp.get('workgroup'), self.restore_domain)
+        self.assertEqual(bkp_lp.get('realm'), self.restore_realm.upper())
 
         # we restore with a fixed directory structure, so we can sanity-check
         # that the core filepaths settings are what we expect them to be
@@ -206,10 +216,11 @@ class DomainBackup(SambaToolCmdTest, TestCaseInTempDir):
         # check that the backup markers have been removed from the restored DB
         res = samdb.search(base=ldb.Dn(samdb, "@SAMBA_DSDB"),
                            scope=ldb.SCOPE_BASE,
-                           attrs=['sidForRestore', 'backupDate'])
+                           attrs=self.backup_markers)
         self.assertEqual(len(res), 1)
-        self.assertIsNone(res[0].get('sidForRestore'))
-        self.assertIsNone(res[0].get('backupDate'))
+        for marker in self.backup_markers:
+            self.assertIsNone(res[0].get(marker),
+                              "%s backup-marker left behind" % marker)
 
         # check that the repsFrom and repsTo values have been removed
         # from the restored DB
@@ -231,6 +242,7 @@ class DomainBackup(SambaToolCmdTest, TestCaseInTempDir):
         self.assert_partitions_present(samdb)
         self.assert_dcs_present(samdb, self.new_server, expected_count=1)
         self.assert_fsmo_roles(samdb, self.new_server, self.server)
+        return samdb
 
     def assert_fsmo_roles(self, samdb, server, exclude_server):
         """Asserts the expected server is the FSMO role owner"""
@@ -268,9 +280,8 @@ class DomainBackup(SambaToolCmdTest, TestCaseInTempDir):
     def create_backup(self):
         """Runs the backup cmd to produce a backup file for the testenv DC"""
         # Run the backup command and check we got one backup tar file
-        args = ["domain", "backup", "online",
-                "--server=" + self.server]
-        args += [self.user_auth, "--targetdir=" + self.tempdir]
+        args = self.base_cmd + ["--server=" + self.server, self.user_auth,
+                                "--targetdir=" + self.tempdir]
 
         self.run_cmd(args)
 
@@ -305,3 +316,139 @@ class DomainBackup(SambaToolCmdTest, TestCaseInTempDir):
         self.assert_partitions_present(self.ldb)
         self.assert_dcs_present(self.ldb, self.server)
         self.assert_fsmo_roles(self.ldb, self.server, self.new_server)
+
+
+class DomainBackupOnline(DomainBackupBase):
+
+    def setUp(self):
+        super(DomainBackupOnline, self).setUp()
+        self.base_cmd = ["domain", "backup", "online"]
+
+    # run the common test cases above using online backups
+    def test_backup_untar(self):
+        self._test_backup_untar()
+
+    def test_backup_restore(self):
+        self._test_backup_restore()
+
+    def test_backup_restore_with_conf(self):
+        self._test_backup_restore_with_conf()
+
+
+class DomainBackupRename(DomainBackupBase):
+
+    # run the above test cases using a rename backup
+    def setUp(self):
+        super(DomainBackupRename, self).setUp()
+        self.new_server = "RENAMESERV"
+        self.restore_domain = "NEWDOMAIN"
+        self.restore_realm = "rename.test.net"
+        self.new_basedn = "DC=rename,DC=test,DC=net"
+        self.base_cmd = ["domain", "backup", "rename", self.restore_domain,
+                         self.restore_realm]
+        self.backup_markers += ['backupRename']
+
+    # run the common test case code for backup-renames
+    def test_backup_untar(self):
+        self._test_backup_untar()
+
+    def test_backup_restore(self):
+        self._test_backup_restore()
+
+    def test_backup_restore_with_conf(self):
+        self._test_backup_restore_with_conf()
+
+    def add_link(self, attr, source, target):
+        m = ldb.Message()
+        m.dn = ldb.Dn(self.ldb, source)
+        m[attr] = ldb.MessageElement(target, ldb.FLAG_MOD_ADD, attr)
+        self.ldb.modify(m)
+
+    def test_one_way_links(self):
+        """Sanity-check that a rename handles one-way links correctly"""
+
+        # Do some initial setup on the DC before back it up:
+        # create an OU to hold the test objects we'll create
+        test_ou = create_test_ou(self.ldb, "rename_test")
+        self.addCleanup(self.ldb.delete, test_ou, ["tree_delete:1"])
+
+        # create the source and target objects and link them together.
+        # We use addressBookRoots2 here because it's a one-way link
+        src_dn = "CN=link_src,%s" % test_ou
+        self.ldb.add({"dn": src_dn,
+                      "objectclass": "msExchConfigurationContainer"})
+        target_dn = "OU=link_tgt,%s" % test_ou
+        self.ldb.add({"dn": target_dn, "objectclass": "organizationalunit"})
+        link_attr = "addressBookRoots2"
+        self.add_link(link_attr, src_dn, target_dn)
+
+        # add a second link target that's in a different partition
+        server_dn = ("CN=testrename,CN=Servers,CN=Default-First-Site-Name,"
+                     "CN=Sites,%s" % str(self.ldb.get_config_basedn()))
+        self.ldb.add({"dn": server_dn, "objectclass": "server"})
+        self.addCleanup(self.ldb.delete, server_dn)
+        self.add_link(link_attr, src_dn, server_dn)
+
+        # do the backup/restore
+        backup_file = self.create_backup()
+        self.restore_backup(backup_file)
+        lp = self.check_restored_smbconf()
+        restored_ldb = self.check_restored_database(lp)
+
+        # work out what the new DNs should be
+        old_basedn = str(self.ldb.get_default_basedn())
+        new_target_dn = re.sub(old_basedn + '$', self.new_basedn, target_dn)
+        new_src_dn = re.sub(old_basedn + '$', self.new_basedn, src_dn)
+        new_server_dn = re.sub(old_basedn + '$', self.new_basedn, server_dn)
+
+        # check the links exist in the renamed DB with the correct DNs
+        res = restored_ldb.search(base=new_src_dn, scope=ldb.SCOPE_BASE,
+                                  attrs=[link_attr])
+        self.assertEqual(len(res), 1,
+                         "Failed to find renamed link source object")
+        self.assertTrue(link_attr in res[0], "Missing link attribute")
+        self.assertTrue(new_target_dn in res[0][link_attr])
+        self.assertTrue(new_server_dn in res[0][link_attr])
+
+    # extra checks we run on the restored DB in the rename case
+    def check_restored_database(self, lp):
+        # run the common checks over the restored DB
+        samdb = super(DomainBackupRename, self).check_restored_database(lp)
+
+        # check we have actually renamed the DNs
+        basedn = str(samdb.get_default_basedn())
+        self.assertEqual(basedn, self.new_basedn)
+
+        # check the partition and netBIOS name match the new domain
+        partitions_dn = samdb.get_partitions_dn()
+        nc_name = ldb.binary_encode(str(basedn))
+        res = samdb.search(base=partitions_dn, scope=ldb.SCOPE_ONELEVEL,
+                           attrs=["nETBIOSName", "cn"],
+                           expression='ncName=%s' % nc_name)
+        self.assertEqual(len(res), 1,
+                         "Looking up partition's NetBIOS name failed")
+        self.assertEqual(str(res[0].get("nETBIOSName")), self.restore_domain)
+        self.assertEqual(str(res[0].get("cn")), self.restore_domain)
+
+        # check the DC has the correct dnsHostname
+        realm = self.restore_realm
+        dn = "CN=%s,OU=Domain Controllers,%s" % (self.new_server,
+                                                 self.new_basedn)
+        res = samdb.search(base=dn, scope=ldb.SCOPE_BASE,
+                           attrs=["dNSHostName"])
+        self.assertEqual(len(res), 1,
+                         "Looking up new DC's dnsHostname failed")
+        expected_val = "%s.%s" % (self.new_server.lower(), realm)
+        self.assertEqual(str(res[0].get("dNSHostName")), expected_val)
+
+        # check the DNS zones for the new realm are present
+        dn = "DC=%s,CN=MicrosoftDNS,DC=DomainDnsZones,%s" % (realm, basedn)
+        res = samdb.search(base=dn, scope=ldb.SCOPE_BASE)
+        self.assertEqual(len(res), 1, "Lookup of new domain's DNS zone failed")
+
+        forestdn = samdb.get_root_basedn().get_linearized()
+        dn = "DC=_msdcs.%s,CN=MicrosoftDNS,DC=ForestDnsZones,%s" % (realm,
+                                                                    forestdn)
+        res = samdb.search(base=dn, scope=ldb.SCOPE_BASE)
+        self.assertEqual(len(res), 1, "Lookup of new domain's DNS zone failed")
+        return samdb

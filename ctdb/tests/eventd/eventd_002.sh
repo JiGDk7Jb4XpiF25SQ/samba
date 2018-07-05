@@ -2,51 +2,20 @@
 
 . "${TEST_SCRIPTS_DIR}/unit.sh"
 
-define_test "eventscript directory with random files"
+define_test "empty eventscript directory"
 
 setup_eventd
 
-touch "$eventd_scriptdir/README.script"
-
-cat > "$eventd_scriptdir/a.script" <<EOF
-#!/bin/sh
-
-exit 1
-EOF
-
-required_result 0 <<EOF
-No event scripts found
-EOF
-simple_test script list
-
 required_result 22 <<EOF
-Script name README is invalid
+Event monitor has never run in empty
 EOF
-simple_test script enable README
+simple_test status empty monitor
 
-required_result 22 <<EOF
-Script name a is invalid
+ok <<EOF
 EOF
-simple_test script disable a
+simple_test run 10 empty monitor
 
-required_result 2 <<EOF
-Script 00.test does not exist
+ok <<EOF
 EOF
-simple_test script enable 00.test
+simple_test status empty monitor
 
-required_result 0 <<EOF
-EOF
-simple_test run monitor 30
-
-required_result 0 <<EOF
-EOF
-simple_test status monitor lastrun
-
-required_result 0 <<EOF
-EOF
-simple_test status monitor lastpass
-
-required_result 0 <<EOF
-Event monitor has never failed
-EOF
-simple_test status monitor lastfail

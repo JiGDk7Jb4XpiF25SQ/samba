@@ -234,6 +234,7 @@ int main(int argc, const char *argv[])
 	/* Log to stderr (ignoring configuration) when running as interactive */
 	if (interactive) {
 		logging_location = "file:";
+		setenv("CTDB_INTERACTIVE", "true", 1);
 	} else {
 		logging_location = logging_conf_location(conf);
 	}
@@ -307,20 +308,6 @@ int main(int argc, const char *argv[])
 			     1);
 		if (ret != 0) {
 			D_ERR("Failed to set up lock debugging (%s)\n",
-			      strerror(errno));
-			goto fail;
-		}
-	}
-
-	/*
-	 * Event setup/options
-	 */
-	if (ctdb_config.event_debug_script != NULL) {
-		ret = setenv("CTDB_DEBUG_HUNG_SCRIPT",
-			     ctdb_config.event_debug_script,
-			     1);
-		if (ret != 0) {
-			D_ERR("Failed to set up event script debugging (%s)\n",
 			      strerror(errno));
 			goto fail;
 		}

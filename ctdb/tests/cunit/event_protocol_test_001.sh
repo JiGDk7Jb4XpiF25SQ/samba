@@ -2,7 +2,7 @@
 
 . "${TEST_SCRIPTS_DIR}/unit.sh"
 
-last_command=5
+last_command=3
 
 generate_output ()
 {
@@ -21,5 +21,5 @@ output=$(
 ok "$output"
 
 for i in $(seq 1 100) ; do
-    unit_test protocol_event_test $i
+    unit_test event_protocol_test $i
 done
