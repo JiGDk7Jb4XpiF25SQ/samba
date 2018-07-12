@@ -1,12 +1,12 @@
 Release Announcements
 =====================
 
-This is the first preview release of Samba 4.9.  This is *not*
+This is the first preview release of Samba 4.10.  This is *not*
 intended for production environments and is designed for testing
 purposes only.  Please report any defects via the Samba bug reporting
 system at https://bugzilla.samba.org/.
 
-Samba 4.9 will be the next version of the Samba suite.
+Samba 4.10 will be the next version of the Samba suite.
 
 
 UPGRADING
@@ -17,139 +17,21 @@ NEW FEATURES/CHANGES
 ====================
 
 
-net ads setspn
----------------
-
-There is a new 'net ads setspn' sub command for managing Windows SPN(s)
-on the AD. This command aims to give the basic functionaility that is
-provided on windows by 'setspn.exe' e.g. ability to add, delete and list
-Windows SPN(s) stored in a Windows AD Computer object.
-
-The format of the command is:
-
-net ads setspn list [machine]
-net ads setspn [add | delete ] SPN [machine]
-
-'machine' is the name of the computer account on the AD that is to be managed.
-If 'machine' is not specified the name of the 'client' running the command
-is used instead.
-
-The format of a Windows SPN is
-  'serviceclass/host:port/servicename' (servicename and port are optional)
-
-serviceclass/host is generally sufficient to specify a host based service.
-
-net ads keytab changes
-----------------------
-net ads keytab add no longer attempts to convert the passed serviceclass
-(e.g. nfs, html etc.) into a Windows SPN which is added to the Windows AD
-computer object. By default just the keytab file is modified.
-
-A new keytab subcommand 'add_update_ads' has been added to preserve the
-legacy behaviour. However the new 'net ads setspn add' subcommand should
-really be used instead.
-
-net ads keytab create no longer tries to generate SPN(s) from existing
-entries in a keytab file. If it is required to add Windows SPN(s) then
-'net ads setspn add' should be used instead.
-
-Local authorization plugin for MIT Kerberos
--------------------------------------------
-
-This plugin controls the relationship between Kerberos principals and AD
-accounts through winbind. The module receives the Kerberos principal and the
-local account name as inputs and can then check if they match. This can resolve
-issues with canonicalized names returned by Kerberos within AD. If the user
-tries to log in as 'alice', but the samAccountName is set to ALICE (uppercase),
-Kerberos would return ALICE as the username. Kerberos would not be able to map
-'alice' to 'ALICE' in this case and auth would fail.  With this plugin account
-names can be correctly mapped. This only applies to GSSAPI authentication,
-not for the geting the initial ticket granting ticket.
-
-Database audit support
-----------------------
-
-Changes to the Samba AD's sam.ldb database are now logged to Samba's debug log
-under the "dsdb_audit" debug class and "dsdb_json_audit" for JSON formatted log
-entries.
-
-Transaction commits and roll backs are now logged to Samba's debug logs under
-the "dsdb_transaction_audit" debug class and "dsdb_transaction_json_audit" for
-JSON formatted log entries.
-
-Password change audit support
------------------------------
-
-Password changes in the AD DC are now logged to Samba's debug logs under the
-"dsdb_password_audit" debug class and "dsdb_password_json_audit" for JSON
-formatted log entries.
-
-Group membership change audit support
--------------------------------------
-
-Group membership changes on the AD DC are now logged to
-Samba's debug log under the "dsdb_group_audit" debug class and
-"dsdb_group_json_audit" for JSON formatted log entries.
-
-Log Authentication duration
----------------------------
-
-For NTLM and Kerberos KDC authentication, the authentication duration is now
-logged. Note that the duration is only included in the JSON formatted log
-entries.
-
-New Experimental LMDB LDB backend
----------------------------------
-
-A new experimental LDB backend using LMBD is now available. This allows
-databases larger than 4Gb (Currently the limit is set to 6Gb, but this will be
-increased in a future release). To enable lmdb, provision or join a domain using
-the --backend-store=mdb option.
-
-This requires that a version of lmdb greater than 0.9.16 is installed and that
-samba has not been built with the --without-ldb-lmdb option.
-
-Please note this is an experimental feature and is not recommended for
-production deployments.
-
 REMOVED FEATURES
 ================
-
 
 
 smb.conf changes
 ================
 
-As the most popular Samba install platforms (Linux and FreeBSD) both
-support extended attributes by default, the parameters "map readonly",
-"store dos attributes" and "ea support" have had their defaults changed
-to allow better Windows fileserver compatibility in a default install.
-
   Parameter Name                     Description             Default
   --------------                     -----------             -------
-  map readonly                       Default changed              no
-  store dos attributes               Default changed             yes
-  ea support                         Default changed             yes
 
-VFS interface changes
-=====================
-
-The VFS ABI interface version has changed to 39. Function changes
-are:
-
-SMB_VFS_FSYNC: Removed: Only async versions are used.
-SMB_VFS_READ: Removed: Only PREAD or async versions are used.
-SMB_VFS_WRITE: Removed: Only PWRITE or async versions are used.
-SMB_VFS_CHMOD_ACL: Removed: Only CHMOD is used.
-SMB_VFS_FCHMOD_ACL: Removed: Only FCHMOD is used.
-
-Any external VFS modules will need to be updated to match these
-changes in order to work with 4.9.x.
 
 KNOWN ISSUES
 ============
 
-https://wiki.samba.org/index.php/Release_Planning_for_Samba_4.9#Release_blocking_bugs
+https://wiki.samba.org/index.php/Release_Planning_for_Samba_4.10#Release_blocking_bugs
 
 
 #######################################

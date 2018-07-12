@@ -1,5 +1,6 @@
 setup ()
 {
+	setup_public_addresses
 	setup_shares
 
 	service_name="nfs"
@@ -22,10 +23,6 @@ EOF
 		service "nfs" force-started
 		service "nfslock" force-started
 
-		setup_script_options <<EOF
-CTDB_MANAGES_NFS="yes"
-EOF
-
 		rpc_services_up \
 			"portmapper" "nfs" "mountd" "rquotad" \
 			"nlockmgr" "status"
@@ -39,10 +36,6 @@ EOF
 
 		service "nfs" force-stopped
 		service "nfslock" force-stopped
-
-		setup_script_options <<EOF
-CTDB_MANAGES_NFS=""
-EOF
 	fi
 
 	# This is really nasty.  However, when we test NFS we don't
