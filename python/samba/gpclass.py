@@ -17,6 +17,7 @@
 
 import sys
 import os
+import errno
 import tdb
 sys.path.insert(0, "bin/python")
 from samba import NTSTATUSError
@@ -29,6 +30,9 @@ from samba.net import Net
 from samba.dcerpc import nbt
 from samba import smb
 import samba.gpo as gpo
+from samba.param import LoadParm
+from uuid import UUID
+from tempfile import NamedTemporaryFile
 
 try:
     from enum import Enum
@@ -135,9 +139,11 @@ class gp_log:
             apply_log = user_obj.find('applylog')
             if apply_log is None:
                 apply_log = etree.SubElement(user_obj, 'applylog')
-            item = etree.SubElement(apply_log, 'guid')
-            item.attrib['count'] = '%d' % (len(apply_log)-1)
-            item.attrib['value'] = guid
+            prev = apply_log.find('guid[@value="%s"]' % guid)
+            if prev is None:
+                item = etree.SubElement(apply_log, 'guid')
+                item.attrib['count'] = '%d' % (len(apply_log)-1)
+                item.attrib['value'] = guid
 
     def apply_log_pop(self):
         ''' Pop a GPO guid from the applylog
@@ -305,32 +311,16 @@ class gp_ext(object):
     def read(self, policy):
         pass
 
-    def parse(self, afile, ldb, conn, gp_db, lp):
+    def parse(self, afile, ldb, gp_db, lp):
         self.ldb = ldb
         self.gp_db = gp_db
         self.lp = lp
 
-        # Fixing the bug where only some Linux Boxes capitalize MACHINE
-        try:
-            blist = afile.split('/')
-            idx = afile.lower().split('/').index('machine')
-            for case in [
-                            blist[idx].upper(),
-                            blist[idx].capitalize(),
-                            blist[idx].lower()
-                        ]:
-                bfile = '/'.join(blist[:idx]) + '/' + case + '/' + \
-                    '/'.join(blist[idx+1:])
-                try:
-                    return self.read(conn.loadfile(bfile.replace('/', '\\')))
-                except NTSTATUSError:
-                    continue
-        except ValueError:
-            try:
-                return self.read(conn.loadfile(afile.replace('/', '\\')))
-            except Exception as e:
-                self.logger.error(str(e))
-                return None
+        local_path = self.lp.cache_path('gpo_cache')
+        data_file = os.path.join(local_path, check_safe_path(afile).upper())
+        if os.path.exists(data_file):
+            return self.read(open(data_file, 'r').read())
+        return None
 
     @abstractmethod
     def __str__(self):
@@ -423,23 +413,66 @@ def get_gpo_list(dc_hostname, creds, lp):
         gpos = ads.get_gpo_list(creds.get_username())
     return gpos
 
+
+def cache_gpo_dir(conn, cache, sub_dir):
+    loc_sub_dir = sub_dir.upper()
+    local_dir = os.path.join(cache, loc_sub_dir)
+    try:
+        os.makedirs(local_dir, mode=0o755)
+    except OSError as e:
+        if e.errno != errno.EEXIST:
+            raise
+    for fdata in conn.list(sub_dir):
+        if fdata['attrib'] & smb.FILE_ATTRIBUTE_DIRECTORY:
+            cache_gpo_dir(conn, cache, os.path.join(sub_dir, fdata['name']))
+        else:
+            local_name = fdata['name'].upper()
+            f = NamedTemporaryFile(delete=False, dir=local_dir)
+            fname = os.path.join(sub_dir, fdata['name']).replace('/', '\\')
+            f.write(conn.loadfile(fname))
+            f.close()
+            os.rename(f.name, os.path.join(local_dir, local_name))
+
+
+def check_safe_path(path):
+    dirs = re.split('/|\\\\', path)
+    if 'sysvol' in path:
+        dirs = dirs[dirs.index('sysvol')+1:]
+    if not '..' in dirs:
+        return os.path.join(*dirs)
+    raise OSError(path)
+
+def check_refresh_gpo_list(dc_hostname, lp, creds, gpos):
+    conn = smb.SMB(dc_hostname, 'sysvol', lp=lp, creds=creds, sign=True)
+    cache_path = lp.cache_path('gpo_cache')
+    for gpo in gpos:
+        if not gpo.file_sys_path:
+            continue
+        cache_gpo_dir(conn, cache_path, check_safe_path(gpo.file_sys_path))
+
+def gpo_version(lp, path):
+    # gpo.gpo_get_sysvol_gpt_version() reads the GPT.INI from a local file,
+    # read from the gpo client cache.
+    gpt_path = lp.cache_path(os.path.join('gpo_cache', path))
+    return int(gpo.gpo_get_sysvol_gpt_version(gpt_path)[1])
+
 def apply_gp(lp, creds, test_ldb, logger, store, gp_extensions):
     gp_db = store.get_gplog(creds.get_username())
     dc_hostname = get_dc_hostname(creds, lp)
-    try:
-        conn =  smb.SMB(dc_hostname, 'sysvol', lp=lp, creds=creds)
-    except:
-        logger.error('Error connecting to \'%s\' using SMB' % dc_hostname)
-        raise
     gpos = get_gpo_list(dc_hostname, creds, lp)
+    try:
+        check_refresh_gpo_list(dc_hostname, lp, creds, gpos)
+    except:
+        logger.error('Failed downloading gpt cache from \'%s\' using SMB' \
+            % dc_hostname)
+        return
 
     for gpo_obj in gpos:
         guid = gpo_obj.name
         if guid == 'Local Policy':
             continue
-        path = os.path.join(lp.get('realm').lower(), 'Policies', guid)
-        local_path = os.path.join(lp.get("path", "sysvol"), path)
-        version = int(gpo.gpo_get_sysvol_gpt_version(local_path)[1])
+        path = os.path.join(lp.get('realm'), 'Policies', guid).upper()
+        version = gpo_version(lp, path)
         if version != store.get_int(guid):
             logger.info('GPO %s has changed' % guid)
             gp_db.state(GPOSTATE.APPLY)
@@ -449,7 +482,7 @@ def apply_gp(lp, creds, test_ldb, logger, store, gp_extensions):
         store.start()
         for ext in gp_extensions:
             try:
-                ext.parse(ext.list(path), test_ldb, conn, gp_db, lp)
+                ext.parse(ext.list(path), test_ldb, gp_db, lp)
             except Exception as e:
                 logger.error('Failed to parse gpo %s for extension %s' % \
                     (guid, str(ext)))
@@ -479,3 +512,74 @@ def unapply_gp(lp, creds, test_ldb, logger, store, gp_extensions):
             gp_db.delete(str(attr_obj), attr[0])
         gp_db.commit()
 
+def parse_gpext_conf(smb_conf):
+    lp = LoadParm()
+    if smb_conf is not None:
+        lp.load(smb_conf)
+    else:
+        lp.load_default()
+    ext_conf = lp.state_path('gpext.conf')
+    parser = ConfigParser()
+    parser.read(ext_conf)
+    return lp, parser
+
+def atomic_write_conf(lp, parser):
+    ext_conf = lp.state_path('gpext.conf')
+    with NamedTemporaryFile(delete=False, dir=os.path.dirname(ext_conf)) as f:
+        parser.write(f)
+        os.rename(f.name, ext_conf)
+
+def check_guid(guid):
+    # Check for valid guid with curly braces
+    if guid[0] != '{' or guid[-1] != '}' or len(guid) != 38:
+        return False
+    try:
+        UUID(guid, version=4)
+    except ValueError:
+        return False
+    return True
+
+def register_gp_extension(guid, name, path,
+                          smb_conf=None, machine=True, user=True):
+    # Check that the module exists
+    if not os.path.exists(path):
+        return False
+    if not check_guid(guid):
+        return False
+
+    lp, parser = parse_gpext_conf(smb_conf)
+    if not guid in parser.sections():
+        parser.add_section(guid)
+    parser.set(guid, 'DllName', path)
+    parser.set(guid, 'ProcessGroupPolicy', name)
+    parser.set(guid, 'NoMachinePolicy', 0 if machine else 1)
+    parser.set(guid, 'NoUserPolicy', 0 if user else 1)
+
+    atomic_write_conf(lp, parser)
+
+    return True
+
+def list_gp_extensions(smb_conf=None):
+    _, parser = parse_gpext_conf(smb_conf)
+    results = {}
+    for guid in parser.sections():
+        results[guid] = {}
+        results[guid]['DllName'] = parser.get(guid, 'DllName')
+        results[guid]['ProcessGroupPolicy'] = \
+            parser.get(guid, 'ProcessGroupPolicy')
+        results[guid]['MachinePolicy'] = \
+            not int(parser.get(guid, 'NoMachinePolicy'))
+        results[guid]['UserPolicy'] = not int(parser.get(guid, 'NoUserPolicy'))
+    return results
+
+def unregister_gp_extension(guid, smb_conf=None):
+    if not check_guid(guid):
+        return False
+
+    lp, parser = parse_gpext_conf(smb_conf)
+    if guid in parser.sections():
+        parser.remove_section(guid)
+
+    atomic_write_conf(lp, parser)
+
+    return True

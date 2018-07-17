@@ -821,7 +821,10 @@ class cmd_domain_demote(Command):
                             controls=["search_options:1:2"])
 
         if len(res) != 0:
-            raise CommandError("Current DC is still the owner of %d role(s), use the role command to transfer roles to another DC" % len(res))
+            raise CommandError("Current DC is still the owner of %d role(s), "
+                               "use the role command to transfer roles to "
+                               "another DC" %
+                               len(res))
 
         self.errf.write("Using %s as partner server for the demotion\n" %
                         server)
@@ -1012,9 +1015,13 @@ class cmd_domain_demote(Command):
             remote_samdb.modify(msg)
             remote_samdb.rename(newdn, dc_dn)
             if werr == werror.WERR_DS_DRA_NO_REPLICA:
-                raise CommandError("The DC %s is not present on (already removed from) the remote server: " % server_dsa_dn, e)
+                raise CommandError("The DC %s is not present on (already "
+                                   "removed from) the remote server: %s" %
+                                   (server_dsa_dn, e3))
             else:
-                raise CommandError("Error while sending a removeDsServer of %s: " % server_dsa_dn, e)
+                raise CommandError("Error while sending a removeDsServer "
+                                   "of %s: %s" %
+                                   (server_dsa_dn, e3))
 
         remove_dc.remove_sysvol_references(remote_samdb, logger, dc_name)
 
@@ -1524,7 +1531,7 @@ class cmd_domain_passwordsettings_set(Command):
               ldb.FLAG_MOD_REPLACE, "lockOutObservationWindow")
             msgs.append("Duration to reset account lockout after changed!")
 
-        if max_pwd_age > 0 and min_pwd_age >= max_pwd_age:
+        if max_pwd_age and max_pwd_age > 0 and min_pwd_age >= max_pwd_age:
             raise CommandError("Maximum password age (%d) must be greater than minimum password age (%d)!" % (max_pwd_age, min_pwd_age))
 
         if len(m) == 0:
@@ -1715,7 +1722,7 @@ class DomainTrustCommand(Command):
         if runtime is None:
             return False
 
-        err32 = self._uint32(runtime[0])
+        err32 = self._uint32(runtime.args[0])
         if err32 == val:
             return True
 
@@ -1723,24 +1730,24 @@ class DomainTrustCommand(Command):
 
     class LocalRuntimeError(CommandError):
         def __init__(exception_self, self, runtime, message):
-            err32 = self._uint32(runtime[0])
-            errstr = runtime[1]
+            err32 = self._uint32(runtime.args[0])
+            errstr = runtime.args[1]
             msg = "LOCAL_DC[%s]: %s - ERROR(0x%08X) - %s" % (
                   self.local_server, message, err32, errstr)
             CommandError.__init__(exception_self, msg)
 
     class RemoteRuntimeError(CommandError):
         def __init__(exception_self, self, runtime, message):
-            err32 = self._uint32(runtime[0])
-            errstr = runtime[1]
+            err32 = self._uint32(runtime.args[0])
+            errstr = runtime.args[1]
             msg = "REMOTE_DC[%s]: %s - ERROR(0x%08X) - %s" % (
                   self.remote_server, message, err32, errstr)
             CommandError.__init__(exception_self, msg)
 
     class LocalLdbError(CommandError):
         def __init__(exception_self, self, ldb_error, message):
-            errval = ldb_error[0]
-            errstr = ldb_error[1]
+            errval = ldb_error.args[0]
+            errstr = ldb_error.args[1]
             msg = "LOCAL_DC[%s]: %s - ERROR(%d) - %s" % (
                   self.local_server, message, errval, errstr)
             CommandError.__init__(exception_self, msg)

@@ -1189,6 +1189,12 @@ void reply_transs2(struct smb_request *req);
 
 /* The following definitions come from smbd/uid.c  */
 
+#define smbd_impersonate_debug_create(main_ev, name, dbg_lvl) \
+	_smbd_impersonate_debug_create(main_ev, name, dbg_lvl, __location__)
+struct tevent_context *_smbd_impersonate_debug_create(struct tevent_context *main_ev,
+						      const char *name,
+						      int dbg_lvl,
+						      const char *location);
 bool change_to_guest(void);
 NTSTATUS check_user_share_access(connection_struct *conn,
 				const struct auth_session_info *session_info,
@@ -1203,6 +1209,8 @@ void become_root(void);
 void unbecome_root(void);
 void smbd_become_root(void);
 void smbd_unbecome_root(void);
+bool become_guest(void);
+void unbecome_guest(void);
 bool become_user(connection_struct *conn, uint64_t vuid);
 bool become_user_by_fsp(struct files_struct *fsp);
 bool become_user_by_session(connection_struct *conn,
@@ -1213,6 +1221,17 @@ gid_t get_current_gid(connection_struct *conn);
 const struct security_unix_token *get_current_utok(connection_struct *conn);
 const struct security_token *get_current_nttok(connection_struct *conn);
 uint64_t get_current_vuid(connection_struct *conn);
+
+struct tevent_context *smbd_impersonate_conn_vuid_create(
+				struct tevent_context *main_ev,
+				struct connection_struct *conn,
+				uint64_t vuid);
+struct tevent_context *smbd_impersonate_conn_sess_create(
+				struct tevent_context *main_ev,
+				struct connection_struct *conn,
+				struct auth_session_info *session_info);
+struct tevent_context *smbd_impersonate_root_create(struct tevent_context *main_ev);
+struct tevent_context *smbd_impersonate_guest_create(struct tevent_context *main_ev);
 
 /* The following definitions come from smbd/utmp.c  */
 

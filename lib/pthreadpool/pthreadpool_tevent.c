@@ -57,21 +57,47 @@ struct pthreadpool_tevent {
 	struct pthreadpool *pool;
 	struct pthreadpool_tevent_glue *glue_list;
 
-	struct pthreadpool_tevent_job_state *jobs;
+	struct pthreadpool_tevent_job *jobs;
 };
 
 struct pthreadpool_tevent_job_state {
-	struct pthreadpool_tevent_job_state *prev, *next;
-	struct pthreadpool_tevent *pool;
 	struct tevent_context *ev;
-	struct tevent_immediate *im;
 	struct tevent_req *req;
+	struct pthreadpool_tevent_job *job;
+};
+
+struct pthreadpool_tevent_job {
+	struct pthreadpool_tevent_job *prev, *next;
+
+	struct pthreadpool_tevent *pool;
+	struct pthreadpool_tevent_job_state *state;
+	struct tevent_immediate *im;
 
 	void (*fn)(void *private_data);
 	void *private_data;
 };
 
 static int pthreadpool_tevent_destructor(struct pthreadpool_tevent *pool);
+
+static void pthreadpool_tevent_job_orphan(struct pthreadpool_tevent_job *job);
+
+static struct pthreadpool_tevent_job *orphaned_jobs;
+
+void pthreadpool_tevent_cleanup_orphaned_jobs(void)
+{
+	struct pthreadpool_tevent_job *job = NULL;
+	struct pthreadpool_tevent_job *njob = NULL;
+
+	for (job = orphaned_jobs; job != NULL; job = njob) {
+		njob = job->next;
+
+		/*
+		 * The job destructor keeps the job alive
+		 * (and in the list) or removes it from the list.
+		 */
+		TALLOC_FREE(job);
+	}
+}
 
 static int pthreadpool_tevent_job_signal(int jobid,
 					 void (*job_fn)(void *private_data),
@@ -83,6 +109,8 @@ int pthreadpool_tevent_init(TALLOC_CTX *mem_ctx, unsigned max_threads,
 {
 	struct pthreadpool_tevent *pool;
 	int ret;
+
+	pthreadpool_tevent_cleanup_orphaned_jobs();
 
 	pool = talloc_zero(mem_ctx, struct pthreadpool_tevent);
 	if (pool == NULL) {
@@ -102,22 +130,41 @@ int pthreadpool_tevent_init(TALLOC_CTX *mem_ctx, unsigned max_threads,
 	return 0;
 }
 
+size_t pthreadpool_tevent_max_threads(struct pthreadpool_tevent *pool)
+{
+	if (pool->pool == NULL) {
+		return 0;
+	}
+
+	return pthreadpool_max_threads(pool->pool);
+}
+
+size_t pthreadpool_tevent_queued_jobs(struct pthreadpool_tevent *pool)
+{
+	if (pool->pool == NULL) {
+		return 0;
+	}
+
+	return pthreadpool_queued_jobs(pool->pool);
+}
+
 static int pthreadpool_tevent_destructor(struct pthreadpool_tevent *pool)
 {
-	struct pthreadpool_tevent_job_state *state, *next;
+	struct pthreadpool_tevent_job *job = NULL;
+	struct pthreadpool_tevent_job *njob = NULL;
 	struct pthreadpool_tevent_glue *glue = NULL;
 	int ret;
 
-	ret = pthreadpool_destroy(pool->pool);
+	ret = pthreadpool_stop(pool->pool);
 	if (ret != 0) {
 		return ret;
 	}
-	pool->pool = NULL;
 
-	for (state = pool->jobs; state != NULL; state = next) {
-		next = state->next;
-		DLIST_REMOVE(pool->jobs, state);
-		state->pool = NULL;
+	for (job = pool->jobs; job != NULL; job = njob) {
+		njob = job->next;
+
+		/* The job this removes it from the list */
+		pthreadpool_tevent_job_orphan(job);
 	}
 
 	/*
@@ -130,6 +177,14 @@ static int pthreadpool_tevent_destructor(struct pthreadpool_tevent *pool)
 		TALLOC_FREE(glue);
 	}
 	pool->glue_list = NULL;
+
+	ret = pthreadpool_destroy(pool->pool);
+	if (ret != 0) {
+		return ret;
+	}
+	pool->pool = NULL;
+
+	pthreadpool_tevent_cleanup_orphaned_jobs();
 
 	return 0;
 }
@@ -223,7 +278,7 @@ static int pthreadpool_tevent_register_ev(struct pthreadpool_tevent *pool,
 	glue->ev_link = ev_link;
 
 #ifdef HAVE_PTHREAD
-	glue->tctx = tevent_threaded_context_create(pool, ev);
+	glue->tctx = tevent_threaded_context_create(glue, ev);
 	if (glue->tctx == NULL) {
 		TALLOC_FREE(ev_link);
 		TALLOC_FREE(glue);
@@ -239,28 +294,139 @@ static void pthreadpool_tevent_job_fn(void *private_data);
 static void pthreadpool_tevent_job_done(struct tevent_context *ctx,
 					struct tevent_immediate *im,
 					void *private_data);
+static bool pthreadpool_tevent_job_cancel(struct tevent_req *req);
 
-static int pthreadpool_tevent_job_state_destructor(
-	struct pthreadpool_tevent_job_state *state)
+static int pthreadpool_tevent_job_destructor(struct pthreadpool_tevent_job *job)
 {
-	if (state->pool == NULL) {
-		return 0;
+	/*
+	 * We should never be called with state->state != NULL.
+	 * Only pthreadpool_tevent_job_orphan() will call TALLOC_FREE(job)
+	 * after detaching from the request state and pool list.
+	 */
+	if (job->state != NULL) {
+		abort();
 	}
 
 	/*
-	 * We should never be called with state->req == NULL,
-	 * state->pool must be cleared before the 2nd talloc_free().
+	 * If the job is not finished (job->im still there)
+	 * and it's still attached to the pool,
+	 * we try to cancel it (before it was starts)
 	 */
-	if (state->req == NULL) {
+	if (job->im != NULL && job->pool != NULL) {
+		size_t num;
+
+		num = pthreadpool_cancel_job(job->pool->pool, 0,
+					     pthreadpool_tevent_job_fn,
+					     job);
+		if (num != 0) {
+			/*
+			 * It was not too late to cancel the request.
+			 *
+			 * We can remove job->im, as it will never be used.
+			 */
+			TALLOC_FREE(job->im);
+		}
+	}
+
+	/*
+	 * pthreadpool_tevent_job_orphan() already removed
+	 * it from pool->jobs. And we don't need try
+	 * pthreadpool_cancel_job() again.
+	 */
+	job->pool = NULL;
+
+	if (job->im != NULL) {
+		/*
+		 * state->im still there means, we need to wait for the
+		 * immediate event to be triggered or just leak the memory.
+		 *
+		 * Move it to the orphaned list, if it's not already there.
+		 */
+		return -1;
+	}
+
+	/*
+	 * Finally remove from the orphaned_jobs list
+	 * and let talloc destroy us.
+	 */
+	DLIST_REMOVE(orphaned_jobs, job);
+
+	return 0;
+}
+
+static void pthreadpool_tevent_job_orphan(struct pthreadpool_tevent_job *job)
+{
+	/*
+	 * We're the only function that sets
+	 * job->state = NULL;
+	 */
+	if (job->state == NULL) {
 		abort();
 	}
 
 	/*
 	 * We need to reparent to a long term context.
+	 * And detach from the request state.
+	 * Maybe the destructor will keep the memory
+	 * and leak it for now.
 	 */
-	(void)talloc_reparent(state->req, NULL, state);
-	state->req = NULL;
-	return -1;
+	(void)talloc_reparent(job->state, NULL, job);
+	job->state->job = NULL;
+	job->state = NULL;
+
+	/*
+	 * job->pool will only be set to NULL
+	 * in the first destructur run.
+	 */
+	if (job->pool == NULL) {
+		abort();
+	}
+
+	/*
+	 * Dettach it from the pool.
+	 *
+	 * The job might still be running,
+	 * so we keep job->pool.
+	 * The destructor will set it to NULL
+	 * after trying pthreadpool_cancel_job()
+	 */
+	DLIST_REMOVE(job->pool->jobs, job);
+
+	/*
+	 * Add it to the list of orphaned jobs,
+	 * which may be cleaned up later.
+	 *
+	 * The destructor removes it from the list
+	 * when possible or it denies the free
+	 * and keep it in the list.
+	 */
+	DLIST_ADD_END(orphaned_jobs, job);
+	TALLOC_FREE(job);
+}
+
+static void pthreadpool_tevent_job_cleanup(struct tevent_req *req,
+					   enum tevent_req_state req_state)
+{
+	struct pthreadpool_tevent_job_state *state =
+		tevent_req_data(req,
+		struct pthreadpool_tevent_job_state);
+
+	if (state->job == NULL) {
+		/*
+		 * The job request is not scheduled in the pool
+		 * yet or anymore.
+		 */
+		return;
+	}
+
+	/*
+	 * We need to reparent to a long term context.
+	 * Maybe the destructor will keep the memory
+	 * and leak it for now.
+	 */
+	pthreadpool_tevent_job_orphan(state->job);
+	state->job = NULL; /* not needed but looks better */
+	return;
 }
 
 struct tevent_req *pthreadpool_tevent_job_send(
@@ -268,55 +434,71 @@ struct tevent_req *pthreadpool_tevent_job_send(
 	struct pthreadpool_tevent *pool,
 	void (*fn)(void *private_data), void *private_data)
 {
-	struct tevent_req *req;
-	struct pthreadpool_tevent_job_state *state;
+	struct tevent_req *req = NULL;
+	struct pthreadpool_tevent_job_state *state = NULL;
+	struct pthreadpool_tevent_job *job = NULL;
 	int ret;
+
+	pthreadpool_tevent_cleanup_orphaned_jobs();
 
 	req = tevent_req_create(mem_ctx, &state,
 				struct pthreadpool_tevent_job_state);
 	if (req == NULL) {
 		return NULL;
 	}
-	state->pool = pool;
 	state->ev = ev;
 	state->req = req;
-	state->fn = fn;
-	state->private_data = private_data;
 
-	state->im = tevent_create_immediate(state);
-	if (tevent_req_nomem(state->im, req)) {
+	tevent_req_set_cleanup_fn(req, pthreadpool_tevent_job_cleanup);
+
+	if (pool == NULL) {
+		tevent_req_error(req, EINVAL);
+		return tevent_req_post(req, ev);
+	}
+	if (pool->pool == NULL) {
+		tevent_req_error(req, EINVAL);
 		return tevent_req_post(req, ev);
 	}
 
 	ret = pthreadpool_tevent_register_ev(pool, ev);
-	if (ret != 0) {
-		tevent_req_error(req, errno);
-		return tevent_req_post(req, ev);
-	}
-
-	ret = pthreadpool_add_job(pool->pool, 0,
-				  pthreadpool_tevent_job_fn,
-				  state);
 	if (tevent_req_error(req, ret)) {
 		return tevent_req_post(req, ev);
 	}
 
-	/*
-	 * Once the job is scheduled, we need to protect
-	 * our memory.
-	 */
-	talloc_set_destructor(state, pthreadpool_tevent_job_state_destructor);
+	job = talloc_zero(state, struct pthreadpool_tevent_job);
+	if (tevent_req_nomem(job, req)) {
+		return tevent_req_post(req, ev);
+	}
+	job->pool = pool;
+	job->fn = fn;
+	job->private_data = private_data;
+	job->im = tevent_create_immediate(state->job);
+	if (tevent_req_nomem(job->im, req)) {
+		return tevent_req_post(req, ev);
+	}
+	talloc_set_destructor(job, pthreadpool_tevent_job_destructor);
+	DLIST_ADD_END(job->pool->jobs, job);
+	job->state = state;
+	state->job = job;
 
-	DLIST_ADD_END(pool->jobs, state);
+	ret = pthreadpool_add_job(job->pool->pool, 0,
+				  pthreadpool_tevent_job_fn,
+				  job);
+	if (tevent_req_error(req, ret)) {
+		return tevent_req_post(req, ev);
+	}
 
+	tevent_req_set_cancel_fn(req, pthreadpool_tevent_job_cancel);
 	return req;
 }
 
 static void pthreadpool_tevent_job_fn(void *private_data)
 {
-	struct pthreadpool_tevent_job_state *state = talloc_get_type_abort(
-		private_data, struct pthreadpool_tevent_job_state);
-	state->fn(state->private_data);
+	struct pthreadpool_tevent_job *job =
+		talloc_get_type_abort(private_data,
+		struct pthreadpool_tevent_job);
+
+	job->fn(job->private_data);
 }
 
 static int pthreadpool_tevent_job_signal(int jobid,
@@ -324,18 +506,20 @@ static int pthreadpool_tevent_job_signal(int jobid,
 					 void *job_private_data,
 					 void *private_data)
 {
-	struct pthreadpool_tevent_job_state *state = talloc_get_type_abort(
-		job_private_data, struct pthreadpool_tevent_job_state);
+	struct pthreadpool_tevent_job *job =
+		talloc_get_type_abort(job_private_data,
+		struct pthreadpool_tevent_job);
+	struct pthreadpool_tevent_job_state *state = job->state;
 	struct tevent_threaded_context *tctx = NULL;
 	struct pthreadpool_tevent_glue *g = NULL;
 
-	if (state->pool == NULL) {
-		/* The pthreadpool_tevent is already gone */
+	if (state == NULL) {
+		/* Request already gone */
 		return 0;
 	}
 
 #ifdef HAVE_PTHREAD
-	for (g = state->pool->glue_list; g != NULL; g = g->next) {
+	for (g = job->pool->glue_list; g != NULL; g = g->next) {
 		if (g->ev == state->ev) {
 			tctx = g->tctx;
 			break;
@@ -349,14 +533,14 @@ static int pthreadpool_tevent_job_signal(int jobid,
 
 	if (tctx != NULL) {
 		/* with HAVE_PTHREAD */
-		tevent_threaded_schedule_immediate(tctx, state->im,
+		tevent_threaded_schedule_immediate(tctx, job->im,
 						   pthreadpool_tevent_job_done,
-						   state);
+						   job);
 	} else {
 		/* without HAVE_PTHREAD */
-		tevent_schedule_immediate(state->im, state->ev,
+		tevent_schedule_immediate(job->im, state->ev,
 					  pthreadpool_tevent_job_done,
-					  state);
+					  job);
 	}
 
 	return 0;
@@ -366,28 +550,62 @@ static void pthreadpool_tevent_job_done(struct tevent_context *ctx,
 					struct tevent_immediate *im,
 					void *private_data)
 {
-	struct pthreadpool_tevent_job_state *state = talloc_get_type_abort(
-		private_data, struct pthreadpool_tevent_job_state);
+	struct pthreadpool_tevent_job *job =
+		talloc_get_type_abort(private_data,
+		struct pthreadpool_tevent_job);
+	struct pthreadpool_tevent_job_state *state = job->state;
 
-	if (state->pool != NULL) {
-		DLIST_REMOVE(state->pool->jobs, state);
-		state->pool = NULL;
-	}
+	TALLOC_FREE(job->im);
 
-	if (state->req == NULL) {
-		/*
-		 * There was a talloc_free() state->req
-		 * while the job was pending,
-		 * which mean we're reparented on a longterm
-		 * talloc context.
-		 *
-		 * We just cleanup here...
-		 */
-		talloc_free(state);
+	if (state == NULL) {
+		/* Request already gone */
+		TALLOC_FREE(job);
 		return;
 	}
 
+	/*
+	 * pthreadpool_tevent_job_cleanup()
+	 * will destroy the job.
+	 */
 	tevent_req_done(state->req);
+}
+
+static bool pthreadpool_tevent_job_cancel(struct tevent_req *req)
+{
+	struct pthreadpool_tevent_job_state *state =
+		tevent_req_data(req,
+		struct pthreadpool_tevent_job_state);
+	struct pthreadpool_tevent_job *job = state->job;
+	size_t num;
+
+	if (job == NULL) {
+		return false;
+	}
+
+	num = pthreadpool_cancel_job(job->pool->pool, 0,
+				     pthreadpool_tevent_job_fn,
+				     job);
+	if (num == 0) {
+		/*
+		 * It was too late to cancel the request.
+		 */
+		return false;
+	}
+
+	/*
+	 * It was not too late to cancel the request.
+	 *
+	 * We can remove job->im, as it will never be used.
+	 */
+	TALLOC_FREE(job->im);
+
+	/*
+	 * pthreadpool_tevent_job_cleanup()
+	 * will destroy the job.
+	 */
+	tevent_req_defer_callback(req, state->ev);
+	tevent_req_error(req, ECANCELED);
+	return true;
 }
 
 int pthreadpool_tevent_job_recv(struct tevent_req *req)

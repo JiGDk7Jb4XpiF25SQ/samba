@@ -39,7 +39,7 @@ from ldb import (
     Message,
     FLAG_MOD_REPLACE,
     )
-
+from samba.compat import cmp_fn
 
 class DrsBaseTestCase(SambaToolCmdTest):
     """Base class implementation for all DRS python tests.
@@ -184,7 +184,7 @@ class DrsBaseTestCase(SambaToolCmdTest):
     def _get_highest_hwm_utdv(self, ldb_conn):
         res = ldb_conn.search("", scope=ldb.SCOPE_BASE, attrs=["highestCommittedUSN"])
         hwm = drsuapi.DsReplicaHighWaterMark()
-        hwm.tmp_highest_usn = long(res[0]["highestCommittedUSN"][0])
+        hwm.tmp_highest_usn = int(res[0]["highestCommittedUSN"][0])
         hwm.reserved_usn = 0
         hwm.highest_usn = hwm.tmp_highest_usn
 
@@ -268,11 +268,11 @@ class DrsBaseTestCase(SambaToolCmdTest):
 
                 print("Link Tgt %s... <-- Src %s"
                       %(target.dn[:25], l.identifier.guid))
-		state = "Del"
-		if l.flags & drsuapi.DRSUAPI_DS_LINKED_ATTRIBUTE_FLAG_ACTIVE:
-		    state = "Act"
-		print("  v%u %s changed %u" %(l.meta_data.version, state,
-		      l.meta_data.originating_change_time))
+                state = "Del"
+                if l.flags & drsuapi.DRSUAPI_DS_LINKED_ATTRIBUTE_FLAG_ACTIVE:
+                    state = "Act"
+                print("  v%u %s changed %u" %(l.meta_data.version, state,
+                    l.meta_data.originating_change_time))
 
             print("HWM:     %d" %(ctr6.new_highwatermark.highest_usn))
             print("Tmp HWM: %d" %(ctr6.new_highwatermark.tmp_highest_usn))
@@ -317,7 +317,7 @@ class DrsBaseTestCase(SambaToolCmdTest):
         if uptodateness_vector is not None:
             uptodateness_vector_v1 = drsuapi.DsReplicaCursorCtrEx()
             cursors = []
-            for i in xrange(0, uptodateness_vector.count):
+            for i in range(0, uptodateness_vector.count):
                 c = uptodateness_vector.cursors[i]
                 c1 = drsuapi.DsReplicaCursor()
                 c1.source_dsa_invocation_id = c.source_dsa_invocation_id
@@ -424,7 +424,7 @@ class DrsBaseTestCase(SambaToolCmdTest):
         req8.destination_dsa_guid = misc.GUID(dest_dsa) if dest_dsa else misc.GUID()
         req8.source_dsa_invocation_id = misc.GUID(invocation_id)
         req8.naming_context = drsuapi.DsReplicaObjectIdentifier()
-        req8.naming_context.dn = unicode(nc_dn_str)
+        req8.naming_context.dn = str(nc_dn_str)
         req8.highwatermark = drsuapi.DsReplicaHighWaterMark()
         req8.highwatermark.tmp_highest_usn = 0
         req8.highwatermark.reserved_usn = 0
@@ -454,7 +454,7 @@ class DrsBaseTestCase(SambaToolCmdTest):
         req10.destination_dsa_guid = misc.GUID(dest_dsa) if dest_dsa else misc.GUID()
         req10.source_dsa_invocation_id = misc.GUID(invocation_id)
         req10.naming_context = drsuapi.DsReplicaObjectIdentifier()
-        req10.naming_context.dn = unicode(nc_dn_str)
+        req10.naming_context.dn = str(nc_dn_str)
         req10.highwatermark = drsuapi.DsReplicaHighWaterMark()
         req10.highwatermark.tmp_highest_usn = 0
         req10.highwatermark.reserved_usn = 0
@@ -515,7 +515,7 @@ class AbstractLink:
                 print("AbstractLink.__internal_cmp__(%r, %r) => wrong type" % (self, other))
             return NotImplemented
 
-        c = cmp(self.selfGUID_blob, other.selfGUID_blob)
+        c = cmp_fn(self.selfGUID_blob, other.selfGUID_blob)
         if c != 0:
             if verbose:
                 print("AbstractLink.__internal_cmp__(%r, %r) => %d different identifier" % (self, other, c))
@@ -536,7 +536,7 @@ class AbstractLink:
                 print("AbstractLink.__internal_cmp__(%r, %r) => %d different FLAG_ACTIVE" % (self, other, c))
             return c
 
-        c = cmp(self.targetGUID_blob, other.targetGUID_blob)
+        c = cmp_fn(self.targetGUID_blob, other.targetGUID_blob)
         if c != 0:
             if verbose:
                 print("AbstractLink.__internal_cmp__(%r, %r) => %d different target" % (self, other, c))
