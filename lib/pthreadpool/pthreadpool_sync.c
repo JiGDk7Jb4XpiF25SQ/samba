@@ -65,6 +65,11 @@ size_t pthreadpool_queued_jobs(struct pthreadpool *pool)
 	return 0;
 }
 
+bool pthreadpool_per_thread_cwd(struct pthreadpool *pool)
+{
+	return false;
+}
+
 int pthreadpool_add_job(struct pthreadpool *pool, int job_id,
 			void (*fn)(void *private_data), void *private_data)
 {
@@ -76,6 +81,26 @@ int pthreadpool_add_job(struct pthreadpool *pool, int job_id,
 
 	return pool->signal_fn(job_id, fn, private_data,
 			       pool->signal_fn_private_data);
+}
+
+int pthreadpool_restart_check(struct pthreadpool *pool)
+{
+	if (pool->stopped) {
+		return EINVAL;
+	}
+
+	return 0;
+}
+
+int pthreadpool_restart_check_monitor_fd(struct pthreadpool *pool)
+{
+	errno = ENOSYS;
+	return -1;
+}
+
+int pthreadpool_restart_check_monitor_drain(struct pthreadpool *pool)
+{
+	return EINVAL;
 }
 
 size_t pthreadpool_cancel_job(struct pthreadpool *pool, int job_id,

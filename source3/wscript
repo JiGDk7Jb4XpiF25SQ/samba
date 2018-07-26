@@ -94,7 +94,9 @@ def configure(conf):
         conf.ADD_LDFLAGS("-Wl,--export-dynamic", testflags=True)
 
     # We crash without vfs_default
-    required_static_modules.extend(TO_LIST('vfs_default'))
+    # and vfs_not_implemented provides helper function
+    # for other modules
+    required_static_modules.extend(TO_LIST('vfs_default vfs_not_implemented'))
 
     conf.CHECK_HEADERS('netdb.h')
     conf.CHECK_HEADERS('linux/falloc.h linux/ioctl.h')
@@ -166,11 +168,6 @@ main() {
         exit(fcntl(open("/tmp", O_RDONLY), F_GETLEASE, 0) == -1 ?  1 : 0);
 }''', 'HAVE_KERNEL_OPLOCKS_LINUX', addmain=False, execute=True,
         msg="Checking for Linux kernel oplocks")
-
-    # Check for IRIX kernel oplock types
-    conf.CHECK_CODE('oplock_stat_t t; t.os_state = OP_REVOKE; t.os_dev = 1; t.os_ino = 1;',
-                    'HAVE_KERNEL_OPLOCKS_IRIX', headers='fcntl.h',
-                    msg="Checking for IRIX kernel oplock types")
 
     # Check for kernel share modes
     conf.CHECK_CODE('''
@@ -964,23 +961,23 @@ syscall(SYS_setgroups32, 0, NULL);
         if (conf.CONFIG_SET('USE_LINUX_32BIT_SYSCALLS')):
             seteuid = conf.CHECK_CODE('''
                                 #define AUTOCONF_TEST 1
-                                #define USE_LINUX_THREAD_CREDENTIALS 1
+                                #define HAVE_LINUX_THREAD_CREDENTIALS 1
                                 #define USE_LINUX_32BIT_SYSCALLS 1
                                 #include "../lib/util/setid.c"
                                 #include "./lib/util_sec.c"
                                 ''',
-                                'USE_LINUX_THREAD_CREDENTIALS',
+                                'HAVE_LINUX_THREAD_CREDENTIALS',
                                 addmain=False,
                                 execute=True,
                                 msg="Checking whether we can use Linux thread-specific credentials with 32-bit system calls")
         else:
             seteuid = conf.CHECK_CODE('''
                                 #define AUTOCONF_TEST 1
-                                #define USE_LINUX_THREAD_CREDENTIALS 1
+                                #define HAVE_LINUX_THREAD_CREDENTIALS 1
                                 #include "../lib/util/setid.c"
                                 #include "./lib/util_sec.c"
                                 ''',
-                                'USE_LINUX_THREAD_CREDENTIALS',
+                                'HAVE_LINUX_THREAD_CREDENTIALS',
                                 addmain=False,
                                 execute=True,
                                 msg="Checking whether we can use Linux thread-specific credentials")
@@ -1034,7 +1031,7 @@ syscall(SYS_setgroups32, 0, NULL);
             Logs.warn("--with-dnsupdate=yes but gssapi support not sufficient")
         else:
             conf.DEFINE('WITH_DNS_UPDATES', 1)
-    conf.CHECK_HEADERS('valgrind.h valgrind/valgrind.h valgrind/memcheck.h')
+    # valgrind.h or valgrind/valgrind.h is checked in lib/replace/wscript
     if Options.options.developer:
         if conf.CONFIG_SET('HAVE_VALGRIND_H') or conf.CONFIG_SET('HAVE_VALGRIND_VALGRIND_H'):
             conf.DEFINE('VALGRIND', '1')
@@ -1504,6 +1501,11 @@ main() {
             if not conf.CONFIG_SET('WITH_QUOTAS'):
                 legacy_quota_libs = ''
     conf.env['legacy_quota_libs'] = legacy_quota_libs
+
+    conf.CHECK_CODE('(void)unshare(CLONE_FS);',
+                    headers='sched.h',
+                    define='HAVE_UNSHARE_CLONE_FS',
+                    msg='for Linux unshare(CLONE_FS)')
 
     #
     # cluster support (CTDB)

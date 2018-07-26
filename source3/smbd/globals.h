@@ -586,7 +586,7 @@ struct tevent_req *smb2srv_session_shutdown_send(TALLOC_CTX *mem_ctx,
 					struct smbd_smb2_request *current_req);
 NTSTATUS smb2srv_session_shutdown_recv(struct tevent_req *req);
 NTSTATUS smbXsrv_session_logoff(struct smbXsrv_session *session);
-NTSTATUS smbXsrv_session_logoff_all(struct smbXsrv_connection *conn);
+NTSTATUS smbXsrv_session_logoff_all(struct smbXsrv_client *client);
 NTSTATUS smb1srv_session_table_init(struct smbXsrv_connection *conn);
 NTSTATUS smb1srv_session_lookup(struct smbXsrv_connection *conn,
 				uint16_t vuid, NTTIME now,
@@ -620,7 +620,7 @@ NTSTATUS smb1srv_tcon_create(struct smbXsrv_connection *conn,
 NTSTATUS smb1srv_tcon_lookup(struct smbXsrv_connection *conn,
 			     uint16_t tree_id, NTTIME now,
 			     struct smbXsrv_tcon **tcon);
-NTSTATUS smb1srv_tcon_disconnect_all(struct smbXsrv_connection *conn);
+NTSTATUS smb1srv_tcon_disconnect_all(struct smbXsrv_client *client);
 NTSTATUS smb2srv_tcon_table_init(struct smbXsrv_session *session);
 NTSTATUS smb2srv_tcon_create(struct smbXsrv_session *session,
 			     NTTIME now,
@@ -939,7 +939,8 @@ struct smbd_server_connection {
 		} locks;
 	} smb2;
 
-	struct pthreadpool_tevent *pool;
+	struct pthreadpool_tevent *sync_thread_pool;
+	struct pthreadpool_tevent *raw_thread_pool;
 
 	struct smbXsrv_client *client;
 };

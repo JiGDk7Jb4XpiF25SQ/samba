@@ -56,7 +56,7 @@ int samba_setgroups(size_t setlen, const gid_t *gidset);
 
 #endif
 
-#if defined(USE_LINUX_THREAD_CREDENTIALS)
+#if defined(HAVE_LINUX_THREAD_CREDENTIALS)
 #if defined(HAVE_UNISTD_H)
 #include <unistd.h>
 #endif

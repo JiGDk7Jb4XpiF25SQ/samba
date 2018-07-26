@@ -90,7 +90,6 @@ static struct GUID *get_transaction_id(
 	return &transaction_id->transaction_guid;
 }
 
-#ifdef HAVE_JANSSON
 /*
  * @brief generate a JSON log entry for a group change.
  *
@@ -104,6 +103,7 @@ static struct GUID *get_transaction_id(
  * @param status the ldb status code for the ldb operation.
  *
  * @return A json object containing the details.
+ * 	   NULL if an error was detected
  */
 static struct json_object audit_group_json(
 	const struct ldb_module *module,
@@ -115,11 +115,12 @@ static struct json_object audit_group_json(
 {
 	struct ldb_context *ldb = NULL;
 	const struct dom_sid *sid = NULL;
-	struct json_object wrapper;
-	struct json_object audit;
+	struct json_object wrapper = json_empty_object;
+	struct json_object audit = json_empty_object;
 	const struct tsocket_address *remote = NULL;
 	const struct GUID *unique_session_token = NULL;
 	struct GUID *transaction_id = NULL;
+	int rc = 0;
 
 	ldb = ldb_module_get_ctx(discard_const(module));
 
@@ -129,25 +130,83 @@ static struct json_object audit_group_json(
 	transaction_id = get_transaction_id(request);
 
 	audit = json_new_object();
-	json_add_version(&audit, AUDIT_MAJOR, AUDIT_MINOR);
-	json_add_int(&audit, "statusCode", status);
-	json_add_string(&audit, "status", ldb_strerror(status));
-	json_add_string(&audit, "action", action);
-	json_add_address(&audit, "remoteAddress", remote);
-	json_add_sid(&audit, "userSid", sid);
-	json_add_string(&audit, "group", group);
-	json_add_guid(&audit, "transactionId", transaction_id);
-	json_add_guid(&audit, "sessionId", unique_session_token);
-	json_add_string(&audit, "user", user);
+	if (json_is_invalid(&audit)) {
+		goto failure;
+	}
+	rc = json_add_version(&audit, AUDIT_MAJOR, AUDIT_MINOR);
+	if (rc != 0) {
+		goto failure;
+	}
+	rc = json_add_int(&audit, "statusCode", status);
+	if (rc != 0) {
+		goto failure;
+	}
+	rc = json_add_string(&audit, "status", ldb_strerror(status));
+	if (rc != 0) {
+		goto failure;
+	}
+	rc = json_add_string(&audit, "action", action);
+	if (rc != 0) {
+		goto failure;
+	}
+	rc = json_add_address(&audit, "remoteAddress", remote);
+	if (rc != 0) {
+		goto failure;
+	}
+	rc = json_add_sid(&audit, "userSid", sid);
+	if (rc != 0) {
+		goto failure;
+	}
+	rc = json_add_string(&audit, "group", group);
+	if (rc != 0) {
+		goto failure;
+	}
+	rc = json_add_guid(&audit, "transactionId", transaction_id);
+	if (rc != 0) {
+		goto failure;
+	}
+	rc = json_add_guid(&audit, "sessionId", unique_session_token);
+	if (rc != 0) {
+		goto failure;
+	}
+	rc = json_add_string(&audit, "user", user);
+	if (rc != 0) {
+		goto failure;
+	}
 
 	wrapper = json_new_object();
-	json_add_timestamp(&wrapper);
-	json_add_string(&wrapper, "type", AUDIT_JSON_TYPE);
-	json_add_object(&wrapper, AUDIT_JSON_TYPE, &audit);
+	if (json_is_invalid(&wrapper)) {
+		goto failure;
+	}
+	rc = json_add_timestamp(&wrapper);
+	if (rc != 0) {
+		goto failure;
+	}
+	rc = json_add_string(&wrapper, "type", AUDIT_JSON_TYPE);
+	if (rc != 0) {
+		goto failure;
+	}
+	rc = json_add_object(&wrapper, AUDIT_JSON_TYPE, &audit);
+	if (rc != 0) {
+		goto failure;
+	}
 
 	return wrapper;
+failure:
+	/*
+	 * On a failure audit will not have been added to wrapper so it
+	 * needs to free it to avoid a leak.
+	 *
+	 * wrapper is freed to invalidate it as it will have only been
+	 * partially constructed and may be inconsistent.
+	 *
+	 * All the json manipulation routines handle a freed object correctly
+	 */
+	json_free(&audit);
+	json_free(&wrapper);
+	DBG_ERR("Failed to create group change JSON log message\n");
+	return wrapper;
 }
-#endif
 
 /*
  * @brief generate a human readable log entry for a group change.
@@ -432,7 +491,6 @@ static void log_primary_group_change(
 		TALLOC_FREE(message);
 	}
 
-#ifdef HAVE_JANSSON
 	if (CHECK_DEBUGLVLC(DBGC_DSDB_GROUP_AUDIT_JSON, GROUP_LOG_LVL) ||
 		(ac->msg_ctx && ac->send_events)) {
 
@@ -458,7 +516,6 @@ static void log_primary_group_change(
 		}
 		json_free(&json);
 	}
-#endif
 	TALLOC_FREE(ctx);
 }
 
@@ -508,7 +565,6 @@ static void log_membership_change(
 		TALLOC_FREE(message);
 	}
 
-#ifdef HAVE_JANSSON
 	if (CHECK_DEBUGLVLC(DBGC_DSDB_GROUP_AUDIT_JSON, GROUP_LOG_LVL) ||
 		(ac->msg_ctx && ac->send_events)) {
 		struct json_object json;
@@ -533,7 +589,6 @@ static void log_membership_change(
 		}
 		json_free(&json);
 	}
-#endif
 	TALLOC_FREE(ctx);
 }
 

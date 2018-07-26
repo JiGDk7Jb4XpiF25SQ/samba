@@ -856,7 +856,6 @@ static int skel_fremovexattr(vfs_handle_struct *handle,
 {
 	errno = ENOSYS;
 	return -1;
-	return SMB_VFS_NEXT_FREMOVEXATTR(handle, fsp, name);
 }
 
 static int skel_setxattr(vfs_handle_struct *handle,
@@ -885,9 +884,46 @@ static bool skel_aio_force(struct vfs_handle_struct *handle,
 	return false;
 }
 
+static NTSTATUS skel_audit_file(struct vfs_handle_struct *handle,
+				struct smb_filename *file,
+				struct security_acl *sacl,
+				uint32_t access_requested,
+				uint32_t access_denied)
+{
+	return NT_STATUS_NOT_IMPLEMENTED;
+}
+
+static NTSTATUS skel_durable_cookie(struct vfs_handle_struct *handle,
+				    struct files_struct *fsp,
+				    TALLOC_CTX *mem_ctx,
+				    DATA_BLOB *cookie)
+{
+	return NT_STATUS_NOT_IMPLEMENTED;
+}
+
+static NTSTATUS skel_durable_disconnect(struct vfs_handle_struct *handle,
+					struct files_struct *fsp,
+					const DATA_BLOB old_cookie,
+					TALLOC_CTX *mem_ctx,
+					DATA_BLOB *new_cookie)
+{
+	return NT_STATUS_NOT_IMPLEMENTED;
+}
+
+static NTSTATUS skel_durable_reconnect(struct vfs_handle_struct *handle,
+				       struct smb_request *smb1req,
+				       struct smbXsrv_open *op,
+				       const DATA_BLOB old_cookie,
+				       TALLOC_CTX *mem_ctx,
+				       struct files_struct **fsp,
+				       DATA_BLOB *new_cookie)
+{
+	return NT_STATUS_NOT_IMPLEMENTED;
+}
+
 /* VFS operations structure */
 
-struct vfs_fn_pointers skel_opaque_fns = {
+static struct vfs_fn_pointers skel_opaque_fns = {
 	/* Disk operations */
 
 	.connect_fn = skel_connect,
@@ -975,6 +1011,7 @@ struct vfs_fn_pointers skel_opaque_fns = {
 	.translate_name_fn = skel_translate_name,
 	.fsctl_fn = skel_fsctl,
 	.readdir_attr_fn = skel_readdir_attr,
+	.audit_file_fn = skel_audit_file,
 
 	/* DOS attributes. */
 	.get_dos_attributes_fn = skel_get_dos_attributes,
@@ -1010,11 +1047,23 @@ struct vfs_fn_pointers skel_opaque_fns = {
 
 	/* aio operations */
 	.aio_force_fn = skel_aio_force,
+
+	/* durable handle operations */
+	.durable_cookie_fn = skel_durable_cookie,
+	.durable_disconnect_fn = skel_durable_disconnect,
+	.durable_reconnect_fn = skel_durable_reconnect,
 };
 
 static_decl_vfs;
 NTSTATUS vfs_skel_opaque_init(TALLOC_CTX *ctx)
 {
+	/*
+	 * smb_vfs_assert_all_fns() makes sure every
+	 * call is implemented.
+	 *
+	 * An opaque module requires this!
+	 */
+	smb_vfs_assert_all_fns(&skel_opaque_fns, "skel_opaque");
 	return smb_register_vfs(SMB_VFS_INTERFACE_VERSION, "skel_opaque",
 				&skel_opaque_fns);
 }

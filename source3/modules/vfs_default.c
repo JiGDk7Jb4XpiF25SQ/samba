@@ -686,7 +686,7 @@ static struct tevent_req *vfswrap_pread_send(struct vfs_handle_struct *handle,
 	SMBPROFILE_BYTES_ASYNC_SET_IDLE(state->profile_bytes);
 
 	subreq = pthreadpool_tevent_job_send(
-		state, ev, handle->conn->sconn->pool,
+		state, ev, handle->conn->sconn->raw_thread_pool,
 		vfs_pread_do, state);
 	if (tevent_req_nomem(subreq, req)) {
 		return tevent_req_post(req, ev);
@@ -804,7 +804,7 @@ static struct tevent_req *vfswrap_pwrite_send(struct vfs_handle_struct *handle,
 	SMBPROFILE_BYTES_ASYNC_SET_IDLE(state->profile_bytes);
 
 	subreq = pthreadpool_tevent_job_send(
-		state, ev, handle->conn->sconn->pool,
+		state, ev, handle->conn->sconn->raw_thread_pool,
 		vfs_pwrite_do, state);
 	if (tevent_req_nomem(subreq, req)) {
 		return tevent_req_post(req, ev);
@@ -886,7 +886,7 @@ struct vfswrap_fsync_state {
 	int fd;
 
 	struct vfs_aio_state vfs_aio_state;
-	SMBPROFILE_BASIC_ASYNC_STATE(profile_basic);
+	SMBPROFILE_BYTES_ASYNC_STATE(profile_bytes);
 };
 
 static void vfs_fsync_do(void *private_data);
@@ -909,11 +909,13 @@ static struct tevent_req *vfswrap_fsync_send(struct vfs_handle_struct *handle,
 	state->ret = -1;
 	state->fd = fsp->fh->fd;
 
-	SMBPROFILE_BASIC_ASYNC_START(syscall_asys_fsync, profile_p,
-				     state->profile_basic);
+	SMBPROFILE_BYTES_ASYNC_START(syscall_asys_fsync, profile_p,
+				     state->profile_bytes, 0);
+	SMBPROFILE_BYTES_ASYNC_SET_IDLE(state->profile_bytes);
 
 	subreq = pthreadpool_tevent_job_send(
-		state, ev, handle->conn->sconn->pool, vfs_fsync_do, state);
+		state, ev, handle->conn->sconn->raw_thread_pool,
+		vfs_fsync_do, state);
 	if (tevent_req_nomem(subreq, req)) {
 		return tevent_req_post(req, ev);
 	}
@@ -931,6 +933,8 @@ static void vfs_fsync_do(void *private_data)
 	struct timespec start_time;
 	struct timespec end_time;
 
+	SMBPROFILE_BYTES_ASYNC_SET_BUSY(state->profile_bytes);
+
 	PROFILE_TIMESTAMP(&start_time);
 
 	do {
@@ -944,6 +948,8 @@ static void vfs_fsync_do(void *private_data)
 	PROFILE_TIMESTAMP(&end_time);
 
 	state->vfs_aio_state.duration = nsec_time_diff(&end_time, &start_time);
+
+	SMBPROFILE_BYTES_ASYNC_SET_IDLE(state->profile_bytes);
 }
 
 static int vfs_fsync_state_destructor(struct vfswrap_fsync_state *state)
@@ -961,7 +967,7 @@ static void vfs_fsync_done(struct tevent_req *subreq)
 
 	ret = pthreadpool_tevent_job_recv(subreq);
 	TALLOC_FREE(subreq);
-	SMBPROFILE_BASIC_ASYNC_END(state->profile_basic);
+	SMBPROFILE_BYTES_ASYNC_END(state->profile_bytes);
 	talloc_set_destructor(state, NULL);
 	if (tevent_req_error(req, ret)) {
 		return;
@@ -3000,6 +3006,12 @@ static struct vfs_fn_pointers vfs_default_fns = {
 static_decl_vfs;
 NTSTATUS vfs_default_init(TALLOC_CTX *ctx)
 {
+	/*
+	 * Here we need to implement every call!
+	 *
+	 * As this is the end of the vfs module chain.
+	 */
+	smb_vfs_assert_all_fns(&vfs_default_fns, DEFAULT_VFS_MODULE_NAME);
 	return smb_register_vfs(SMB_VFS_INTERFACE_VERSION,
 				DEFAULT_VFS_MODULE_NAME, &vfs_default_fns);
 }
