@@ -3029,7 +3029,7 @@ static int control_tickle(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 		unsigned int num_failed;
 
 		/* Client first but the src/dst logic is confused */
-		ret = ctdb_connection_list_read(mem_ctx, false, &clist);
+		ret = ctdb_connection_list_read(mem_ctx, 0, false, &clist);
 		if (ret != 0) {
 			return ret;
 		}
@@ -3247,7 +3247,7 @@ static int control_addtickle(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 		struct tevent_req *req;
 
 		/* Client first but the src/dst logic is confused */
-		ret = ctdb_connection_list_read(mem_ctx, false, &clist);
+		ret = ctdb_connection_list_read(mem_ctx, 0, false, &clist);
 		if (ret != 0) {
 			return ret;
 		}
@@ -3312,7 +3312,7 @@ static int control_deltickle(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 		struct tevent_req *req;
 
 		/* Client first but the src/dst logic is confused */
-		ret = ctdb_connection_list_read(mem_ctx, false, &clist);
+		ret = ctdb_connection_list_read(mem_ctx, 0, false, &clist);
 		if (ret != 0) {
 			return ret;
 		}
@@ -3849,7 +3849,8 @@ static int control_addip(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 		usage("addip");
 	}
 
-	if (! parse_ip_mask(argv[0], argv[1], &addr, &mask)) {
+	ret = ctdb_sock_addr_mask_from_string(argv[0], &addr, &mask);
+	if (ret != 0) {
 		fprintf(stderr, "Invalid IP/Mask %s\n", argv[0]);
 		return 1;
 	}

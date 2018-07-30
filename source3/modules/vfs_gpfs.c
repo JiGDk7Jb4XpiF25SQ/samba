@@ -2163,6 +2163,12 @@ static int vfs_gpfs_connect(struct vfs_handle_struct *handle,
 		}
 	}
 
+	/*
+	 * Unless we have an async implementation of get_dos_attributes turn
+	 * this off.
+	 */
+	lp_do_parameter(SNUM(handle->conn), "smbd:async dosmode", "false");
+
 	return 0;
 }
 
@@ -2561,6 +2567,8 @@ static struct vfs_fn_pointers vfs_gpfs_fns = {
 	.linux_setlease_fn = vfs_gpfs_setlease,
 	.get_real_filename_fn = vfs_gpfs_get_real_filename,
 	.get_dos_attributes_fn = vfs_gpfs_get_dos_attributes,
+	.get_dos_attributes_send_fn = vfs_not_implemented_get_dos_attributes_send,
+	.get_dos_attributes_recv_fn = vfs_not_implemented_get_dos_attributes_recv,
 	.fget_dos_attributes_fn = vfs_gpfs_fget_dos_attributes,
 	.set_dos_attributes_fn = vfs_gpfs_set_dos_attributes,
 	.fset_dos_attributes_fn = vfs_gpfs_fset_dos_attributes,

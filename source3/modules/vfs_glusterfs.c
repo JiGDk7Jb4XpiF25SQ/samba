@@ -362,6 +362,11 @@ static int vfs_gluster_connect(struct vfs_handle_struct *handle,
 	 */
 	lp_do_parameter(SNUM(handle->conn), "shadow:mountpoint", "/");
 
+	/*
+	 * Unless we have an async implementation of getxattrat turn this off.
+	 */
+	lp_do_parameter(SNUM(handle->conn), "smbd:async dosmode", "false");
+
 done:
 	if (ret < 0) {
 		if (fs)
@@ -1542,6 +1547,8 @@ static struct vfs_fn_pointers glusterfs_fns = {
 
 	/* EA Operations */
 	.getxattr_fn = vfs_gluster_getxattr,
+	.getxattrat_send_fn = vfs_not_implemented_getxattrat_send,
+	.getxattrat_recv_fn = vfs_not_implemented_getxattrat_recv,
 	.fgetxattr_fn = vfs_gluster_fgetxattr,
 	.listxattr_fn = vfs_gluster_listxattr,
 	.flistxattr_fn = vfs_gluster_flistxattr,

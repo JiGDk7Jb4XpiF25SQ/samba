@@ -886,6 +886,86 @@ static NTSTATUS skel_get_dos_attributes(struct vfs_handle_struct *handle,
 				dosmode);
 }
 
+struct skel_get_dos_attributes_state {
+	struct vfs_aio_state aio_state;
+	uint32_t dosmode;
+};
+
+static void skel_get_dos_attributes_done(struct tevent_req *subreq);
+
+static struct tevent_req *skel_get_dos_attributes_send(
+			TALLOC_CTX *mem_ctx,
+			const struct smb_vfs_ev_glue *evg,
+			struct vfs_handle_struct *handle,
+			files_struct *dir_fsp,
+			struct smb_filename *smb_fname)
+{
+	struct tevent_context *ev = smb_vfs_ev_glue_ev_ctx(evg);
+	struct tevent_req *req = NULL;
+	struct skel_get_dos_attributes_state *state = NULL;
+	struct tevent_req *subreq = NULL;
+
+	req = tevent_req_create(mem_ctx, &state,
+				struct skel_get_dos_attributes_state);
+	if (req == NULL) {
+		return NULL;
+	}
+
+	subreq = SMB_VFS_NEXT_GET_DOS_ATTRIBUTES_SEND(mem_ctx,
+						      evg,
+						      handle,
+						      dir_fsp,
+						      smb_fname);
+	if (tevent_req_nomem(subreq, req)) {
+		return tevent_req_post(req, ev);
+	}
+	tevent_req_set_callback(subreq, skel_get_dos_attributes_done, req);
+
+	return req;
+}
+
+static void skel_get_dos_attributes_done(struct tevent_req *subreq)
+{
+	struct tevent_req *req =
+		tevent_req_callback_data(subreq,
+		struct tevent_req);
+	struct skel_get_dos_attributes_state *state =
+		tevent_req_data(req,
+		struct skel_get_dos_attributes_state);
+	NTSTATUS status;
+
+	status = SMB_VFS_NEXT_GET_DOS_ATTRIBUTES_RECV(subreq,
+						      &state->aio_state,
+						      &state->dosmode);
+	TALLOC_FREE(subreq);
+	if (tevent_req_nterror(req, status)) {
+		return;
+	}
+
+	tevent_req_done(req);
+	return;
+}
+
+static NTSTATUS skel_get_dos_attributes_recv(struct tevent_req *req,
+					     struct vfs_aio_state *aio_state,
+					     uint32_t *dosmode)
+{
+	struct skel_get_dos_attributes_state *state =
+		tevent_req_data(req,
+		struct skel_get_dos_attributes_state);
+	NTSTATUS status;
+
+	if (tevent_req_is_nterror(req, &status)) {
+		tevent_req_received(req);
+		return status;
+	}
+
+	*aio_state = state->aio_state;
+	*dosmode = state->dosmode;
+	tevent_req_received(req);
+	return NT_STATUS_OK;
+}
+
 static NTSTATUS skel_fget_dos_attributes(struct vfs_handle_struct *handle,
 				struct files_struct *fsp,
 				uint32_t *dosmode)
@@ -1002,6 +1082,93 @@ static ssize_t skel_getxattr(vfs_handle_struct *handle,
 				size_t size)
 {
 	return SMB_VFS_NEXT_GETXATTR(handle, smb_fname, name, value, size);
+}
+
+struct skel_getxattrat_state {
+	struct vfs_aio_state aio_state;
+	ssize_t xattr_size;
+	uint8_t *xattr_value;
+};
+
+static void skel_getxattrat_done(struct tevent_req *subreq);
+
+static struct tevent_req *skel_getxattrat_send(
+			TALLOC_CTX *mem_ctx,
+			const struct smb_vfs_ev_glue *evg,
+			struct vfs_handle_struct *handle,
+			files_struct *dir_fsp,
+			const struct smb_filename *smb_fname,
+			const char *xattr_name,
+			size_t alloc_hint)
+{
+	struct tevent_context *ev = smb_vfs_ev_glue_ev_ctx(evg);
+	struct tevent_req *req = NULL;
+	struct skel_getxattrat_state *state = NULL;
+	struct tevent_req *subreq = NULL;
+
+	req = tevent_req_create(mem_ctx, &state,
+				struct skel_getxattrat_state);
+	if (req == NULL) {
+		return NULL;
+	}
+
+	subreq = SMB_VFS_NEXT_GETXATTRAT_SEND(state,
+					      evg,
+					      handle,
+					      dir_fsp,
+					      smb_fname,
+					      xattr_name,
+					      alloc_hint);
+	if (tevent_req_nomem(subreq, req)) {
+		return tevent_req_post(req, ev);
+	}
+	tevent_req_set_callback(subreq, skel_getxattrat_done, req);
+
+	return req;
+}
+
+static void skel_getxattrat_done(struct tevent_req *subreq)
+{
+	struct tevent_req *req = tevent_req_callback_data(
+		subreq, struct tevent_req);
+	struct skel_getxattrat_state *state = tevent_req_data(
+		req, struct skel_getxattrat_state);
+
+	state->xattr_size = SMB_VFS_NEXT_GETXATTRAT_RECV(subreq,
+							 &state->aio_state,
+							 state,
+							 &state->xattr_value);
+	TALLOC_FREE(subreq);
+	if (state->xattr_size == -1) {
+		tevent_req_error(req, state->aio_state.error);
+		return;
+	}
+
+	tevent_req_done(req);
+}
+
+static ssize_t skel_getxattrat_recv(struct tevent_req *req,
+				    struct vfs_aio_state *aio_state,
+				    TALLOC_CTX *mem_ctx,
+				    uint8_t **xattr_value)
+{
+	struct skel_getxattrat_state *state = tevent_req_data(
+		req, struct skel_getxattrat_state);
+	ssize_t xattr_size;
+
+	if (tevent_req_is_unix_error(req, &aio_state->error)) {
+		tevent_req_received(req);
+		return -1;
+	}
+
+	*aio_state = state->aio_state;
+	xattr_size = state->xattr_size;
+	if (xattr_value != NULL) {
+		*xattr_value = talloc_move(mem_ctx, &state->xattr_value);
+	}
+
+	tevent_req_received(req);
+	return xattr_size;
 }
 
 static ssize_t skel_fgetxattr(vfs_handle_struct *handle,
@@ -1211,6 +1378,8 @@ static struct vfs_fn_pointers skel_transparent_fns = {
 
 	/* DOS attributes. */
 	.get_dos_attributes_fn = skel_get_dos_attributes,
+	.get_dos_attributes_send_fn = skel_get_dos_attributes_send,
+	.get_dos_attributes_recv_fn = skel_get_dos_attributes_recv,
 	.fget_dos_attributes_fn = skel_fget_dos_attributes,
 	.set_dos_attributes_fn = skel_set_dos_attributes,
 	.fset_dos_attributes_fn = skel_fset_dos_attributes,
@@ -1233,6 +1402,8 @@ static struct vfs_fn_pointers skel_transparent_fns = {
 
 	/* EA operations. */
 	.getxattr_fn = skel_getxattr,
+	.getxattrat_send_fn = skel_getxattrat_send,
+	.getxattrat_recv_fn = skel_getxattrat_recv,
 	.fgetxattr_fn = skel_fgetxattr,
 	.listxattr_fn = skel_listxattr,
 	.flistxattr_fn = skel_flistxattr,

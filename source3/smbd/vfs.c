@@ -31,6 +31,7 @@
 #include "transfer_file.h"
 #include "ntioctl.h"
 #include "lib/util/tevent_unix.h"
+#include "lib/util/tevent_ntstatus.h"
 
 #undef DBGC_CLASS
 #define DBGC_CLASS DBGC_VFS
@@ -2287,7 +2288,6 @@ struct smb_vfs_ev_glue *smb_vfs_ev_glue_create_switch(
 	return evg_u;
 }
 
-_UNUSED_
 static bool smb_vfs_ev_glue_push_use(const struct smb_vfs_ev_glue *evg,
 				     struct tevent_req *req)
 {
@@ -2312,7 +2312,6 @@ static bool smb_vfs_ev_glue_push_use(const struct smb_vfs_ev_glue *evg,
 	return tevent_context_push_use(evg->run_ev);
 }
 
-_UNUSED_
 static void smb_vfs_ev_glue_pop_use(const struct smb_vfs_ev_glue *evg)
 {
 	if (evg->run_ev == evg->return_ev) {
@@ -3252,6 +3251,102 @@ NTSTATUS smb_vfs_call_offload_write_recv(struct vfs_handle_struct *handle,
 	return handle->fns->offload_write_recv_fn(handle, req, copied);
 }
 
+struct smb_vfs_call_get_dos_attributes_state {
+	NTSTATUS (*recv_fn)(struct tevent_req *req,
+			    struct vfs_aio_state *aio_state,
+			    uint32_t *dosmode);
+	struct vfs_aio_state aio_state;
+	uint32_t dos_attributes;
+};
+
+static void smb_vfs_call_get_dos_attributes_done(struct tevent_req *subreq);
+
+struct tevent_req *smb_vfs_call_get_dos_attributes_send(
+			TALLOC_CTX *mem_ctx,
+			const struct smb_vfs_ev_glue *evg,
+			struct vfs_handle_struct *handle,
+			files_struct *dir_fsp,
+			struct smb_filename *smb_fname)
+{
+	struct tevent_req *req = NULL;
+	struct smb_vfs_call_get_dos_attributes_state *state = NULL;
+	struct tevent_req *subreq = NULL;
+	bool ok;
+
+	req = tevent_req_create(mem_ctx, &state,
+				struct smb_vfs_call_get_dos_attributes_state);
+	if (req == NULL) {
+		return NULL;
+	}
+
+	VFS_FIND(get_dos_attributes_send);
+	state->recv_fn = handle->fns->get_dos_attributes_recv_fn;
+
+	ok = smb_vfs_ev_glue_push_use(evg, req);
+	if (!ok) {
+		tevent_req_error(req, EIO);
+		return tevent_req_post(req, evg->return_ev);
+	}
+
+	subreq = handle->fns->get_dos_attributes_send_fn(mem_ctx,
+							 evg->next_glue,
+							 handle,
+							 dir_fsp,
+							 smb_fname);
+	smb_vfs_ev_glue_pop_use(evg);
+
+	if (tevent_req_nomem(subreq, req)) {
+		return tevent_req_post(req, evg->return_ev);
+	}
+	tevent_req_set_callback(subreq,
+				smb_vfs_call_get_dos_attributes_done,
+				req);
+
+	return req;
+}
+
+static void smb_vfs_call_get_dos_attributes_done(struct tevent_req *subreq)
+{
+	struct tevent_req *req =
+		tevent_req_callback_data(subreq,
+		struct tevent_req);
+	struct smb_vfs_call_get_dos_attributes_state *state =
+		tevent_req_data(req,
+		struct smb_vfs_call_get_dos_attributes_state);
+	NTSTATUS status;
+
+	status = state->recv_fn(subreq,
+				&state->aio_state,
+				&state->dos_attributes);
+	TALLOC_FREE(subreq);
+	if (tevent_req_nterror(req, status)) {
+		return;
+	}
+
+	tevent_req_done(req);
+}
+
+NTSTATUS smb_vfs_call_get_dos_attributes_recv(
+		struct tevent_req *req,
+		struct vfs_aio_state *aio_state,
+		uint32_t *dos_attributes)
+{
+	struct smb_vfs_call_get_dos_attributes_state *state =
+		tevent_req_data(req,
+		struct smb_vfs_call_get_dos_attributes_state);
+	NTSTATUS status;
+
+	if (tevent_req_is_nterror(req, &status)) {
+		tevent_req_received(req);
+		return status;
+	}
+
+	*aio_state = state->aio_state;
+	*dos_attributes = state->dos_attributes;
+	tevent_req_received(req);
+	return NT_STATUS_OK;
+}
+
 NTSTATUS smb_vfs_call_get_compression(vfs_handle_struct *handle,
 				      TALLOC_CTX *mem_ctx,
 				      struct files_struct *fsp,
@@ -3425,6 +3520,108 @@ ssize_t smb_vfs_call_getxattr(struct vfs_handle_struct *handle,
 {
 	VFS_FIND(getxattr);
 	return handle->fns->getxattr_fn(handle, smb_fname, name, value, size);
+}
+
+
+struct smb_vfs_call_getxattrat_state {
+	ssize_t (*recv_fn)(struct tevent_req *req,
+			   struct vfs_aio_state *aio_state,
+			   TALLOC_CTX *mem_ctx,
+			   uint8_t **xattr_value);
+	ssize_t retval;
+	uint8_t *xattr_value;
+	struct vfs_aio_state aio_state;
+};
+
+static void smb_vfs_call_getxattrat_done(struct tevent_req *subreq);
+
+struct tevent_req *smb_vfs_call_getxattrat_send(
+			TALLOC_CTX *mem_ctx,
+			const struct smb_vfs_ev_glue *evg,
+			struct vfs_handle_struct *handle,
+			files_struct *dir_fsp,
+			const struct smb_filename *smb_fname,
+			const char *xattr_name,
+			size_t alloc_hint)
+{
+	struct tevent_req *req = NULL;
+	struct smb_vfs_call_getxattrat_state *state = NULL;
+	struct tevent_req *subreq = NULL;
+	bool ok;
+
+	req = tevent_req_create(mem_ctx, &state,
+				struct smb_vfs_call_getxattrat_state);
+	if (req == NULL) {
+		return NULL;
+	}
+
+	VFS_FIND(getxattrat_send);
+	state->recv_fn = handle->fns->getxattrat_recv_fn;
+
+	ok = smb_vfs_ev_glue_push_use(evg, req);
+	if (!ok) {
+		tevent_req_error(req, EIO);
+		return tevent_req_post(req, evg->return_ev);
+	}
+
+	subreq = handle->fns->getxattrat_send_fn(mem_ctx,
+						 evg->next_glue,
+						 handle,
+						 dir_fsp,
+						 smb_fname,
+						 xattr_name,
+						 alloc_hint);
+	smb_vfs_ev_glue_pop_use(evg);
+
+	if (tevent_req_nomem(subreq, req)) {
+		return tevent_req_post(req, evg->return_ev);
+	}
+	tevent_req_set_callback(subreq, smb_vfs_call_getxattrat_done, req);
+	return req;
+}
+
+static void smb_vfs_call_getxattrat_done(struct tevent_req *subreq)
+{
+	struct tevent_req *req = tevent_req_callback_data(
+		subreq, struct tevent_req);
+	struct smb_vfs_call_getxattrat_state *state = tevent_req_data(
+		req, struct smb_vfs_call_getxattrat_state);
+
+	state->retval = state->recv_fn(subreq,
+				       &state->aio_state,
+				       state,
+				       &state->xattr_value);
+	TALLOC_FREE(subreq);
+	if (state->retval == -1) {
+		tevent_req_error(req, state->aio_state.error);
+		return;
+	}
+
+	tevent_req_done(req);
+}
+
+ssize_t smb_vfs_call_getxattrat_recv(struct tevent_req *req,
+				     struct vfs_aio_state *aio_state,
+				     TALLOC_CTX *mem_ctx,
+				     uint8_t **xattr_value)
+{
+	struct smb_vfs_call_getxattrat_state *state = tevent_req_data(
+		req, struct smb_vfs_call_getxattrat_state);
+	size_t xattr_size;
+
+	if (tevent_req_is_unix_error(req, &aio_state->error)) {
+		tevent_req_received(req);
+		return -1;
+	}
+
+	*aio_state = state->aio_state;
+	xattr_size = state->retval;
+	if (xattr_value != NULL) {
+		*xattr_value = talloc_move(mem_ctx, &state->xattr_value);
+	}
+
+	tevent_req_received(req);
+	return xattr_size;
 }
 
 ssize_t smb_vfs_call_fgetxattr(struct vfs_handle_struct *handle,

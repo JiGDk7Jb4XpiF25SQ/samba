@@ -1487,6 +1487,144 @@ static NTSTATUS vfswrap_get_dos_attributes(struct vfs_handle_struct *handle,
 	return get_ea_dos_attribute(handle->conn, smb_fname, dosmode);
 }
 
+struct vfswrap_get_dos_attributes_state {
+	struct vfs_aio_state aio_state;
+	connection_struct *conn;
+	TALLOC_CTX *mem_ctx;
+	const struct smb_vfs_ev_glue *evg;
+	files_struct *dir_fsp;
+	struct smb_filename *smb_fname;
+	uint32_t dosmode;
+	bool as_root;
+};
+
+static void vfswrap_get_dos_attributes_getxattr_done(struct tevent_req *subreq);
+
+static struct tevent_req *vfswrap_get_dos_attributes_send(
+			TALLOC_CTX *mem_ctx,
+			const struct smb_vfs_ev_glue *evg,
+			struct vfs_handle_struct *handle,
+			files_struct *dir_fsp,
+			struct smb_filename *smb_fname)
+{
+	struct tevent_context *ev = smb_vfs_ev_glue_ev_ctx(evg);
+	struct tevent_req *req = NULL;
+	struct tevent_req *subreq = NULL;
+	struct vfswrap_get_dos_attributes_state *state = NULL;
+
+	req = tevent_req_create(mem_ctx, &state,
+				struct vfswrap_get_dos_attributes_state);
+	if (req == NULL) {
+		return NULL;
+	}
+
+	*state = (struct vfswrap_get_dos_attributes_state) {
+		.conn = dir_fsp->conn,
+		.mem_ctx = mem_ctx,
+		.evg = evg,
+		.dir_fsp = dir_fsp,
+		.smb_fname = smb_fname,
+	};
+
+	subreq = SMB_VFS_GETXATTRAT_SEND(state,
+					 evg,
+					 dir_fsp,
+					 smb_fname,
+					 SAMBA_XATTR_DOS_ATTRIB,
+					 sizeof(fstring));
+	if (tevent_req_nomem(subreq, req)) {
+		return tevent_req_post(req, ev);
+	}
+	tevent_req_set_callback(subreq,
+				vfswrap_get_dos_attributes_getxattr_done,
+				req);
+
+	return req;
+}
+
+static void vfswrap_get_dos_attributes_getxattr_done(struct tevent_req *subreq)
+{
+	struct tevent_req *req =
+		tevent_req_callback_data(subreq,
+		struct tevent_req);
+	struct vfswrap_get_dos_attributes_state *state =
+		tevent_req_data(req,
+		struct vfswrap_get_dos_attributes_state);
+	ssize_t xattr_size;
+	DATA_BLOB blob = {0};
+	NTSTATUS status;
+
+	xattr_size = SMB_VFS_GETXATTRAT_RECV(subreq,
+					     &state->aio_state,
+					     state,
+					     &blob.data);
+	TALLOC_FREE(subreq);
+	if (xattr_size == -1) {
+		const struct smb_vfs_ev_glue *root_evg = NULL;
+
+		status = map_nt_error_from_unix(state->aio_state.error);
+
+		if (state->as_root) {
+			tevent_req_nterror(req, status);
+			return;
+		}
+		if (!NT_STATUS_EQUAL(status, NT_STATUS_ACCESS_DENIED)) {
+			tevent_req_nterror(req, status);
+			return;
+		}
+
+		state->as_root = true;
+		root_evg = smb_vfs_ev_glue_get_root_glue(state->evg);
+
+		subreq = SMB_VFS_GETXATTRAT_SEND(state,
+						 root_evg,
+						 state->dir_fsp,
+						 state->smb_fname,
+						 SAMBA_XATTR_DOS_ATTRIB,
+						 sizeof(fstring));
+		if (tevent_req_nomem(subreq, req)) {
+			return;
+		}
+		tevent_req_set_callback(subreq,
+					vfswrap_get_dos_attributes_getxattr_done,
+					req);
+		return;
+	}
+
+	blob.length = xattr_size;
+
+	status = parse_dos_attribute_blob(state->smb_fname,
+					  blob,
+					  &state->dosmode);
+	if (!NT_STATUS_IS_OK(status)) {
+		tevent_req_nterror(req, status);
+		return;
+	}
+
+	tevent_req_done(req);
+	return;
+}
+
+static NTSTATUS vfswrap_get_dos_attributes_recv(struct tevent_req *req,
+						struct vfs_aio_state *aio_state,
+						uint32_t *dosmode)
+{
+	struct vfswrap_get_dos_attributes_state *state =
+		tevent_req_data(req,
+		struct vfswrap_get_dos_attributes_state);
+	NTSTATUS status;
+
+	if (tevent_req_is_nterror(req, &status)) {
+		tevent_req_received(req);
+		return status;
+	}
+
+	*aio_state = state->aio_state;
+	*dosmode = state->dosmode;
+	tevent_req_received(req);
+	return NT_STATUS_OK;
+}
+
 static NTSTATUS vfswrap_fget_dos_attributes(struct vfs_handle_struct *handle,
 					    struct files_struct *fsp,
 					    uint32_t *dosmode)
@@ -2762,6 +2900,211 @@ static ssize_t vfswrap_getxattr(struct vfs_handle_struct *handle,
 	return getxattr(smb_fname->base_name, name, value, size);
 }
 
+struct vfswrap_getxattrat_state {
+	int dirfd;
+	char *name;
+	size_t xattr_bufsize;
+	const char *xattr_name;
+	ssize_t xattr_size;
+	uint8_t *xattr_value;
+
+	struct vfs_aio_state vfs_aio_state;
+	SMBPROFILE_BYTES_ASYNC_STATE(profile_bytes);
+};
+
+static int vfswrap_getxattrat_state_destructor(
+		struct vfswrap_getxattrat_state *state)
+{
+	return -1;
+}
+
+static void vfswrap_getxattrat_do(void *private_data);
+static void vfswrap_getxattrat_done(struct tevent_req *subreq);
+
+static struct tevent_req *vfswrap_getxattrat_send(
+			TALLOC_CTX *mem_ctx,
+			const struct smb_vfs_ev_glue *evg,
+			struct vfs_handle_struct *handle,
+			files_struct *dir_fsp,
+			const struct smb_filename *smb_fname,
+			const char *xattr_name,
+			size_t alloc_hint)
+{
+	struct tevent_context *ev = smb_vfs_ev_glue_ev_ctx(evg);
+	struct pthreadpool_tevent *tp = smb_vfs_ev_glue_tp_chdir_safe(evg);
+	struct tevent_req *req = NULL;
+	struct tevent_req *subreq = NULL;
+	struct vfswrap_getxattrat_state *state = NULL;
+
+	req = tevent_req_create(mem_ctx, &state,
+				struct vfswrap_getxattrat_state);
+	if (req == NULL) {
+		return NULL;
+	}
+	*state = (struct vfswrap_getxattrat_state) {
+		.dirfd = dir_fsp->fh->fd,
+		.xattr_bufsize = alloc_hint,
+	};
+
+	SMBPROFILE_BYTES_ASYNC_START(syscall_asys_getxattrat, profile_p,
+				     state->profile_bytes, 0);
+
+	if (state->dirfd == -1) {
+		DBG_ERR("Need a valid directory fd\n");
+		tevent_req_error(req, EINVAL);
+		return tevent_req_post(req, ev);
+	}
+
+	/*
+	 * Now allocate all parameters from a memory context that won't go away
+	 * no matter what. These paremeters will get used in threads and we
+	 * can't reliably cancel threads, so all buffers passed to the threads
+	 * must not be freed before all referencing threads terminate.
+	 */
+
+	state->name = talloc_strdup(state, smb_fname->base_name);
+	if (tevent_req_nomem(state->name, req)) {
+		return tevent_req_post(req, ev);
+	}
+
+	state->xattr_name = talloc_strdup(state, xattr_name);
+	if (tevent_req_nomem(state->xattr_name, req)) {
+		return tevent_req_post(req, ev);
+	}
+
+	if (state->xattr_bufsize > 0) {
+		state->xattr_value = talloc_zero_array(state,
+						       uint8_t,
+						       state->xattr_bufsize);
+		if (tevent_req_nomem(state->xattr_value, req)) {
+			return tevent_req_post(req, ev);
+		}
+	}
+
+	SMBPROFILE_BYTES_ASYNC_SET_IDLE(state->profile_bytes);
+
+	subreq = pthreadpool_tevent_job_send(state,
+					     ev,
+					     tp,
+					     vfswrap_getxattrat_do,
+					     state);
+	if (tevent_req_nomem(subreq, req)) {
+		return tevent_req_post(req, ev);
+	}
+	tevent_req_set_callback(subreq, vfswrap_getxattrat_done, req);
+
+	talloc_set_destructor(state, vfswrap_getxattrat_state_destructor);
+
+	return req;
+}
+
+static void vfswrap_getxattrat_do(void *private_data)
+{
+	struct vfswrap_getxattrat_state *state = talloc_get_type_abort(
+		private_data, struct vfswrap_getxattrat_state);
+	struct timespec start_time;
+	struct timespec end_time;
+	int ret;
+
+	PROFILE_TIMESTAMP(&start_time);
+	SMBPROFILE_BYTES_ASYNC_SET_BUSY(state->profile_bytes);
+
+	/*
+	 * Here we simulate a getxattrat()
+	 * call using fchdir();getxattr()
+	 *
+	 * We don't need to revert the directory
+	 * change as pthreadpool_tevent wrapper
+	 * handlers that.
+	 */
+	SMB_ASSERT(pthreadpool_tevent_current_job_per_thread_cwd());
+
+	ret = fchdir(state->dirfd);
+	if (ret == -1) {
+		state->xattr_size = -1;
+		state->vfs_aio_state.error = errno;
+		goto end_profile;
+	}
+
+	state->xattr_size = getxattr(state->name,
+				     state->xattr_name,
+				     state->xattr_value,
+				     state->xattr_bufsize);
+	if (state->xattr_size == -1) {
+		state->vfs_aio_state.error = errno;
+	}
+
+end_profile:
+	PROFILE_TIMESTAMP(&end_time);
+	state->vfs_aio_state.duration = nsec_time_diff(&end_time, &start_time);
+	SMBPROFILE_BYTES_ASYNC_SET_IDLE(state->profile_bytes);
+}
+
+static void vfswrap_getxattrat_done(struct tevent_req *subreq)
+{
+	struct tevent_req *req = tevent_req_callback_data(
+		subreq, struct tevent_req);
+	struct vfswrap_getxattrat_state *state = tevent_req_data(
+		req, struct vfswrap_getxattrat_state);
+	int ret;
+
+	ret = pthreadpool_tevent_job_recv(subreq);
+	TALLOC_FREE(subreq);
+	SMBPROFILE_BYTES_ASYNC_END(state->profile_bytes);
+	talloc_set_destructor(state, NULL);
+	if (tevent_req_error(req, ret)) {
+		return;
+	}
+
+	if (state->xattr_size == -1) {
+		tevent_req_error(req, state->vfs_aio_state.error);
+		return;
+	}
+
+	if (state->xattr_value == NULL) {
+		/*
+		 * The caller only wanted the size.
+		 */
+		tevent_req_done(req);
+		return;
+	}
+
+	/*
+	 * shrink the buffer to the returned size.
+	 * (can't fail). It means NULL if size is 0.
+	 */
+	state->xattr_value = talloc_realloc(state,
+					    state->xattr_value,
+					    uint8_t,
+					    state->xattr_size);
+
+	tevent_req_done(req);
+}
+
+static ssize_t vfswrap_getxattrat_recv(struct tevent_req *req,
+				       struct vfs_aio_state *aio_state,
+				       TALLOC_CTX *mem_ctx,
+				       uint8_t **xattr_value)
+{
+	struct vfswrap_getxattrat_state *state = tevent_req_data(
+		req, struct vfswrap_getxattrat_state);
+	ssize_t xattr_size;
+
+	if (tevent_req_is_unix_error(req, &aio_state->error)) {
+		tevent_req_received(req);
+		return -1;
+	}
+
+	*aio_state = state->vfs_aio_state;
+	xattr_size = state->xattr_size;
+	if (xattr_value != NULL) {
+		*xattr_value = talloc_move(mem_ctx, &state->xattr_value);
+	}
+
+	tevent_req_received(req);
+	return xattr_size;
+}
+
 static ssize_t vfswrap_fgetxattr(struct vfs_handle_struct *handle, struct files_struct *fsp, const char *name, void *value, size_t size)
 {
 	return fgetxattr(fsp->fh->fd, name, value, size);
@@ -2959,6 +3302,8 @@ static struct vfs_fn_pointers vfs_default_fns = {
 	.set_dos_attributes_fn = vfswrap_set_dos_attributes,
 	.fset_dos_attributes_fn = vfswrap_fset_dos_attributes,
 	.get_dos_attributes_fn = vfswrap_get_dos_attributes,
+	.get_dos_attributes_send_fn = vfswrap_get_dos_attributes_send,
+	.get_dos_attributes_recv_fn = vfswrap_get_dos_attributes_recv,
 	.fget_dos_attributes_fn = vfswrap_fget_dos_attributes,
 	.offload_read_send_fn = vfswrap_offload_read_send,
 	.offload_read_recv_fn = vfswrap_offload_read_recv,
@@ -2986,6 +3331,8 @@ static struct vfs_fn_pointers vfs_default_fns = {
 
 	/* EA operations. */
 	.getxattr_fn = vfswrap_getxattr,
+	.getxattrat_send_fn = vfswrap_getxattrat_send,
+	.getxattrat_recv_fn = vfswrap_getxattrat_recv,
 	.fgetxattr_fn = vfswrap_fgetxattr,
 	.listxattr_fn = vfswrap_listxattr,
 	.flistxattr_fn = vfswrap_flistxattr,

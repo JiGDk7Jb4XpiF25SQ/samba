@@ -73,6 +73,36 @@ static void test_sock_addr_cmp(const char *ip1, const char *ip2,
 }
 
 /*
+ * Test parsing of IP/mask, conversion to string
+ */
+
+static void test_sock_addr_mask_from_string(const char *ip_mask)
+{
+	ctdb_sock_addr sa;
+	unsigned mask;
+	const char *s, *t;
+	int ret;
+
+	ret = ctdb_sock_addr_mask_from_string(ip_mask, &sa, &mask);
+	assert(ret == 0);
+	s = ctdb_sock_addr_to_string(NULL, &sa, false);
+	assert(s != NULL);
+	t = talloc_asprintf(s, "%s/%u", s, mask);
+	assert(strcmp(ip_mask, t) == 0);
+	talloc_free(discard_const(s));
+}
+
+static void test_sock_addr_mask_from_string_bad(const char *ip_mask)
+{
+	ctdb_sock_addr sa;
+	unsigned mask;
+	int ret;
+
+	ret = ctdb_sock_addr_mask_from_string(ip_mask, &sa, &mask);
+	assert(ret == EINVAL);
+}
+
+/*
  * Test parsing of connection, conversion to string
  */
 
@@ -153,7 +183,7 @@ static void test_connection_list_read(const char *s1, const char *s2)
 	TALLOC_CTX *tmp_ctx;
 	int pipefd[2];
 	pid_t pid;
-	struct ctdb_connection_list *conn_list;
+	struct ctdb_connection_list *conn_list = NULL;
 	const char *t;
 	int ret;
 
@@ -182,13 +212,10 @@ static void test_connection_list_read(const char *s1, const char *s2)
 
 	close(pipefd[1]);
 
-	ret = dup2(pipefd[0], STDIN_FILENO);
-	assert(ret != -1);
+	ret = ctdb_connection_list_read(tmp_ctx, pipefd[0], false, &conn_list);
+	assert(ret == 0);
 
 	close(pipefd[0]);
-
-	ret = ctdb_connection_list_read(tmp_ctx, false, &conn_list);
-	assert(ret == 0);
 
 	ret = ctdb_connection_list_sort(conn_list);
 	assert(ret == 0);
@@ -206,7 +233,7 @@ static void test_connection_list_read_bad(const char *s1)
 	TALLOC_CTX *tmp_ctx;
 	int pipefd[2];
 	pid_t pid;
-	struct ctdb_connection_list *conn_list;
+	struct ctdb_connection_list *conn_list = NULL;
 	int ret;
 
 	tmp_ctx = talloc_new(NULL);
@@ -234,13 +261,10 @@ static void test_connection_list_read_bad(const char *s1)
 
 	close(pipefd[1]);
 
-	ret = dup2(pipefd[0], STDIN_FILENO);
-	assert(ret != -1);
+	ret = ctdb_connection_list_read(tmp_ctx, pipefd[0], false, &conn_list);
+	assert(ret == EINVAL);
 
 	close(pipefd[0]);
-
-	ret = ctdb_connection_list_read(tmp_ctx, false, &conn_list);
-	assert(ret == EINVAL);
 
 	talloc_free(tmp_ctx);
 }
@@ -323,6 +347,11 @@ int main(int argc, char *argv[])
 	test_sock_addr_cmp("127.0.0.1:123", "127.0.0.1:124" , true, -1);
 	test_sock_addr_cmp("fe80::6af7:28ff:fefa:d136:123",
 			   "fe80::6af7:28ff:fefa:d136:122" , true, 1);
+
+	test_sock_addr_mask_from_string("127.0.0.1/8");
+	test_sock_addr_mask_from_string("::1/128");
+	test_sock_addr_mask_from_string("fe80::6af7:28ff:fefa:d136/64");
+	test_sock_addr_mask_from_string_bad("127.0.0.1");
 
 	test_connection_to_string("127.0.0.1:12345 127.0.0.2:54321");
 	test_connection_to_string("fe80::6af7:28ff:fefa:d137:12345 "

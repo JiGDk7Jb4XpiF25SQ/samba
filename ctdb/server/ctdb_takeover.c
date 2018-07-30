@@ -33,6 +33,8 @@
 #include "lib/util/sys_rw.h"
 #include "lib/util/util_process.h"
 
+#include "protocol/protocol_util.h"
+
 #include "ctdb_private.h"
 #include "ctdb_client.h"
 
@@ -464,7 +466,7 @@ static void ctdb_do_takeip_callback(struct ctdb_context *ctdb, int status,
 	TDB_DATA data;
 
 	if (status != 0) {
-		if (status == -ETIME) {
+		if (status == -ETIMEDOUT) {
 			ctdb_ban_self(ctdb);
 		}
 		DEBUG(DEBUG_ERR,(__location__ " Failed to takeover IP %s on interface %s\n",
@@ -585,7 +587,7 @@ static void ctdb_do_updateip_callback(struct ctdb_context *ctdb, int status,
 		talloc_get_type(private_data, struct ctdb_do_updateip_state);
 
 	if (status != 0) {
-		if (status == -ETIME) {
+		if (status == -ETIMEDOUT) {
 			ctdb_ban_self(ctdb);
 		}
 		DEBUG(DEBUG_ERR,
@@ -884,7 +886,7 @@ static void release_ip_callback(struct ctdb_context *ctdb, int status,
 	struct release_ip_callback_state *state =
 		talloc_get_type(private_data, struct release_ip_callback_state);
 
-	if (status == -ETIME) {
+	if (status == -ETIMEDOUT) {
 		ctdb_ban_self(ctdb);
 	}
 
@@ -1156,6 +1158,7 @@ int ctdb_set_public_addresses(struct ctdb_context *ctdb, bool check_addresses)
 		const char *addrstr;
 		const char *ifaces;
 		char *tok, *line;
+		int ret;
 
 		line = lines[i];
 		while ((*line == ' ') || (*line == '\t')) {
@@ -1179,11 +1182,21 @@ int ctdb_set_public_addresses(struct ctdb_context *ctdb, bool check_addresses)
 		}
 		ifaces = tok;
 
-		if (!addrstr || !parse_ip_mask(addrstr, ifaces, &addr, &mask)) {
-			DEBUG(DEBUG_CRIT,("Badly formed line %u in public address list\n", i+1));
+		if (addrstr == NULL) {
+			D_ERR("Badly formed line %u in public address list\n",
+			      i+1);
 			talloc_free(lines);
 			return -1;
 		}
+
+		ret = ctdb_sock_addr_mask_from_string(addrstr, &addr, &mask);
+		if (ret != 0) {
+			D_ERR("Badly formed line %u in public address list\n",
+			      i+1);
+			talloc_free(lines);
+			return -1;
+		}
+
 		if (ctdb_add_public_address(ctdb, &addr, mask, ifaces, check_addresses)) {
 			DEBUG(DEBUG_CRIT,("Failed to add line %u to the public address list\n", i+1));
 			talloc_free(lines);
@@ -2257,7 +2270,7 @@ static void ctdb_ipreallocated_callback(struct ctdb_context *ctdb,
 		DEBUG(DEBUG_ERR,
 		      (" \"ipreallocated\" event script failed (status %d)\n",
 		       status));
-		if (status == -ETIME) {
+		if (status == -ETIMEDOUT) {
 			ctdb_ban_self(ctdb);
 		}
 	}

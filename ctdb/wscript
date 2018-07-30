@@ -402,9 +402,10 @@ def build(bld):
                                              pkt_read.c pkt_write.c comm.c
                                              logging.c rb_tree.c tunable.c
                                              pidfile.c run_proc.c
-                                             hash_count.c run_event.c
+                                             hash_count.c
+                                             run_event.c event_script.c
                                              sock_client.c version.c
-                                             cmdline.c path.c conf.c
+                                             cmdline.c path.c conf.c line.c
                                           '''),
                         deps='''samba-util sys_rw tevent-util
                                 replace talloc tevent tdb popt''')
@@ -434,7 +435,7 @@ def build(bld):
 
     bld.SAMBA_SUBSYSTEM('ctdb-protocol-util',
                         source='protocol/protocol_util.c',
-                        deps='replace talloc tdb')
+                        deps='ctdb-util replace talloc tdb')
 
     bld.SAMBA_SUBSYSTEM('ctdb-client',
                         source=bld.SUBDIR('client',
@@ -842,6 +843,16 @@ def build(bld):
     for d in ['volatile', 'persistent', 'state']:
         bld.install_dir(os.path.join(bld.env.CTDB_VARDIR, d))
 
+    bld.SAMBA_BINARY('errcode',
+                     source='tests/src/errcode.c',
+                     deps='replace',
+                     install_path='${CTDB_TEST_LIBEXECDIR}')
+
+    bld.SAMBA_BINARY('sigcode',
+                     source='tests/src/sigcode.c',
+                     deps='replace',
+                     install_path='${CTDB_TEST_LIBEXECDIR}')
+
     # Unit tests
     ctdb_unit_tests = [
         'db_hash_test',
@@ -858,6 +869,8 @@ def build(bld):
         'run_event_test',
         'cmdline_test',
         'conf_test',
+        'line_test',
+        'event_script_test',
     ]
 
     for target in ctdb_unit_tests:
@@ -927,7 +940,7 @@ def build(bld):
         bld.SAMBA_BINARY(target,
                          source=src,
                          deps='''ctdb-protocol-tests-common
-                                 samba-util talloc tdb''',
+                                 samba-util ctdb-util talloc tdb''',
                          install_path='${CTDB_TEST_LIBEXECDIR}')
 
     bld.SAMBA_BINARY('event_protocol_test',
