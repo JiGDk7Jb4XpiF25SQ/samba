@@ -1,4 +1,4 @@
-/* 
+/*
    ldb database library
 
    Copyright (C) Andrew Tridgell  2004
@@ -6,7 +6,7 @@
      ** NOTE! The following LGPL license applies to the ldb
      ** library. This does NOT imply that all of Samba is released
      ** under the LGPL
-   
+
    This library is free software; you can redistribute it and/or
    modify it under the terms of the GNU Lesser General Public
    License as published by the Free Software Foundation; either
@@ -31,14 +31,13 @@
  *  Author: Andrew Tridgell
  */
 
-#include "ldb_tdb.h"
+#include "ldb_kv.h"
 #include "ldb_private.h"
-#include <tdb.h>
 
 /*
   add one element to a message
 */
-static int msg_add_element(struct ldb_message *ret, 
+static int msg_add_element(struct ldb_message *ret,
 			   const struct ldb_message_element *el,
 			   int check_duplicates)
 {
@@ -55,7 +54,7 @@ static int msg_add_element(struct ldb_message *ret,
 		return -1;
 	}
 	ret->elements = e2;
-	
+
 	elnew = &e2[ret->num_elements];
 
 	elnew->name = talloc_strdup(ret->elements, el->name);
@@ -116,10 +115,10 @@ static int msg_add_distinguished_name(struct ldb_message *msg)
   return LDB_ERR_NO_SUCH_OBJECT on record-not-found
   and LDB_SUCCESS on success
 */
-int ltdb_search_base(struct ldb_module *module,
-		     TALLOC_CTX *mem_ctx,
-		     struct ldb_dn *dn,
-		     struct ldb_dn **ret_dn)
+int ldb_kv_search_base(struct ldb_module *module,
+		       TALLOC_CTX *mem_ctx,
+		       struct ldb_dn *dn,
+		       struct ldb_dn **ret_dn)
 {
 	int exists;
 	int ret;
@@ -141,9 +140,7 @@ int ltdb_search_base(struct ldb_module *module,
 		return LDB_ERR_OPERATIONS_ERROR;
 	}
 
-	ret = ltdb_search_dn1(module, dn,
-			      msg,
-			      LDB_UNPACK_DATA_FLAG_NO_ATTRS);
+	ret = ldb_kv_search_dn1(module, dn, msg, LDB_UNPACK_DATA_FLAG_NO_ATTRS);
 	if (ret == LDB_SUCCESS) {
 		const char *dn_linearized
 			= ldb_dn_get_linearized(dn);
@@ -177,17 +174,17 @@ int ltdb_search_base(struct ldb_module *module,
 	return LDB_ERR_NO_SUCH_OBJECT;
 }
 
-struct ltdb_parse_data_unpack_ctx {
+struct ldb_kv_parse_data_unpack_ctx {
 	struct ldb_message *msg;
 	struct ldb_module *module;
 	unsigned int unpack_flags;
 };
 
-static int ltdb_parse_data_unpack(struct ldb_val key,
-				  struct ldb_val data,
-				  void *private_data)
+static int ldb_kv_parse_data_unpack(struct ldb_val key,
+				    struct ldb_val data,
+				    void *private_data)
 {
-	struct ltdb_parse_data_unpack_ctx *ctx = private_data;
+	struct ldb_kv_parse_data_unpack_ctx *ctx = private_data;
 	unsigned int nb_elements_in_db;
 	int ret;
 	struct ldb_context *ldb = ldb_module_get_ctx(ctx->module);
@@ -236,20 +233,17 @@ static int ltdb_parse_data_unpack(struct ldb_val key,
   return LDB_ERR_NO_SUCH_OBJECT on record-not-found
   and LDB_SUCCESS on success
 */
-int ltdb_search_key(struct ldb_module *module, struct ltdb_private *ltdb,
-		    const struct TDB_DATA tdb_key,
-		    struct ldb_message *msg,
-		    unsigned int unpack_flags)
+int ldb_kv_search_key(struct ldb_module *module,
+		      struct ldb_kv_private *ldb_kv,
+		      const struct ldb_val ldb_key,
+		      struct ldb_message *msg,
+		      unsigned int unpack_flags)
 {
 	int ret;
-	struct ltdb_parse_data_unpack_ctx ctx = {
+	struct ldb_kv_parse_data_unpack_ctx ctx = {
 		.msg = msg,
 		.module = module,
 		.unpack_flags = unpack_flags
-	};
-	struct ldb_val ldb_key = {
-		.data = tdb_key.dptr,
-		.length = tdb_key.dsize
 	};
 
 	memset(msg, 0, sizeof(*msg));
@@ -257,11 +251,11 @@ int ltdb_search_key(struct ldb_module *module, struct ltdb_private *ltdb,
 	msg->num_elements = 0;
 	msg->elements = NULL;
 
-	ret = ltdb->kv_ops->fetch_and_parse(ltdb, ldb_key,
-					    ltdb_parse_data_unpack, &ctx);
+	ret = ldb_kv->kv_ops->fetch_and_parse(
+	    ldb_kv, ldb_key, ldb_kv_parse_data_unpack, &ctx);
 
 	if (ret == -1) {
-		ret = ltdb->kv_ops->error(ltdb);
+		ret = ldb_kv->kv_ops->error(ldb_kv);
 		if (ret == LDB_SUCCESS) {
 			/*
 			 * Just to be sure we don't turn errors
@@ -284,21 +278,24 @@ int ltdb_search_key(struct ldb_module *module, struct ltdb_private *ltdb,
   return LDB_ERR_NO_SUCH_OBJECT on record-not-found
   and LDB_SUCCESS on success
 */
-int ltdb_search_dn1(struct ldb_module *module, struct ldb_dn *dn, struct ldb_message *msg,
-		    unsigned int unpack_flags)
+int ldb_kv_search_dn1(struct ldb_module *module,
+		      struct ldb_dn *dn,
+		      struct ldb_message *msg,
+		      unsigned int unpack_flags)
 {
 	void *data = ldb_module_get_private(module);
-	struct ltdb_private *ltdb = talloc_get_type(data, struct ltdb_private);
+	struct ldb_kv_private *ldb_kv =
+	    talloc_get_type(data, struct ldb_kv_private);
 	int ret;
-	uint8_t guid_key[LTDB_GUID_KEY_SIZE];
-	TDB_DATA tdb_key = {
-		.dptr = guid_key,
-		.dsize = sizeof(guid_key)
+	uint8_t guid_key[LDB_KV_GUID_KEY_SIZE];
+	struct ldb_val key = {
+		.data = guid_key,
+		.length = sizeof(guid_key)
 	};
 	TALLOC_CTX *tdb_key_ctx = NULL;
 
-	if (ltdb->cache->GUID_index_attribute == NULL ||
-		ldb_dn_is_special(dn)) {
+	if (ldb_kv->cache->GUID_index_attribute == NULL ||
+	    ldb_dn_is_special(dn)) {
 
 		tdb_key_ctx = talloc_new(msg);
 		if (!tdb_key_ctx) {
@@ -306,8 +303,8 @@ int ltdb_search_dn1(struct ldb_module *module, struct ldb_dn *dn, struct ldb_mes
 		}
 
 		/* form the key */
-		tdb_key = ltdb_key_dn(module, tdb_key_ctx, dn);
-		if (!tdb_key.dptr) {
+		key = ldb_kv_key_dn(module, tdb_key_ctx, dn);
+		if (!key.data) {
 			TALLOC_FREE(tdb_key_ctx);
 			return LDB_ERR_OPERATIONS_ERROR;
 		}
@@ -319,15 +316,13 @@ int ltdb_search_dn1(struct ldb_module *module, struct ldb_dn *dn, struct ldb_mes
 		 * used for internal memory.
 		 *
 		 */
-		ret = ltdb_key_dn_from_idx(module, ltdb,
-					   msg,
-					   dn, &tdb_key);
+		ret = ldb_kv_key_dn_from_idx(module, ldb_kv, msg, dn, &key);
 		if (ret != LDB_SUCCESS) {
 			return ret;
 		}
 	}
 
-	ret = ltdb_search_key(module, ltdb, tdb_key, msg, unpack_flags);
+	ret = ldb_kv_search_key(module, ldb_kv, key, msg, unpack_flags);
 
 	TALLOC_FREE(tdb_key_ctx);
 
@@ -355,9 +350,10 @@ int ltdb_search_dn1(struct ldb_module *module, struct ldb_dn *dn, struct ldb_mes
   individually allocated, which is what our callers expect.
 
  */
-int ltdb_filter_attrs(TALLOC_CTX *mem_ctx,
-		      const struct ldb_message *msg, const char * const *attrs,
-		      struct ldb_message **filtered_msg)
+int ldb_kv_filter_attrs(TALLOC_CTX *mem_ctx,
+			const struct ldb_message *msg,
+			const char *const *attrs,
+			struct ldb_message **filtered_msg)
 {
 	unsigned int i;
 	bool keep_all = false;
@@ -493,23 +489,22 @@ failed:
 /*
   search function for a non-indexed search
  */
-static int search_func(struct ltdb_private *ltdb, struct ldb_val key, struct ldb_val val, void *state)
+static int search_func(struct ldb_kv_private *ldb_kv,
+		       struct ldb_val key,
+		       struct ldb_val val,
+		       void *state)
 {
 	struct ldb_context *ldb;
-	struct ltdb_context *ac;
+	struct ldb_kv_context *ac;
 	struct ldb_message *msg, *filtered_msg;
 	int ret;
 	bool matched;
 	unsigned int nb_elements_in_db;
-	TDB_DATA tdb_key = {
-		.dptr = key.data,
-		.dsize = key.length
-	};
 
-	ac = talloc_get_type(state, struct ltdb_context);
+	ac = talloc_get_type(state, struct ldb_kv_context);
 	ldb = ldb_module_get_ctx(ac->module);
 
-	if (ltdb_key_is_record(tdb_key) == false) {
+	if (ldb_kv_key_is_record(key) == false) {
 		return 0;
 	}
 
@@ -556,7 +551,7 @@ static int search_func(struct ltdb_private *ltdb, struct ldb_val key, struct ldb
 	}
 
 	/* filter the attributes that the user wants */
-	ret = ltdb_filter_attrs(ac, msg, ac->attrs, &filtered_msg);
+	ret = ldb_kv_filter_attrs(ac, msg, ac->attrs, &filtered_msg);
 	talloc_free(msg);
 
 	if (ret == -1) {
@@ -580,14 +575,15 @@ static int search_func(struct ltdb_private *ltdb, struct ldb_val key, struct ldb
   search the database with a LDAP-like expression.
   this is the "full search" non-indexed variant
 */
-static int ltdb_search_full(struct ltdb_context *ctx)
+static int ldb_kv_search_full(struct ldb_kv_context *ctx)
 {
 	void *data = ldb_module_get_private(ctx->module);
-	struct ltdb_private *ltdb = talloc_get_type(data, struct ltdb_private);
+	struct ldb_kv_private *ldb_kv =
+	    talloc_get_type(data, struct ldb_kv_private);
 	int ret;
 
 	ctx->error = LDB_SUCCESS;
-	ret = ltdb->kv_ops->iterate(ltdb, search_func, ctx);
+	ret = ldb_kv->kv_ops->iterate(ldb_kv, search_func, ctx);
 
 	if (ret < 0) {
 		return LDB_ERR_OPERATIONS_ERROR;
@@ -596,8 +592,8 @@ static int ltdb_search_full(struct ltdb_context *ctx)
 	return ctx->error;
 }
 
-static int ltdb_search_and_return_base(struct ltdb_private *ltdb,
-				       struct ltdb_context *ctx)
+static int ldb_kv_search_and_return_base(struct ldb_kv_private *ldb_kv,
+					 struct ldb_kv_context *ctx)
 {
 	struct ldb_message *msg, *filtered_msg;
 	struct ldb_context *ldb = ldb_module_get_ctx(ctx->module);
@@ -610,12 +606,14 @@ static int ltdb_search_and_return_base(struct ltdb_private *ltdb,
 	if (!msg) {
 		return LDB_ERR_OPERATIONS_ERROR;
 	}
-	ret = ltdb_search_dn1(ctx->module, ctx->base, msg,
-			      LDB_UNPACK_DATA_FLAG_NO_DATA_ALLOC|
-			      LDB_UNPACK_DATA_FLAG_NO_VALUES_ALLOC);
+	ret = ldb_kv_search_dn1(ctx->module,
+				ctx->base,
+				msg,
+				LDB_UNPACK_DATA_FLAG_NO_DATA_ALLOC |
+				    LDB_UNPACK_DATA_FLAG_NO_VALUES_ALLOC);
 
 	if (ret == LDB_ERR_NO_SUCH_OBJECT) {
-		if (ltdb->check_base == false) {
+		if (ldb_kv->check_base == false) {
 			/*
 			 * In this case, we are done, as no base
 			 * checking is allowed in this DB
@@ -671,7 +669,7 @@ static int ltdb_search_and_return_base(struct ltdb_private *ltdb,
 	 * This copies msg->dn including the casefolding, so the above
 	 * assignment is safe
 	 */
-	ret = ltdb_filter_attrs(ctx, msg, ctx->attrs, &filtered_msg);
+	ret = ldb_kv_filter_attrs(ctx, msg, ctx->attrs, &filtered_msg);
 
 	/*
 	 * Remove any extended components possibly copied in from
@@ -700,30 +698,31 @@ static int ltdb_search_and_return_base(struct ltdb_private *ltdb,
   search the database with a LDAP-like expression.
   choses a search method
 */
-int ltdb_search(struct ltdb_context *ctx)
+int ldb_kv_search(struct ldb_kv_context *ctx)
 {
 	struct ldb_context *ldb;
 	struct ldb_module *module = ctx->module;
 	struct ldb_request *req = ctx->req;
 	void *data = ldb_module_get_private(module);
-	struct ltdb_private *ltdb = talloc_get_type(data, struct ltdb_private);
+	struct ldb_kv_private *ldb_kv =
+	    talloc_get_type(data, struct ldb_kv_private);
 	int ret;
 
 	ldb = ldb_module_get_ctx(module);
 
 	ldb_request_set_state(req, LDB_ASYNC_PENDING);
 
-	if (ltdb->kv_ops->lock_read(module) != 0) {
+	if (ldb_kv->kv_ops->lock_read(module) != 0) {
 		return LDB_ERR_OPERATIONS_ERROR;
 	}
 
-	if (ltdb_cache_load(module) != 0) {
-		ltdb->kv_ops->unlock_read(module);
+	if (ldb_kv_cache_load(module) != 0) {
+		ldb_kv->kv_ops->unlock_read(module);
 		return LDB_ERR_OPERATIONS_ERROR;
 	}
 
 	if (req->op.search.tree == NULL) {
-		ltdb->kv_ops->unlock_read(module);
+		ldb_kv->kv_ops->unlock_read(module);
 		return LDB_ERR_OPERATIONS_ERROR;
 	}
 
@@ -737,14 +736,14 @@ int ltdb_search(struct ltdb_context *ctx)
 		/* Check what we should do with a NULL dn */
 		switch (req->op.search.scope) {
 		case LDB_SCOPE_BASE:
-			ldb_asprintf_errstring(ldb, 
+			ldb_asprintf_errstring(ldb,
 					       "NULL Base DN invalid for a base search");
 			ret = LDB_ERR_INVALID_DN_SYNTAX;
 			break;
 		case LDB_SCOPE_ONELEVEL:
-			ldb_asprintf_errstring(ldb, 
+			ldb_asprintf_errstring(ldb,
 					       "NULL Base DN invalid for a one-level search");
-			ret = LDB_ERR_INVALID_DN_SYNTAX;	
+			ret = LDB_ERR_INVALID_DN_SYNTAX;
 			break;
 		case LDB_SCOPE_SUBTREE:
 		default:
@@ -754,8 +753,8 @@ int ltdb_search(struct ltdb_context *ctx)
 	} else if (ldb_dn_is_valid(req->op.search.base) == false) {
 
 		/* We don't want invalid base DNs here */
-		ldb_asprintf_errstring(ldb, 
-				       "Invalid Base DN: %s", 
+		ldb_asprintf_errstring(ldb,
+				       "Invalid Base DN: %s",
 				       ldb_dn_get_linearized(req->op.search.base));
 		ret = LDB_ERR_INVALID_DN_SYNTAX;
 
@@ -768,29 +767,28 @@ int ltdb_search(struct ltdb_context *ctx)
 		 * will try to look up an index record for a special
 		 * record (which doesn't exist).
 		 */
-		ret = ltdb_search_and_return_base(ltdb, ctx);
+		ret = ldb_kv_search_and_return_base(ldb_kv, ctx);
 
-		ltdb->kv_ops->unlock_read(module);
+		ldb_kv->kv_ops->unlock_read(module);
 
 		return ret;
 
-	} else if (ltdb->check_base) {
+	} else if (ldb_kv->check_base) {
 		/*
 		 * This database has been marked as
 		 * 'checkBaseOnSearch', so do a spot check of the base
 		 * dn.  Also optimise the subsequent filter by filling
 		 * in the ctx->base to be exactly case correct
 		 */
-		ret = ltdb_search_base(module, ctx,
-				       req->op.search.base,
-				       &ctx->base);
-		
+		ret = ldb_kv_search_base(
+		    module, ctx, req->op.search.base, &ctx->base);
+
 		if (ret == LDB_ERR_NO_SUCH_OBJECT) {
-			ldb_asprintf_errstring(ldb, 
-					       "No such Base DN: %s", 
+			ldb_asprintf_errstring(ldb,
+					       "No such Base DN: %s",
 					       ldb_dn_get_linearized(req->op.search.base));
 		}
-			
+
 	} else {
 		/* If we are not checking the base DN life is easy */
 		ret = LDB_SUCCESS;
@@ -799,18 +797,19 @@ int ltdb_search(struct ltdb_context *ctx)
 	if (ret == LDB_SUCCESS) {
 		uint32_t match_count = 0;
 
-		ret = ltdb_search_indexed(ctx, &match_count);
+		ret = ldb_kv_search_indexed(ctx, &match_count);
 		if (ret == LDB_ERR_NO_SUCH_OBJECT) {
 			/* Not in the index, therefore OK! */
 			ret = LDB_SUCCESS;
-			
+
 		}
 		/* Check if we got just a normal error.
 		 * In that case proceed to a full search unless we got a
 		 * callback error */
-		if ( ! ctx->request_terminated && ret != LDB_SUCCESS) {
+		if (!ctx->request_terminated && ret != LDB_SUCCESS) {
 			/* Not indexed, so we need to do a full scan */
-			if (ltdb->warn_unindexed || ltdb->disable_full_db_scan) {
+			if (ldb_kv->warn_unindexed ||
+			    ldb_kv->disable_full_db_scan) {
 				/* useful for debugging when slow performance
 				 * is caused by unindexed searches */
 				char *expression = ldb_filter_from_tree(ctx, ctx->tree);
@@ -833,26 +832,25 @@ int ltdb_search(struct ltdb_context *ctx)
 				 * full search or we may return
 				 * duplicate entries
 				 */
-				ltdb->kv_ops->unlock_read(module);
+				ldb_kv->kv_ops->unlock_read(module);
 				return LDB_ERR_OPERATIONS_ERROR;
 			}
 
-			if (ltdb->disable_full_db_scan) {
+			if (ldb_kv->disable_full_db_scan) {
 				ldb_set_errstring(ldb,
 						  "ldb FULL SEARCH disabled");
-				ltdb->kv_ops->unlock_read(module);
+				ldb_kv->kv_ops->unlock_read(module);
 				return LDB_ERR_INAPPROPRIATE_MATCHING;
 			}
 
-			ret = ltdb_search_full(ctx);
+			ret = ldb_kv_search_full(ctx);
 			if (ret != LDB_SUCCESS) {
 				ldb_set_errstring(ldb, "Indexed and full searches both failed!\n");
 			}
 		}
 	}
 
-	ltdb->kv_ops->unlock_read(module);
+	ldb_kv->kv_ops->unlock_read(module);
 
 	return ret;
 }
-

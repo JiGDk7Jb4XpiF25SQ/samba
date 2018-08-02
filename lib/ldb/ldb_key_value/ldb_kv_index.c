@@ -24,16 +24,16 @@
 /*
  *  Name: ldb
  *
- *  Component: ldb tdb backend - indexing
+ *  Component: ldb key value backend - indexing
  *
- *  Description: indexing routines for ldb tdb backend
+ *  Description: indexing routines for ldb key value backend
  *
  *  Author: Andrew Tridgell
  */
 
 /*
 
-LDB Index design and choice of TDB key:
+LDB Index design and choice of key:
 =======================================
 
 LDB has index records held as LDB objects with a special record like:
@@ -144,7 +144,8 @@ ldb_schema_set_override_GUID_index() must be called.
 
 */
 
-#include "ldb_tdb.h"
+#include "ldb_kv.h"
+#include "../ldb_tdb/ldb_tdb.h"
 #include "ldb_private.h"
 #include "lib/util/binsearch.h"
 
@@ -160,7 +161,7 @@ struct dn_list {
 	bool strict;
 };
 
-struct ltdb_idxptr {
+struct ldb_kv_idxptr {
 	struct tdb_context *itdb;
 	int error;
 };
@@ -170,38 +171,40 @@ enum key_truncation {
 	KEY_TRUNCATED,
 };
 
-static int ltdb_write_index_dn_guid(struct ldb_module *module,
-				    const struct ldb_message *msg,
-				    int add);
-static int ltdb_index_dn_base_dn(struct ldb_module *module,
-				 struct ltdb_private *ltdb,
-				 struct ldb_dn *base_dn,
-				 struct dn_list *dn_list,
-				 enum key_truncation *truncation);
+static int ldb_kv_write_index_dn_guid(struct ldb_module *module,
+				      const struct ldb_message *msg,
+				      int add);
+static int ldb_kv_index_dn_base_dn(struct ldb_module *module,
+				   struct ldb_kv_private *ldb_kv,
+				   struct ldb_dn *base_dn,
+				   struct dn_list *dn_list,
+				   enum key_truncation *truncation);
 
-static void ltdb_dn_list_sort(struct ltdb_private *ltdb,
-			      struct dn_list *list);
+static void ldb_kv_dn_list_sort(struct ldb_kv_private *ldb_kv,
+				struct dn_list *list);
 
 /* we put a @IDXVERSION attribute on index entries. This
    allows us to tell if it was written by an older version
 */
-#define LTDB_INDEXING_VERSION 2
+#define LDB_KV_INDEXING_VERSION 2
 
-#define LTDB_GUID_INDEXING_VERSION 3
+#define LDB_KV_GUID_INDEXING_VERSION 3
 
-static unsigned ltdb_max_key_length(struct ltdb_private *ltdb) {
-	if (ltdb->max_key_length == 0){
+static unsigned ldb_kv_max_key_length(struct ldb_kv_private *ldb_kv)
+{
+	if (ldb_kv->max_key_length == 0) {
 		return UINT_MAX;
 	}
-	return ltdb->max_key_length;
+	return ldb_kv->max_key_length;
 }
 
 /* enable the idxptr mode when transactions start */
-int ltdb_index_transaction_start(struct ldb_module *module)
+int ldb_kv_index_transaction_start(struct ldb_module *module)
 {
-	struct ltdb_private *ltdb = talloc_get_type(ldb_module_get_private(module), struct ltdb_private);
-	ltdb->idxptr = talloc_zero(ltdb, struct ltdb_idxptr);
-	if (ltdb->idxptr == NULL) {
+	struct ldb_kv_private *ldb_kv = talloc_get_type(
+	    ldb_module_get_private(module), struct ldb_kv_private);
+	ldb_kv->idxptr = talloc_zero(ldb_kv, struct ldb_kv_idxptr);
+	if (ldb_kv->idxptr == NULL) {
 		return ldb_oom(ldb_module_get_ctx(module));
 	}
 
@@ -247,14 +250,14 @@ static int ldb_val_equal_exact_ordered(const struct ldb_val v1,
 
   This is therefore safe when the value is a GUID in the future
  */
-static int ltdb_dn_list_find_val(struct ltdb_private *ltdb,
-				 const struct dn_list *list,
-				 const struct ldb_val *v)
+static int ldb_kv_dn_list_find_val(struct ldb_kv_private *ldb_kv,
+				   const struct dn_list *list,
+				   const struct ldb_val *v)
 {
 	unsigned int i;
 	struct ldb_val *exact = NULL, *next = NULL;
 
-	if (ltdb->cache->GUID_index_attribute == NULL) {
+	if (ldb_kv->cache->GUID_index_attribute == NULL) {
 		for (i=0; i<list->count; i++) {
 			if (ldb_val_equal_exact(&list->dn[i], v) == 1) {
 				return i;
@@ -282,25 +285,25 @@ static int ltdb_dn_list_find_val(struct ltdb_private *ltdb,
   find a entry in a dn_list. Uses a case sensitive comparison with the dn
   returns -1 if not found
  */
-static int ltdb_dn_list_find_msg(struct ltdb_private *ltdb,
-				 struct dn_list *list,
-				 const struct ldb_message *msg)
+static int ldb_kv_dn_list_find_msg(struct ldb_kv_private *ldb_kv,
+				   struct dn_list *list,
+				   const struct ldb_message *msg)
 {
 	struct ldb_val v;
 	const struct ldb_val *key_val;
-	if (ltdb->cache->GUID_index_attribute == NULL) {
+	if (ldb_kv->cache->GUID_index_attribute == NULL) {
 		const char *dn_str = ldb_dn_get_linearized(msg->dn);
 		v.data = discard_const_p(unsigned char, dn_str);
 		v.length = strlen(dn_str);
 	} else {
-		key_val = ldb_msg_find_ldb_val(msg,
-					       ltdb->cache->GUID_index_attribute);
+		key_val = ldb_msg_find_ldb_val(
+		    msg, ldb_kv->cache->GUID_index_attribute);
 		if (key_val == NULL) {
 			return -1;
 		}
 		v = *key_val;
 	}
-	return ltdb_dn_list_find_val(ltdb, list, &v);
+	return ldb_kv_dn_list_find_val(ldb_kv, list, &v);
 }
 
 /*
@@ -308,7 +311,9 @@ static int ltdb_dn_list_find_msg(struct ltdb_private *ltdb,
   checks and also copes with CPUs that are fussy about pointer
   alignment
  */
-static struct dn_list *ltdb_index_idxptr(struct ldb_module *module, TDB_DATA rec, bool check_parent)
+static struct dn_list *ldb_kv_index_idxptr(struct ldb_module *module,
+					   TDB_DATA rec,
+					   bool check_parent)
 {
 	struct dn_list *list;
 	if (rec.dsize != sizeof(void *)) {
@@ -340,9 +345,10 @@ static struct dn_list *ltdb_index_idxptr(struct ldb_module *module, TDB_DATA rec
   return the @IDX list in an index entry for a dn as a
   struct dn_list
  */
-static int ltdb_dn_list_load(struct ldb_module *module,
-			     struct ltdb_private *ltdb,
-			     struct ldb_dn *dn, struct dn_list *list)
+static int ldb_kv_dn_list_load(struct ldb_module *module,
+			       struct ldb_kv_private *ldb_kv,
+			       struct ldb_dn *dn,
+			       struct dn_list *list)
 {
 	struct ldb_message *msg;
 	int ret, version;
@@ -355,21 +361,20 @@ static int ltdb_dn_list_load(struct ldb_module *module,
 	list->count = 0;
 
 	/* see if we have any in-memory index entries */
-	if (ltdb->idxptr == NULL ||
-	    ltdb->idxptr->itdb == NULL) {
+	if (ldb_kv->idxptr == NULL || ldb_kv->idxptr->itdb == NULL) {
 		goto normal_index;
 	}
 
 	key.dptr = discard_const_p(unsigned char, ldb_dn_get_linearized(dn));
 	key.dsize = strlen((char *)key.dptr);
 
-	rec = tdb_fetch(ltdb->idxptr->itdb, key);
+	rec = tdb_fetch(ldb_kv->idxptr->itdb, key);
 	if (rec.dptr == NULL) {
 		goto normal_index;
 	}
 
 	/* we've found an in-memory index entry */
-	list2 = ltdb_index_idxptr(module, rec, true);
+	list2 = ldb_kv_index_idxptr(module, rec, true);
 	if (list2 == NULL) {
 		free(rec.dptr);
 		return LDB_ERR_OPERATIONS_ERROR;
@@ -385,21 +390,23 @@ normal_index:
 		return LDB_ERR_OPERATIONS_ERROR;
 	}
 
-	ret = ltdb_search_dn1(module, dn, msg,
-			      LDB_UNPACK_DATA_FLAG_NO_DATA_ALLOC
-			      |LDB_UNPACK_DATA_FLAG_NO_DN);
+	ret = ldb_kv_search_dn1(module,
+				dn,
+				msg,
+				LDB_UNPACK_DATA_FLAG_NO_DATA_ALLOC |
+				    LDB_UNPACK_DATA_FLAG_NO_DN);
 	if (ret != LDB_SUCCESS) {
 		talloc_free(msg);
 		return ret;
 	}
 
-	el = ldb_msg_find_element(msg, LTDB_IDX);
+	el = ldb_msg_find_element(msg, LDB_KV_IDX);
 	if (!el) {
 		talloc_free(msg);
 		return LDB_SUCCESS;
 	}
 
-	version = ldb_msg_find_attr_as_int(msg, LTDB_IDXVERSION, 0);
+	version = ldb_msg_find_attr_as_int(msg, LDB_KV_IDXVERSION, 0);
 
 	/*
 	 * we avoid copying the strings by stealing the list.  We have
@@ -407,14 +414,14 @@ normal_index:
 	 * asked for the memory to be allocated on msg, not on each
 	 * value with LDB_UNPACK_DATA_FLAG_NO_DATA_ALLOC above
 	 */
-	if (ltdb->cache->GUID_index_attribute == NULL) {
+	if (ldb_kv->cache->GUID_index_attribute == NULL) {
 		/* check indexing version number */
-		if (version != LTDB_INDEXING_VERSION) {
+		if (version != LDB_KV_INDEXING_VERSION) {
 			ldb_debug_set(ldb_module_get_ctx(module),
 				      LDB_DEBUG_ERROR,
 				      "Wrong DN index version %d "
 				      "expected %d for %s",
-				      version, LTDB_INDEXING_VERSION,
+				      version, LDB_KV_INDEXING_VERSION,
 				      ldb_dn_get_linearized(dn));
 			talloc_free(msg);
 			return LDB_ERR_OPERATIONS_ERROR;
@@ -425,14 +432,14 @@ normal_index:
 		list->count = el->num_values;
 	} else {
 		unsigned int i;
-		if (version != LTDB_GUID_INDEXING_VERSION) {
+		if (version != LDB_KV_GUID_INDEXING_VERSION) {
 			/* This is quite likely during the DB startup
 			   on first upgrade to using a GUID index */
 			ldb_debug_set(ldb_module_get_ctx(module),
 				      LDB_DEBUG_ERROR,
 				      "Wrong GUID index version %d "
 				      "expected %d for %s",
-				      version, LTDB_GUID_INDEXING_VERSION,
+				      version, LDB_KV_GUID_INDEXING_VERSION,
 				      ldb_dn_get_linearized(dn));
 			talloc_free(msg);
 			return LDB_ERR_OPERATIONS_ERROR;
@@ -443,12 +450,12 @@ normal_index:
 			return LDB_ERR_OPERATIONS_ERROR;
 		}
 
-		if ((el->values[0].length % LTDB_GUID_SIZE) != 0) {
+		if ((el->values[0].length % LDB_KV_GUID_SIZE) != 0) {
 			talloc_free(msg);
 			return LDB_ERR_OPERATIONS_ERROR;
 		}
 
-		list->count = el->values[0].length / LTDB_GUID_SIZE;
+		list->count = el->values[0].length / LDB_KV_GUID_SIZE;
 		list->dn = talloc_array(list, struct ldb_val, list->count);
 		if (list->dn == NULL) {
 			talloc_free(msg);
@@ -462,8 +469,8 @@ normal_index:
 		talloc_steal(list->dn, msg);
 		for (i = 0; i < list->count; i++) {
 			list->dn[i].data
-				= &el->values[0].data[i * LTDB_GUID_SIZE];
-			list->dn[i].length = LTDB_GUID_SIZE;
+				= &el->values[0].data[i * LDB_KV_GUID_SIZE];
+			list->dn[i].length = LDB_KV_GUID_SIZE;
 		}
 	}
 
@@ -472,11 +479,11 @@ normal_index:
 	return LDB_SUCCESS;
 }
 
-int ltdb_key_dn_from_idx(struct ldb_module *module,
-			 struct ltdb_private *ltdb,
-			 TALLOC_CTX *mem_ctx,
-			 struct ldb_dn *dn,
-			 TDB_DATA *tdb_key)
+int ldb_kv_key_dn_from_idx(struct ldb_module *module,
+			   struct ldb_kv_private *ldb_kv,
+			   TALLOC_CTX *mem_ctx,
+			   struct ldb_dn *dn,
+			   struct ldb_val *ldb_key)
 {
 	struct ldb_context *ldb = ldb_module_get_ctx(module);
 	int ret;
@@ -488,8 +495,7 @@ int ltdb_key_dn_from_idx(struct ldb_module *module,
 		return LDB_ERR_OPERATIONS_ERROR;
 	}
 
-
-	ret = ltdb_index_dn_base_dn(module, ltdb, dn, list, &truncation);
+	ret = ldb_kv_index_dn_base_dn(module, ldb_kv, dn, list, &truncation);
 	if (ret != LDB_SUCCESS) {
 		TALLOC_FREE(list);
 		return ret;
@@ -507,8 +513,9 @@ int ltdb_key_dn_from_idx(struct ldb_module *module,
 				       ": Failed to read DN index "
 				       "against %s for %s: too many "
 				       "values (%u > 1)",
-				       ltdb->cache->GUID_index_attribute,
-				       dn_str, list->count);
+				       ldb_kv->cache->GUID_index_attribute,
+				       dn_str,
+				       list->count);
 		TALLOC_FREE(list);
 		return LDB_ERR_CONSTRAINT_VIOLATION;
 	}
@@ -521,10 +528,10 @@ int ltdb_key_dn_from_idx(struct ldb_module *module,
 		int i;
 		index = -1;
 		for (i=0; i < list->count; i++) {
-			uint8_t guid_key[LTDB_GUID_KEY_SIZE];
-			TDB_DATA key = {
-				.dptr = guid_key,
-				.dsize = sizeof(guid_key)
+			uint8_t guid_key[LDB_KV_GUID_KEY_SIZE];
+			struct ldb_val key = {
+				.data = guid_key,
+				.length = sizeof(guid_key)
 			};
 			const int flags = LDB_UNPACK_DATA_FLAG_NO_ATTRS;
 			struct ldb_message *rec = ldb_msg_new(ldb);
@@ -533,19 +540,18 @@ int ltdb_key_dn_from_idx(struct ldb_module *module,
 				return LDB_ERR_OPERATIONS_ERROR;
 			}
 
-			ret = ltdb_idx_to_key(module, ltdb,
-					      ldb, &list->dn[i],
-					      &key);
+			ret = ldb_kv_idx_to_key(
+			    module, ldb_kv, ldb, &list->dn[i], &key);
 			if (ret != LDB_SUCCESS) {
 				TALLOC_FREE(list);
 				TALLOC_FREE(rec);
 				return ret;
 			}
 
-			ret = ltdb_search_key(module, ltdb, key,
-					      rec, flags);
-			if (key.dptr != guid_key) {
-				TALLOC_FREE(key.dptr);
+			ret =
+			    ldb_kv_search_key(module, ldb_kv, key, rec, flags);
+			if (key.data != guid_key) {
+				TALLOC_FREE(key.data);
 			}
 			if (ret == LDB_ERR_NO_SUCH_OBJECT) {
 				/*
@@ -586,9 +592,8 @@ int ltdb_key_dn_from_idx(struct ldb_module *module,
 		}
 	}
 
-	/* The tdb_key memory is allocated by the caller */
-	ret = ltdb_guid_to_key(module, ltdb,
-			       &list->dn[index], tdb_key);
+	/* The ldb_key memory is allocated by the caller */
+	ret = ldb_kv_guid_to_key(module, ldb_kv, &list->dn[index], ldb_key);
 	TALLOC_FREE(list);
 
 	if (ret != LDB_SUCCESS) {
@@ -603,10 +608,10 @@ int ltdb_key_dn_from_idx(struct ldb_module *module,
 /*
   save a dn_list into a full @IDX style record
  */
-static int ltdb_dn_list_store_full(struct ldb_module *module,
-				   struct ltdb_private *ltdb,
-				   struct ldb_dn *dn,
-				   struct dn_list *list)
+static int ldb_kv_dn_list_store_full(struct ldb_module *module,
+				     struct ldb_kv_private *ldb_kv,
+				     struct ldb_dn *dn,
+				     struct dn_list *list)
 {
 	struct ldb_message *msg;
 	int ret;
@@ -619,7 +624,7 @@ static int ltdb_dn_list_store_full(struct ldb_module *module,
 	msg->dn = dn;
 
 	if (list->count == 0) {
-		ret = ltdb_delete_noindex(module, msg);
+		ret = ldb_kv_delete_noindex(module, msg);
 		if (ret == LDB_ERR_NO_SUCH_OBJECT) {
 			ret = LDB_SUCCESS;
 		}
@@ -627,16 +632,16 @@ static int ltdb_dn_list_store_full(struct ldb_module *module,
 		return ret;
 	}
 
-	if (ltdb->cache->GUID_index_attribute == NULL) {
-		ret = ldb_msg_add_fmt(msg, LTDB_IDXVERSION, "%u",
-				      LTDB_INDEXING_VERSION);
+	if (ldb_kv->cache->GUID_index_attribute == NULL) {
+		ret = ldb_msg_add_fmt(msg, LDB_KV_IDXVERSION, "%u",
+				      LDB_KV_INDEXING_VERSION);
 		if (ret != LDB_SUCCESS) {
 			talloc_free(msg);
 			return ldb_module_oom(module);
 		}
 	} else {
-		ret = ldb_msg_add_fmt(msg, LTDB_IDXVERSION, "%u",
-				      LTDB_GUID_INDEXING_VERSION);
+		ret = ldb_msg_add_fmt(msg, LDB_KV_IDXVERSION, "%u",
+				      LDB_KV_GUID_INDEXING_VERSION);
 		if (ret != LDB_SUCCESS) {
 			talloc_free(msg);
 			return ldb_module_oom(module);
@@ -646,13 +651,13 @@ static int ltdb_dn_list_store_full(struct ldb_module *module,
 	if (list->count > 0) {
 		struct ldb_message_element *el;
 
-		ret = ldb_msg_add_empty(msg, LTDB_IDX, LDB_FLAG_MOD_ADD, &el);
+		ret = ldb_msg_add_empty(msg, LDB_KV_IDX, LDB_FLAG_MOD_ADD, &el);
 		if (ret != LDB_SUCCESS) {
 			talloc_free(msg);
 			return ldb_module_oom(module);
 		}
 
-		if (ltdb->cache->GUID_index_attribute == NULL) {
+		if (ldb_kv->cache->GUID_index_attribute == NULL) {
 			el->values = list->dn;
 			el->num_values = list->count;
 		} else {
@@ -667,7 +672,7 @@ static int ltdb_dn_list_store_full(struct ldb_module *module,
 
 			v.data = talloc_array_size(el->values,
 						   list->count,
-						   LTDB_GUID_SIZE);
+						   LDB_KV_GUID_SIZE);
 			if (v.data == NULL) {
 				talloc_free(msg);
 				return ldb_module_oom(module);
@@ -677,20 +682,20 @@ static int ltdb_dn_list_store_full(struct ldb_module *module,
 
 			for (i = 0; i < list->count; i++) {
 				if (list->dn[i].length !=
-				    LTDB_GUID_SIZE) {
+				    LDB_KV_GUID_SIZE) {
 					talloc_free(msg);
 					return ldb_module_operr(module);
 				}
-				memcpy(&v.data[LTDB_GUID_SIZE*i],
+				memcpy(&v.data[LDB_KV_GUID_SIZE*i],
 				       list->dn[i].data,
-				       LTDB_GUID_SIZE);
+				       LDB_KV_GUID_SIZE);
 			}
 			el->values[0] = v;
 			el->num_values = 1;
 		}
 	}
 
-	ret = ltdb_store(module, msg, TDB_REPLACE);
+	ret = ldb_kv_store(module, msg, TDB_REPLACE);
 	talloc_free(msg);
 	return ret;
 }
@@ -698,22 +703,24 @@ static int ltdb_dn_list_store_full(struct ldb_module *module,
 /*
   save a dn_list into the database, in either @IDX or internal format
  */
-static int ltdb_dn_list_store(struct ldb_module *module, struct ldb_dn *dn,
-			      struct dn_list *list)
+static int ldb_kv_dn_list_store(struct ldb_module *module,
+				struct ldb_dn *dn,
+				struct dn_list *list)
 {
-	struct ltdb_private *ltdb = talloc_get_type(ldb_module_get_private(module), struct ltdb_private);
+	struct ldb_kv_private *ldb_kv = talloc_get_type(
+	    ldb_module_get_private(module), struct ldb_kv_private);
 	TDB_DATA rec, key;
 	int ret;
 	struct dn_list *list2;
 
-	if (ltdb->idxptr == NULL) {
-		return ltdb_dn_list_store_full(module, ltdb,
-					       dn, list);
+	if (ldb_kv->idxptr == NULL) {
+		return ldb_kv_dn_list_store_full(module, ldb_kv, dn, list);
 	}
 
-	if (ltdb->idxptr->itdb == NULL) {
-		ltdb->idxptr->itdb = tdb_open(NULL, 1000, TDB_INTERNAL, O_RDWR, 0);
-		if (ltdb->idxptr->itdb == NULL) {
+	if (ldb_kv->idxptr->itdb == NULL) {
+		ldb_kv->idxptr->itdb =
+		    tdb_open(NULL, 1000, TDB_INTERNAL, O_RDWR, 0);
+		if (ldb_kv->idxptr->itdb == NULL) {
 			return LDB_ERR_OPERATIONS_ERROR;
 		}
 	}
@@ -724,9 +731,9 @@ static int ltdb_dn_list_store(struct ldb_module *module, struct ldb_dn *dn,
 	}
 	key.dsize = strlen((char *)key.dptr);
 
-	rec = tdb_fetch(ltdb->idxptr->itdb, key);
+	rec = tdb_fetch(ldb_kv->idxptr->itdb, key);
 	if (rec.dptr != NULL) {
-		list2 = ltdb_index_idxptr(module, rec, false);
+		list2 = ldb_kv_index_idxptr(module, rec, false);
 		if (list2 == NULL) {
 			free(rec.dptr);
 			return LDB_ERR_OPERATIONS_ERROR;
@@ -737,7 +744,7 @@ static int ltdb_dn_list_store(struct ldb_module *module, struct ldb_dn *dn,
 		return LDB_SUCCESS;
 	}
 
-	list2 = talloc(ltdb->idxptr, struct dn_list);
+	list2 = talloc(ldb_kv->idxptr, struct dn_list);
 	if (list2 == NULL) {
 		return LDB_ERR_OPERATIONS_ERROR;
 	}
@@ -752,9 +759,9 @@ static int ltdb_dn_list_store(struct ldb_module *module, struct ldb_dn *dn,
 	 * This is not a store into the main DB, but into an in-memory
 	 * TDB, so we don't need a guard on ltdb->read_only
 	 */
-	ret = tdb_store(ltdb->idxptr->itdb, key, rec, TDB_INSERT);
+	ret = tdb_store(ldb_kv->idxptr->itdb, key, rec, TDB_INSERT);
 	if (ret != 0) {
-		return ltdb_err_map(tdb_error(ltdb->idxptr->itdb));
+		return ltdb_err_map(tdb_error(ldb_kv->idxptr->itdb));
 	}
 	return LDB_SUCCESS;
 }
@@ -762,18 +769,22 @@ static int ltdb_dn_list_store(struct ldb_module *module, struct ldb_dn *dn,
 /*
   traverse function for storing the in-memory index entries on disk
  */
-static int ltdb_index_traverse_store(struct tdb_context *tdb, TDB_DATA key, TDB_DATA data, void *state)
+static int ldb_kv_index_traverse_store(struct tdb_context *tdb,
+				       TDB_DATA key,
+				       TDB_DATA data,
+				       void *state)
 {
 	struct ldb_module *module = state;
-	struct ltdb_private *ltdb = talloc_get_type(ldb_module_get_private(module), struct ltdb_private);
+	struct ldb_kv_private *ldb_kv = talloc_get_type(
+	    ldb_module_get_private(module), struct ldb_kv_private);
 	struct ldb_dn *dn;
 	struct ldb_context *ldb = ldb_module_get_ctx(module);
 	struct ldb_val v;
 	struct dn_list *list;
 
-	list = ltdb_index_idxptr(module, data, true);
+	list = ldb_kv_index_idxptr(module, data, true);
 	if (list == NULL) {
-		ltdb->idxptr->error = LDB_ERR_OPERATIONS_ERROR;
+		ldb_kv->idxptr->error = LDB_ERR_OPERATIONS_ERROR;
 		return -1;
 	}
 
@@ -783,35 +794,37 @@ static int ltdb_index_traverse_store(struct tdb_context *tdb, TDB_DATA key, TDB_
 	dn = ldb_dn_from_ldb_val(module, ldb, &v);
 	if (dn == NULL) {
 		ldb_asprintf_errstring(ldb, "Failed to parse index key %*.*s as an LDB DN", (int)v.length, (int)v.length, (const char *)v.data);
-		ltdb->idxptr->error = LDB_ERR_OPERATIONS_ERROR;
+		ldb_kv->idxptr->error = LDB_ERR_OPERATIONS_ERROR;
 		return -1;
 	}
 
-	ltdb->idxptr->error = ltdb_dn_list_store_full(module, ltdb,
-						      dn, list);
+	ldb_kv->idxptr->error =
+	    ldb_kv_dn_list_store_full(module, ldb_kv, dn, list);
 	talloc_free(dn);
-	if (ltdb->idxptr->error != 0) {
+	if (ldb_kv->idxptr->error != 0) {
 		return -1;
 	}
 	return 0;
 }
 
 /* cleanup the idxptr mode when transaction commits */
-int ltdb_index_transaction_commit(struct ldb_module *module)
+int ldb_kv_index_transaction_commit(struct ldb_module *module)
 {
-	struct ltdb_private *ltdb = talloc_get_type(ldb_module_get_private(module), struct ltdb_private);
+	struct ldb_kv_private *ldb_kv = talloc_get_type(
+	    ldb_module_get_private(module), struct ldb_kv_private);
 	int ret;
 
 	struct ldb_context *ldb = ldb_module_get_ctx(module);
 
 	ldb_reset_err_string(ldb);
 
-	if (ltdb->idxptr->itdb) {
-		tdb_traverse(ltdb->idxptr->itdb, ltdb_index_traverse_store, module);
-		tdb_close(ltdb->idxptr->itdb);
+	if (ldb_kv->idxptr->itdb) {
+		tdb_traverse(
+		    ldb_kv->idxptr->itdb, ldb_kv_index_traverse_store, module);
+		tdb_close(ldb_kv->idxptr->itdb);
 	}
 
-	ret = ltdb->idxptr->error;
+	ret = ldb_kv->idxptr->error;
 	if (ret != LDB_SUCCESS) {
 		if (!ldb_errstring(ldb)) {
 			ldb_set_errstring(ldb, ldb_strerror(ret));
@@ -819,20 +832,21 @@ int ltdb_index_transaction_commit(struct ldb_module *module)
 		ldb_asprintf_errstring(ldb, "Failed to store index records in transaction commit: %s", ldb_errstring(ldb));
 	}
 
-	talloc_free(ltdb->idxptr);
-	ltdb->idxptr = NULL;
+	talloc_free(ldb_kv->idxptr);
+	ldb_kv->idxptr = NULL;
 	return ret;
 }
 
 /* cleanup the idxptr mode when transaction cancels */
-int ltdb_index_transaction_cancel(struct ldb_module *module)
+int ldb_kv_index_transaction_cancel(struct ldb_module *module)
 {
-	struct ltdb_private *ltdb = talloc_get_type(ldb_module_get_private(module), struct ltdb_private);
-	if (ltdb->idxptr && ltdb->idxptr->itdb) {
-		tdb_close(ltdb->idxptr->itdb);
+	struct ldb_kv_private *ldb_kv = talloc_get_type(
+	    ldb_module_get_private(module), struct ldb_kv_private);
+	if (ldb_kv->idxptr && ldb_kv->idxptr->itdb) {
+		tdb_close(ldb_kv->idxptr->itdb);
 	}
-	talloc_free(ltdb->idxptr);
-	ltdb->idxptr = NULL;
+	talloc_free(ldb_kv->idxptr);
+	ldb_kv->idxptr = NULL;
 	return LDB_SUCCESS;
 }
 
@@ -841,11 +855,12 @@ int ltdb_index_transaction_cancel(struct ldb_module *module)
   return the dn key to be used for an index
   the caller is responsible for freeing
 */
-static struct ldb_dn *ltdb_index_key(struct ldb_context *ldb,
-				     struct ltdb_private *ltdb,
-				     const char *attr, const struct ldb_val *value,
-				     const struct ldb_schema_attribute **ap,
-				     enum key_truncation *truncation)
+static struct ldb_dn *ldb_kv_index_key(struct ldb_context *ldb,
+				       struct ldb_kv_private *ldb_kv,
+				       const char *attr,
+				       const struct ldb_val *value,
+				       const struct ldb_schema_attribute **ap,
+				       enum key_truncation *truncation)
 {
 	struct ldb_dn *ret;
 	struct ldb_val v;
@@ -855,10 +870,10 @@ static struct ldb_dn *ltdb_index_key(struct ldb_context *ldb,
 	int r;
 	bool should_b64_encode;
 
-	unsigned int max_key_length = ltdb_max_key_length(ltdb);
+	unsigned int max_key_length = ldb_kv_max_key_length(ldb_kv);
 	size_t key_len = 0;
 	size_t attr_len = 0;
-	const size_t indx_len = sizeof(LTDB_INDEX) - 1;
+	const size_t indx_len = sizeof(LDB_KV_INDEX) - 1;
 	unsigned frmt_len = 0;
 	const size_t additional_key_length = 4;
 	unsigned int num_separators = 3; /* Estimate for overflow check */
@@ -931,10 +946,10 @@ static struct ldb_dn *ltdb_index_key(struct ldb_context *ldb,
 	 * casefold and lineraized, that is good enough.  That already
 	 * avoids embedded NUL etc.
 	 */
-	if (ltdb->cache->GUID_index_attribute != NULL) {
-		if (strcmp(attr, LTDB_IDXDN) == 0) {
+	if (ldb_kv->cache->GUID_index_attribute != NULL) {
+		if (strcmp(attr, LDB_KV_IDXDN) == 0) {
 			should_b64_encode = false;
-		} else if (strcmp(attr, LTDB_IDXONE) == 0) {
+		} else if (strcmp(attr, LDB_KV_IDXONE) == 0) {
 			/*
 			 * We can only change the behaviour for IDXONE
 			 * when the GUID index is enabled
@@ -956,7 +971,7 @@ static struct ldb_dn *ltdb_index_key(struct ldb_context *ldb,
 			return NULL;
 		}
 		vstr_len = strlen(vstr);
-		/* 
+		/*
 		 * Overflow here is not critical as we only use this
 		 * to choose the printf truncation
 		 */
@@ -972,7 +987,7 @@ static struct ldb_dn *ltdb_index_key(struct ldb_context *ldb,
 			* indicates that the following value is base64 encoded
 			*/
 			ret = ldb_dn_new_fmt(ldb, ldb, "%s#%s##%.*s",
-					     LTDB_INDEX, attr_for_dn,
+					     LDB_KV_INDEX, attr_for_dn,
 					     frmt_len, vstr);
 		} else {
 			frmt_len = vstr_len;
@@ -982,7 +997,7 @@ static struct ldb_dn *ltdb_index_key(struct ldb_context *ldb,
 			 * indicates that the following value is base64 encoded
 			 */
 			ret = ldb_dn_new_fmt(ldb, ldb, "%s:%s::%.*s",
-					     LTDB_INDEX, attr_for_dn,
+					     LDB_KV_INDEX, attr_for_dn,
 					     frmt_len, vstr);
 		}
 		talloc_free(vstr);
@@ -1004,13 +1019,13 @@ static struct ldb_dn *ltdb_index_key(struct ldb_context *ldb,
 			 * from the non truncated keys
 			 */
 			ret = ldb_dn_new_fmt(ldb, ldb, "%s#%s#%.*s",
-					     LTDB_INDEX, attr_for_dn,
+					     LDB_KV_INDEX, attr_for_dn,
 					     frmt_len, (char *)v.data);
 		} else {
 			frmt_len = v.length;
 			*truncation = KEY_NOT_TRUNCATED;
 			ret = ldb_dn_new_fmt(ldb, ldb, "%s:%s:%.*s",
-					     LTDB_INDEX, attr_for_dn,
+					     LDB_KV_INDEX, attr_for_dn,
 					     frmt_len, (char *)v.data);
 		}
 	}
@@ -1026,17 +1041,16 @@ static struct ldb_dn *ltdb_index_key(struct ldb_context *ldb,
 /*
   see if a attribute value is in the list of indexed attributes
 */
-static bool ltdb_is_indexed(struct ldb_module *module,
-			    struct ltdb_private *ltdb,
-			    const char *attr)
+static bool ldb_kv_is_indexed(struct ldb_module *module,
+			      struct ldb_kv_private *ldb_kv,
+			      const char *attr)
 {
 	struct ldb_context *ldb = ldb_module_get_ctx(module);
 	unsigned int i;
 	struct ldb_message_element *el;
 
-	if ((ltdb->cache->GUID_index_attribute != NULL) &&
-	    (ldb_attr_cmp(attr,
-			  ltdb->cache->GUID_index_attribute) == 0)) {
+	if ((ldb_kv->cache->GUID_index_attribute != NULL) &&
+	    (ldb_attr_cmp(attr, ldb_kv->cache->GUID_index_attribute) == 0)) {
 		/* Implicity covered, this is the index key */
 		return false;
 	}
@@ -1055,11 +1069,11 @@ static bool ltdb_is_indexed(struct ldb_module *module,
 		}
 	}
 
-	if (!ltdb->cache->attribute_indexes) {
+	if (!ldb_kv->cache->attribute_indexes) {
 		return false;
 	}
 
-	el = ldb_msg_find_element(ltdb->cache->indexlist, LTDB_IDXATTR);
+	el = ldb_msg_find_element(ldb_kv->cache->indexlist, LDB_KV_IDXATTR);
 	if (el == NULL) {
 		return false;
 	}
@@ -1089,10 +1103,10 @@ static bool ltdb_is_indexed(struct ldb_module *module,
   return a list of dn's that might match a simple indexed search (an
   equality search only)
  */
-static int ltdb_index_dn_simple(struct ldb_module *module,
-				struct ltdb_private *ltdb,
-				const struct ldb_parse_tree *tree,
-				struct dn_list *list)
+static int ldb_kv_index_dn_simple(struct ldb_module *module,
+				  struct ldb_kv_private *ldb_kv,
+				  const struct ldb_parse_tree *tree,
+				  struct dn_list *list)
 {
 	struct ldb_context *ldb;
 	struct ldb_dn *dn;
@@ -1106,15 +1120,18 @@ static int ltdb_index_dn_simple(struct ldb_module *module,
 
 	/* if the attribute isn't in the list of indexed attributes then
 	   this node needs a full search */
-	if (!ltdb_is_indexed(module, ltdb, tree->u.equality.attr)) {
+	if (!ldb_kv_is_indexed(module, ldb_kv, tree->u.equality.attr)) {
 		return LDB_ERR_OPERATIONS_ERROR;
 	}
 
 	/* the attribute is indexed. Pull the list of DNs that match the
 	   search criterion */
-	dn = ltdb_index_key(ldb, ltdb,
-			    tree->u.equality.attr,
-			    &tree->u.equality.value, NULL, &truncation);
+	dn = ldb_kv_index_key(ldb,
+			      ldb_kv,
+			      tree->u.equality.attr,
+			      &tree->u.equality.value,
+			      NULL,
+			      &truncation);
 	/*
 	 * We ignore truncation here and allow multi-valued matches
 	 * as ltdb_search_indexed will filter out the wrong one in
@@ -1122,25 +1139,25 @@ static int ltdb_index_dn_simple(struct ldb_module *module,
 	 */
 	if (!dn) return LDB_ERR_OPERATIONS_ERROR;
 
-	ret = ltdb_dn_list_load(module, ltdb, dn, list);
+	ret = ldb_kv_dn_list_load(module, ldb_kv, dn, list);
 	talloc_free(dn);
 	return ret;
 }
 
-
 static bool list_union(struct ldb_context *ldb,
-		       struct ltdb_private *ltdb,
-		       struct dn_list *list, struct dn_list *list2);
+		       struct ldb_kv_private *ldb_kv,
+		       struct dn_list *list,
+		       struct dn_list *list2);
 
 /*
   return a list of dn's that might match a leaf indexed search
  */
-static int ltdb_index_dn_leaf(struct ldb_module *module,
-			      struct ltdb_private *ltdb,
-			      const struct ldb_parse_tree *tree,
-			      struct dn_list *list)
+static int ldb_kv_index_dn_leaf(struct ldb_module *module,
+				struct ldb_kv_private *ldb_kv,
+				const struct ldb_parse_tree *tree,
+				struct dn_list *list)
 {
-	if (ltdb->disallow_dn_filter &&
+	if (ldb_kv->disallow_dn_filter &&
 	    (ldb_attr_cmp(tree->u.equality.attr, "dn") == 0)) {
 		/* in AD mode we do not support "(dn=...)" search filters */
 		list->dn = NULL;
@@ -1173,17 +1190,17 @@ static int ltdb_index_dn_leaf(struct ldb_module *module,
 		 * We can't call TALLOC_FREE(dn) as this must belong
 		 * to list for the memory to remain valid.
 		 */
-		return ltdb_index_dn_base_dn(module, ltdb, dn, list,
-					     &truncation);
+		return ldb_kv_index_dn_base_dn(
+		    module, ldb_kv, dn, list, &truncation);
 		/*
 		 * We ignore truncation here and allow multi-valued matches
 		 * as ltdb_search_indexed will filter out the wrong one in
 		 * ltdb_index_filter() which calls ldb_match_message().
 		 */
 
-	} else if ((ltdb->cache->GUID_index_attribute != NULL) &&
+	} else if ((ldb_kv->cache->GUID_index_attribute != NULL) &&
 		   (ldb_attr_cmp(tree->u.equality.attr,
-				 ltdb->cache->GUID_index_attribute) == 0)) {
+				 ldb_kv->cache->GUID_index_attribute) == 0)) {
 		int ret;
 		struct ldb_context *ldb = ldb_module_get_ctx(module);
 		list->dn = talloc_array(list, struct ldb_val, 1);
@@ -1196,10 +1213,8 @@ static int ltdb_index_dn_leaf(struct ldb_module *module,
 		 * ensure we get the index in binary, rather
 		 * than a string
 		 */
-		ret = ltdb->GUID_index_syntax->canonicalise_fn(ldb,
-							       list->dn,
-							       &tree->u.equality.value,
-							       &list->dn[0]);
+		ret = ldb_kv->GUID_index_syntax->canonicalise_fn(
+		    ldb, list->dn, &tree->u.equality.value, &list->dn[0]);
 		if (ret != LDB_SUCCESS) {
 			return LDB_ERR_OPERATIONS_ERROR;
 		}
@@ -1207,7 +1222,7 @@ static int ltdb_index_dn_leaf(struct ldb_module *module,
 		return LDB_SUCCESS;
 	}
 
-	return ltdb_index_dn_simple(module, ltdb, tree, list);
+	return ldb_kv_index_dn_simple(module, ldb_kv, tree, list);
 }
 
 
@@ -1216,8 +1231,9 @@ static int ltdb_index_dn_leaf(struct ldb_module *module,
   list = list & list2
 */
 static bool list_intersect(struct ldb_context *ldb,
-			   struct ltdb_private *ltdb,
-			   struct dn_list *list, const struct dn_list *list2)
+			   struct ldb_kv_private *ldb_kv,
+			   struct dn_list *list,
+			   const struct dn_list *list2)
 {
 	const struct dn_list *short_list, *long_list;
 	struct dn_list *list3;
@@ -1275,8 +1291,8 @@ static bool list_intersect(struct ldb_context *ldb,
 
 	for (i=0;i<short_list->count;i++) {
 		/* For the GUID index case, this is a binary search */
-		if (ltdb_dn_list_find_val(ltdb, long_list,
-					  &short_list->dn[i]) != -1) {
+		if (ldb_kv_dn_list_find_val(
+			ldb_kv, long_list, &short_list->dn[i]) != -1) {
 			list3->dn[list3->count] = short_list->dn[i];
 			list3->count++;
 		}
@@ -1296,8 +1312,9 @@ static bool list_intersect(struct ldb_context *ldb,
   list = list | list2
 */
 static bool list_union(struct ldb_context *ldb,
-		       struct ltdb_private *ltdb,
-		       struct dn_list *list, struct dn_list *list2)
+		       struct ldb_kv_private *ldb_kv,
+		       struct dn_list *list,
+		       struct dn_list *list2)
 {
 	struct ldb_val *dn3;
 	unsigned int i = 0, j = 0, k = 0;
@@ -1326,8 +1343,8 @@ static bool list_union(struct ldb_context *ldb,
 	 * NOTE: This can sort the in-memory index values, as list or
 	 * list2 might not be a copy!
 	 */
-	ltdb_dn_list_sort(ltdb, list);
-	ltdb_dn_list_sort(ltdb, list2);
+	ldb_kv_dn_list_sort(ldb_kv, list);
+	ldb_kv_dn_list_sort(ldb_kv, list2);
 
 	dn3 = talloc_array(list, struct ldb_val, list->count + list2->count);
 	if (!dn3) {
@@ -1371,19 +1388,18 @@ static bool list_union(struct ldb_context *ldb,
 	return true;
 }
 
-static int ltdb_index_dn(struct ldb_module *module,
-			 struct ltdb_private *ltdb,
-			 const struct ldb_parse_tree *tree,
-			 struct dn_list *list);
-
+static int ldb_kv_index_dn(struct ldb_module *module,
+			   struct ldb_kv_private *ldb_kv,
+			   const struct ldb_parse_tree *tree,
+			   struct dn_list *list);
 
 /*
   process an OR list (a union)
  */
-static int ltdb_index_dn_or(struct ldb_module *module,
-			    struct ltdb_private *ltdb,
-			    const struct ldb_parse_tree *tree,
-			    struct dn_list *list)
+static int ldb_kv_index_dn_or(struct ldb_module *module,
+			      struct ldb_kv_private *ldb_kv,
+			      const struct ldb_parse_tree *tree,
+			      struct dn_list *list)
 {
 	struct ldb_context *ldb;
 	unsigned int i;
@@ -1402,8 +1418,8 @@ static int ltdb_index_dn_or(struct ldb_module *module,
 			return LDB_ERR_OPERATIONS_ERROR;
 		}
 
-		ret = ltdb_index_dn(module, ltdb,
-				    tree->u.list.elements[i], list2);
+		ret = ldb_kv_index_dn(
+		    module, ldb_kv, tree->u.list.elements[i], list2);
 
 		if (ret == LDB_ERR_NO_SUCH_OBJECT) {
 			/* X || 0 == X */
@@ -1417,7 +1433,7 @@ static int ltdb_index_dn_or(struct ldb_module *module,
 			return ret;
 		}
 
-		if (!list_union(ldb, ltdb, list, list2)) {
+		if (!list_union(ldb, ldb_kv, list, list2)) {
 			talloc_free(list2);
 			return LDB_ERR_OPERATIONS_ERROR;
 		}
@@ -1434,10 +1450,10 @@ static int ltdb_index_dn_or(struct ldb_module *module,
 /*
   NOT an index results
  */
-static int ltdb_index_dn_not(struct ldb_module *module,
-			     struct ltdb_private *ltdb,
-			     const struct ldb_parse_tree *tree,
-			     struct dn_list *list)
+static int ldb_kv_index_dn_not(struct ldb_module *module,
+			       struct ldb_kv_private *ldb_kv,
+			       const struct ldb_parse_tree *tree,
+			       struct dn_list *list)
 {
 	/* the only way to do an indexed not would be if we could
 	   negate the not via another not or if we knew the total
@@ -1454,13 +1470,14 @@ static int ltdb_index_dn_not(struct ldb_module *module,
  * These things are unique, so avoid a full scan if this is a search
  * by GUID, DN or a unique attribute
  */
-static bool ltdb_index_unique(struct ldb_context *ldb,
-			      struct ltdb_private *ltdb,
-			      const char *attr)
+static bool ldb_kv_index_unique(struct ldb_context *ldb,
+				struct ldb_kv_private *ldb_kv,
+				const char *attr)
 {
 	const struct ldb_schema_attribute *a;
-	if (ltdb->cache->GUID_index_attribute != NULL) {
-		if (ldb_attr_cmp(attr, ltdb->cache->GUID_index_attribute) == 0) {
+	if (ldb_kv->cache->GUID_index_attribute != NULL) {
+		if (ldb_attr_cmp(attr, ldb_kv->cache->GUID_index_attribute) ==
+		    0) {
 			return true;
 		}
 	}
@@ -1478,10 +1495,10 @@ static bool ltdb_index_unique(struct ldb_context *ldb,
 /*
   process an AND expression (intersection)
  */
-static int ltdb_index_dn_and(struct ldb_module *module,
-			     struct ltdb_private *ltdb,
-			     const struct ldb_parse_tree *tree,
-			     struct dn_list *list)
+static int ldb_kv_index_dn_and(struct ldb_module *module,
+			       struct ldb_kv_private *ldb_kv,
+			       const struct ldb_parse_tree *tree,
+			       struct dn_list *list)
 {
 	struct ldb_context *ldb;
 	unsigned int i;
@@ -1500,12 +1517,12 @@ static int ltdb_index_dn_and(struct ldb_module *module,
 		int ret;
 
 		if (subtree->operation != LDB_OP_EQUALITY ||
-		    !ltdb_index_unique(ldb, ltdb,
-				       subtree->u.equality.attr)) {
+		    !ldb_kv_index_unique(
+			ldb, ldb_kv, subtree->u.equality.attr)) {
 			continue;
 		}
 
-		ret = ltdb_index_dn(module, ltdb, subtree, list);
+		ret = ldb_kv_index_dn(module, ldb_kv, subtree, list);
 		if (ret == LDB_ERR_NO_SUCH_OBJECT) {
 			/* 0 && X == 0 */
 			return LDB_ERR_NO_SUCH_OBJECT;
@@ -1532,7 +1549,7 @@ static int ltdb_index_dn_and(struct ldb_module *module,
 			return ldb_module_oom(module);
 		}
 
-		ret = ltdb_index_dn(module, ltdb, subtree, list2);
+		ret = ldb_kv_index_dn(module, ldb_kv, subtree, list2);
 
 		if (ret == LDB_ERR_NO_SUCH_OBJECT) {
 			/* X && 0 == 0 */
@@ -1553,8 +1570,7 @@ static int ltdb_index_dn_and(struct ldb_module *module,
 			list->dn = list2->dn;
 			list->count = list2->count;
 			found = true;
-		} else if (!list_intersect(ldb, ltdb,
-					   list, list2)) {
+		} else if (!list_intersect(ldb, ldb_kv, list, list2)) {
 			talloc_free(list2);
 			return LDB_ERR_OPERATIONS_ERROR;
 		}
@@ -1581,12 +1597,12 @@ static int ltdb_index_dn_and(struct ldb_module *module,
 /*
   return a list of matching objects using a one-level index
  */
-static int ltdb_index_dn_attr(struct ldb_module *module,
-			      struct ltdb_private *ltdb,
-			      const char *attr,
-			      struct ldb_dn *dn,
-			      struct dn_list *list,
-			      enum key_truncation *truncation)
+static int ldb_kv_index_dn_attr(struct ldb_module *module,
+				struct ldb_kv_private *ldb_kv,
+				const char *attr,
+				struct ldb_dn *dn,
+				struct dn_list *list,
+				enum key_truncation *truncation)
 {
 	struct ldb_context *ldb;
 	struct ldb_dn *key;
@@ -1598,13 +1614,13 @@ static int ltdb_index_dn_attr(struct ldb_module *module,
 	/* work out the index key from the parent DN */
 	val.data = (uint8_t *)((uintptr_t)ldb_dn_get_casefold(dn));
 	val.length = strlen((char *)val.data);
-	key = ltdb_index_key(ldb, ltdb, attr, &val, NULL, truncation);
+	key = ldb_kv_index_key(ldb, ldb_kv, attr, &val, NULL, truncation);
 	if (!key) {
 		ldb_oom(ldb);
 		return LDB_ERR_OPERATIONS_ERROR;
 	}
 
-	ret = ltdb_dn_list_load(module, ltdb, key, list);
+	ret = ldb_kv_dn_list_load(module, ldb_kv, key, list);
 	talloc_free(key);
 	if (ret != LDB_SUCCESS) {
 		return ret;
@@ -1620,30 +1636,29 @@ static int ltdb_index_dn_attr(struct ldb_module *module,
 /*
   return a list of matching objects using a one-level index
  */
-static int ltdb_index_dn_one(struct ldb_module *module,
-			     struct ltdb_private *ltdb,
-			     struct ldb_dn *parent_dn,
-			     struct dn_list *list,
-			     enum key_truncation *truncation)
+static int ldb_kv_index_dn_one(struct ldb_module *module,
+			       struct ldb_kv_private *ldb_kv,
+			       struct ldb_dn *parent_dn,
+			       struct dn_list *list,
+			       enum key_truncation *truncation)
 {
 	/* Ensure we do not shortcut on intersection for this list */
 	list->strict = true;
-	return ltdb_index_dn_attr(module, ltdb,
-				  LTDB_IDXONE, parent_dn, list, truncation);
-
+	return ldb_kv_index_dn_attr(
+	    module, ldb_kv, LDB_KV_IDXONE, parent_dn, list, truncation);
 }
 
 /*
   return a list of matching objects using the DN index
  */
-static int ltdb_index_dn_base_dn(struct ldb_module *module,
-				 struct ltdb_private *ltdb,
-				 struct ldb_dn *base_dn,
-				 struct dn_list *dn_list,
-				 enum key_truncation *truncation)
+static int ldb_kv_index_dn_base_dn(struct ldb_module *module,
+				   struct ldb_kv_private *ldb_kv,
+				   struct ldb_dn *base_dn,
+				   struct dn_list *dn_list,
+				   enum key_truncation *truncation)
 {
 	const struct ldb_val *guid_val = NULL;
-	if (ltdb->cache->GUID_index_attribute == NULL) {
+	if (ldb_kv->cache->GUID_index_attribute == NULL) {
 		dn_list->dn = talloc_array(dn_list, struct ldb_val, 1);
 		if (dn_list->dn == NULL) {
 			return ldb_module_oom(module);
@@ -1659,9 +1674,9 @@ static int ltdb_index_dn_base_dn(struct ldb_module *module,
 		return LDB_SUCCESS;
 	}
 
-	if (ltdb->cache->GUID_index_dn_component != NULL) {
-		guid_val = ldb_dn_get_extended_component(base_dn,
-							 ltdb->cache->GUID_index_dn_component);
+	if (ldb_kv->cache->GUID_index_dn_component != NULL) {
+		guid_val = ldb_dn_get_extended_component(
+		    base_dn, ldb_kv->cache->GUID_index_dn_component);
 	}
 
 	if (guid_val != NULL) {
@@ -1676,36 +1691,36 @@ static int ltdb_index_dn_base_dn(struct ldb_module *module,
 		return LDB_SUCCESS;
 	}
 
-	return ltdb_index_dn_attr(module, ltdb,
-				  LTDB_IDXDN, base_dn, dn_list, truncation);
+	return ldb_kv_index_dn_attr(
+	    module, ldb_kv, LDB_KV_IDXDN, base_dn, dn_list, truncation);
 }
 
 /*
   return a list of dn's that might match a indexed search or
   an error. return LDB_ERR_NO_SUCH_OBJECT for no matches, or LDB_SUCCESS for matches
  */
-static int ltdb_index_dn(struct ldb_module *module,
-			 struct ltdb_private *ltdb,
-			 const struct ldb_parse_tree *tree,
-			 struct dn_list *list)
+static int ldb_kv_index_dn(struct ldb_module *module,
+			   struct ldb_kv_private *ldb_kv,
+			   const struct ldb_parse_tree *tree,
+			   struct dn_list *list)
 {
 	int ret = LDB_ERR_OPERATIONS_ERROR;
 
 	switch (tree->operation) {
 	case LDB_OP_AND:
-		ret = ltdb_index_dn_and(module, ltdb, tree, list);
+		ret = ldb_kv_index_dn_and(module, ldb_kv, tree, list);
 		break;
 
 	case LDB_OP_OR:
-		ret = ltdb_index_dn_or(module, ltdb, tree, list);
+		ret = ldb_kv_index_dn_or(module, ldb_kv, tree, list);
 		break;
 
 	case LDB_OP_NOT:
-		ret = ltdb_index_dn_not(module, ltdb, tree, list);
+		ret = ldb_kv_index_dn_not(module, ldb_kv, tree, list);
 		break;
 
 	case LDB_OP_EQUALITY:
-		ret = ltdb_index_dn_leaf(module, ltdb, tree, list);
+		ret = ldb_kv_index_dn_leaf(module, ldb_kv, tree, list);
 		break;
 
 	case LDB_OP_SUBSTRING:
@@ -1726,19 +1741,19 @@ static int ltdb_index_dn(struct ldb_module *module,
   filter a candidate dn_list from an indexed search into a set of results
   extracting just the given attributes
 */
-static int ltdb_index_filter(struct ltdb_private *ltdb,
-			     const struct dn_list *dn_list,
-			     struct ltdb_context *ac,
-			     uint32_t *match_count,
-			     enum key_truncation scope_one_truncation)
+static int ldb_kv_index_filter(struct ldb_kv_private *ldb_kv,
+			       const struct dn_list *dn_list,
+			       struct ldb_kv_context *ac,
+			       uint32_t *match_count,
+			       enum key_truncation scope_one_truncation)
 {
 	struct ldb_context *ldb = ldb_module_get_ctx(ac->module);
 	struct ldb_message *msg;
 	struct ldb_message *filtered_msg;
 	unsigned int i;
 	unsigned int num_keys = 0;
-	uint8_t previous_guid_key[LTDB_GUID_KEY_SIZE] = {};
-	TDB_DATA *keys = NULL;
+	uint8_t previous_guid_key[LDB_KV_GUID_KEY_SIZE] = {};
+	struct ldb_val *keys = NULL;
 
 	/*
 	 * We have to allocate the key list (rather than just walk the
@@ -1746,19 +1761,19 @@ static int ltdb_index_filter(struct ltdb_private *ltdb,
 	 * (by modifying an indexed attribute hosted in the in-memory
 	 * index cache!)
 	 */
-	keys = talloc_array(ac, TDB_DATA, dn_list->count);
+	keys = talloc_array(ac, struct ldb_val, dn_list->count);
 	if (keys == NULL) {
 		return ldb_module_oom(ac->module);
 	}
 
-	if (ltdb->cache->GUID_index_attribute != NULL) {
+	if (ldb_kv->cache->GUID_index_attribute != NULL) {
 		/*
 		 * We speculate that the keys will be GUID based and so
 		 * pre-fill in enough space for a GUID (avoiding a pile of
 		 * small allocations)
 		 */
 		struct guid_tdb_key {
-			uint8_t guid_key[LTDB_GUID_KEY_SIZE];
+			uint8_t guid_key[LDB_KV_GUID_KEY_SIZE];
 		} *key_values = NULL;
 
 		key_values = talloc_array(keys,
@@ -1770,30 +1785,27 @@ static int ltdb_index_filter(struct ltdb_private *ltdb,
 			return ldb_module_oom(ac->module);
 		}
 		for (i = 0; i < dn_list->count; i++) {
-			keys[i].dptr = key_values[i].guid_key;
-			keys[i].dsize = sizeof(key_values[i].guid_key);
+			keys[i].data = key_values[i].guid_key;
+			keys[i].length = sizeof(key_values[i].guid_key);
 		}
 	} else {
 		for (i = 0; i < dn_list->count; i++) {
-			keys[i].dptr = NULL;
-			keys[i].dsize = 0;
+			keys[i].data = NULL;
+			keys[i].length = 0;
 		}
 	}
 
 	for (i = 0; i < dn_list->count; i++) {
 		int ret;
 
-		ret = ltdb_idx_to_key(ac->module,
-				      ltdb,
-				      keys,
-				      &dn_list->dn[i],
-				      &keys[num_keys]);
+		ret = ldb_kv_idx_to_key(
+		    ac->module, ldb_kv, keys, &dn_list->dn[i], &keys[num_keys]);
 		if (ret != LDB_SUCCESS) {
 			talloc_free(keys);
 			return ret;
 		}
 
-		if (ltdb->cache->GUID_index_attribute != NULL) {
+		if (ldb_kv->cache->GUID_index_attribute != NULL) {
 			/*
 			 * If we are in GUID index mode, then the dn_list is
 			 * sorted.  If we got a duplicate, forget about it, as
@@ -1806,13 +1818,13 @@ static int ltdb_index_filter(struct ltdb_private *ltdb,
 			 */
 
 			if (memcmp(previous_guid_key,
-				   keys[num_keys].dptr,
+				   keys[num_keys].data,
 				   sizeof(previous_guid_key)) == 0) {
 				continue;
 			}
 
 			memcpy(previous_guid_key,
-			       keys[num_keys].dptr,
+			       keys[num_keys].data,
 			       sizeof(previous_guid_key));
 		}
 		num_keys++;
@@ -1831,10 +1843,13 @@ static int ltdb_index_filter(struct ltdb_private *ltdb,
 			return LDB_ERR_OPERATIONS_ERROR;
 		}
 
-		ret = ltdb_search_key(ac->module, ltdb,
-				      keys[i], msg,
-				      LDB_UNPACK_DATA_FLAG_NO_DATA_ALLOC|
-				      LDB_UNPACK_DATA_FLAG_NO_VALUES_ALLOC);
+		ret =
+		    ldb_kv_search_key(ac->module,
+				      ldb_kv,
+				      keys[i],
+				      msg,
+				      LDB_UNPACK_DATA_FLAG_NO_DATA_ALLOC |
+					  LDB_UNPACK_DATA_FLAG_NO_VALUES_ALLOC);
 		if (ret == LDB_ERR_NO_SUCH_OBJECT) {
 			/*
 			 * the record has disappeared? yes, this can
@@ -1859,9 +1874,9 @@ static int ltdb_index_filter(struct ltdb_private *ltdb,
 		 *
 		 * LDB_SCOPE_BASE is not passed in by our only caller.
 		 */
-		if (ac->scope == LDB_SCOPE_ONELEVEL
-		    && ltdb->cache->one_level_indexes
-		    && scope_one_truncation == KEY_NOT_TRUNCATED) {
+		if (ac->scope == LDB_SCOPE_ONELEVEL &&
+		    ldb_kv->cache->one_level_indexes &&
+		    scope_one_truncation == KEY_NOT_TRUNCATED) {
 			ret = ldb_match_message(ldb, msg, ac->tree,
 						ac->scope, &matched);
 		} else {
@@ -1881,7 +1896,7 @@ static int ltdb_index_filter(struct ltdb_private *ltdb,
 		}
 
 		/* filter the attributes that the user wants */
-		ret = ltdb_filter_attrs(ac, msg, ac->attrs, &filtered_msg);
+		ret = ldb_kv_filter_attrs(ac, msg, ac->attrs, &filtered_msg);
 
 		talloc_free(msg);
 
@@ -1910,8 +1925,8 @@ static int ltdb_index_filter(struct ltdb_private *ltdb,
 /*
   sort a DN list
  */
-static void ltdb_dn_list_sort(struct ltdb_private *ltdb,
-			      struct dn_list *list)
+static void ldb_kv_dn_list_sort(struct ldb_kv_private *ltdb,
+				struct dn_list *list)
 {
 	if (list->count < 2) {
 		return;
@@ -1931,19 +1946,19 @@ static void ltdb_dn_list_sort(struct ltdb_private *ltdb,
   returns -1 if an indexed search is not possible, in which
   case the caller should call ltdb_search_full()
 */
-int ltdb_search_indexed(struct ltdb_context *ac, uint32_t *match_count)
+int ldb_kv_search_indexed(struct ldb_kv_context *ac, uint32_t *match_count)
 {
 	struct ldb_context *ldb = ldb_module_get_ctx(ac->module);
-	struct ltdb_private *ltdb = talloc_get_type(ldb_module_get_private(ac->module), struct ltdb_private);
+	struct ldb_kv_private *ldb_kv = talloc_get_type(
+	    ldb_module_get_private(ac->module), struct ldb_kv_private);
 	struct dn_list *dn_list;
 	int ret;
 	enum ldb_scope index_scope;
 	enum key_truncation scope_one_truncation = KEY_NOT_TRUNCATED;
 
 	/* see if indexing is enabled */
-	if (!ltdb->cache->attribute_indexes &&
-	    !ltdb->cache->one_level_indexes &&
-	    ac->scope != LDB_SCOPE_BASE) {
+	if (!ldb_kv->cache->attribute_indexes &&
+	    !ldb_kv->cache->one_level_indexes && ac->scope != LDB_SCOPE_BASE) {
 		/* fallback to a full search */
 		return LDB_ERR_OPERATIONS_ERROR;
 	}
@@ -1959,7 +1974,7 @@ int ltdb_search_indexed(struct ltdb_context *ac, uint32_t *match_count)
 	 * search
 	 */
 	if (ac->scope == LDB_SCOPE_ONELEVEL &&
-	    !ltdb->cache->one_level_indexes) {
+	    !ldb_kv->cache->one_level_indexes) {
 		index_scope = LDB_SCOPE_SUBTREE;
 	} else {
 		index_scope = ac->scope;
@@ -1979,8 +1994,11 @@ int ltdb_search_indexed(struct ltdb_context *ac, uint32_t *match_count)
 		 * the tree, we must ensure we strictly intersect with
 		 * this list, as we trust the ONELEVEL index
 		 */
-		ret = ltdb_index_dn_one(ac->module, ltdb, ac->base, dn_list,
-				        &scope_one_truncation);
+		ret = ldb_kv_index_dn_one(ac->module,
+					  ldb_kv,
+					  ac->base,
+					  dn_list,
+					  &scope_one_truncation);
 		if (ret != LDB_SUCCESS) {
 			talloc_free(dn_list);
 			return ret;
@@ -1999,14 +2017,14 @@ int ltdb_search_indexed(struct ltdb_context *ac, uint32_t *match_count)
 		 * do it always and rely on the index lookup being
 		 * fast enough in the small case.
 		 */
-		if (ltdb->cache->GUID_index_attribute != NULL) {
+		if (ldb_kv->cache->GUID_index_attribute != NULL) {
 			struct dn_list *idx_one_tree_list
 				= talloc_zero(ac, struct dn_list);
 			if (idx_one_tree_list == NULL) {
 				return ldb_module_oom(ac->module);
 			}
 
-			if (!ltdb->cache->attribute_indexes) {
+			if (!ldb_kv->cache->attribute_indexes) {
 				talloc_free(idx_one_tree_list);
 				talloc_free(dn_list);
 				return LDB_ERR_OPERATIONS_ERROR;
@@ -2018,10 +2036,11 @@ int ltdb_search_indexed(struct ltdb_context *ac, uint32_t *match_count)
 			 * index can't trim the result list down then
 			 * the ONELEVEL index is still good enough.
 			 */
-			ret = ltdb_index_dn(ac->module, ltdb, ac->tree,
-					    idx_one_tree_list);
+			ret = ldb_kv_index_dn(
+			    ac->module, ldb_kv, ac->tree, idx_one_tree_list);
 			if (ret == LDB_SUCCESS) {
-				if (!list_intersect(ldb, ltdb,
+				if (!list_intersect(ldb,
+						    ldb_kv,
 						    dn_list,
 						    idx_one_tree_list)) {
 					talloc_free(idx_one_tree_list);
@@ -2034,7 +2053,7 @@ int ltdb_search_indexed(struct ltdb_context *ac, uint32_t *match_count)
 
 	case LDB_SCOPE_SUBTREE:
 	case LDB_SCOPE_DEFAULT:
-		if (!ltdb->cache->attribute_indexes) {
+		if (!ldb_kv->cache->attribute_indexes) {
 			talloc_free(dn_list);
 			return LDB_ERR_OPERATIONS_ERROR;
 		}
@@ -2042,7 +2061,7 @@ int ltdb_search_indexed(struct ltdb_context *ac, uint32_t *match_count)
 		 * Here we load the index for the tree.  We have no
 		 * index for the subtree.
 		 */
-		ret = ltdb_index_dn(ac->module, ltdb, ac->tree, dn_list);
+		ret = ldb_kv_index_dn(ac->module, ldb_kv, ac->tree, dn_list);
 		if (ret != LDB_SUCCESS) {
 			talloc_free(dn_list);
 			return ret;
@@ -2061,8 +2080,8 @@ int ltdb_search_indexed(struct ltdb_context *ac, uint32_t *match_count)
 	 * processing as the truncation here refers only to the
 	 * SCOPE_ONELEVEL index.
 	 */
-	ret = ltdb_index_filter(ltdb, dn_list, ac, match_count,
-				scope_one_truncation);
+	ret = ldb_kv_index_filter(
+	    ldb_kv, dn_list, ac, match_count, scope_one_truncation);
 	talloc_free(dn_list);
 	return ret;
 }
@@ -2087,10 +2106,11 @@ int ltdb_search_indexed(struct ltdb_context *ac, uint32_t *match_count)
  *
  * @return                  An ldb error code
  */
-static int ltdb_index_add1(struct ldb_module *module,
-			   struct ltdb_private *ltdb,
-			   const struct ldb_message *msg,
-			   struct ldb_message_element *el, int v_idx)
+static int ldb_kv_index_add1(struct ldb_module *module,
+			     struct ldb_kv_private *ldb_kv,
+			     const struct ldb_message *msg,
+			     struct ldb_message_element *el,
+			     int v_idx)
 {
 	struct ldb_context *ldb;
 	struct ldb_dn *dn_key;
@@ -2108,8 +2128,8 @@ static int ltdb_index_add1(struct ldb_module *module,
 		return LDB_ERR_OPERATIONS_ERROR;
 	}
 
-	dn_key = ltdb_index_key(ldb, ltdb,
-				el->name, &el->values[v_idx], &a, &truncation);
+	dn_key = ldb_kv_index_key(
+	    ldb, ldb_kv, el->name, &el->values[v_idx], &a, &truncation);
 	if (!dn_key) {
 		talloc_free(list);
 		return LDB_ERR_OPERATIONS_ERROR;
@@ -2124,18 +2144,18 @@ static int ltdb_index_add1(struct ldb_module *module,
 		(el->flags & LDB_FLAG_INTERNAL_FORCE_UNIQUE_INDEX)))) {
 
 		ldb_asprintf_errstring(
-			ldb,
-			__location__ ": unique index key on %s in %s, "
-			"exceeds maximum key length of %u (encoded).",
-			el->name,
-			ldb_dn_get_linearized(msg->dn),
-			ltdb->max_key_length);
+		    ldb,
+		    __location__ ": unique index key on %s in %s, "
+				 "exceeds maximum key length of %u (encoded).",
+		    el->name,
+		    ldb_dn_get_linearized(msg->dn),
+		    ldb_kv->max_key_length);
 		talloc_free(list);
 		return LDB_ERR_CONSTRAINT_VIOLATION;
 	}
 	talloc_steal(list, dn_key);
 
-	ret = ltdb_dn_list_load(module, ltdb, dn_key, list);
+	ret = ldb_kv_dn_list_load(module, ldb_kv, dn_key, list);
 	if (ret != LDB_SUCCESS && ret != LDB_ERR_NO_SUCH_OBJECT) {
 		talloc_free(list);
 		return ret;
@@ -2149,14 +2169,14 @@ static int ltdb_index_add1(struct ldb_module *module,
 	 * messages.
 	 */
 	if (list->count > 0 &&
-	    ldb_attr_cmp(el->name, LTDB_IDXDN) == 0 &&
+	    ldb_attr_cmp(el->name, LDB_KV_IDXDN) == 0 &&
 	    truncation == KEY_NOT_TRUNCATED) {
 
 		talloc_free(list);
 		return LDB_ERR_CONSTRAINT_VIOLATION;
 
 	} else if (list->count > 0
-		   && ldb_attr_cmp(el->name, LTDB_IDXDN) == 0) {
+		   && ldb_attr_cmp(el->name, LDB_KV_IDXDN) == 0) {
 
 		/*
 		 * At least one existing entry in the DN->GUID index, which
@@ -2166,10 +2186,10 @@ static int ltdb_index_add1(struct ldb_module *module,
 		 */
 		int i;
 		for (i=0; i < list->count; i++) {
-			uint8_t guid_key[LTDB_GUID_KEY_SIZE];
-			TDB_DATA key = {
-				.dptr = guid_key,
-				.dsize = sizeof(guid_key)
+			uint8_t guid_key[LDB_KV_GUID_KEY_SIZE];
+			struct ldb_val key = {
+				.data = guid_key,
+				.length = sizeof(guid_key)
 			};
 			const int flags = LDB_UNPACK_DATA_FLAG_NO_ATTRS;
 			struct ldb_message *rec = ldb_msg_new(ldb);
@@ -2177,19 +2197,18 @@ static int ltdb_index_add1(struct ldb_module *module,
 				return LDB_ERR_OPERATIONS_ERROR;
 			}
 
-			ret = ltdb_idx_to_key(module, ltdb,
-					      ldb, &list->dn[i],
-					      &key);
+			ret = ldb_kv_idx_to_key(
+			    module, ldb_kv, ldb, &list->dn[i], &key);
 			if (ret != LDB_SUCCESS) {
 				TALLOC_FREE(list);
 				TALLOC_FREE(rec);
 				return ret;
 			}
 
-			ret = ltdb_search_key(module, ltdb, key,
-					      rec, flags);
-			if (key.dptr != guid_key) {
-				TALLOC_FREE(key.dptr);
+			ret =
+			    ldb_kv_search_key(module, ldb_kv, key, rec, flags);
+			if (key.data != guid_key) {
+				TALLOC_FREE(key.data);
 			}
 			if (ret == LDB_ERR_NO_SUCH_OBJECT) {
 				/*
@@ -2235,7 +2254,7 @@ static int ltdb_index_add1(struct ldb_module *module,
 		 * user-visible error string
 		 */
 
-		if (ltdb->cache->GUID_index_attribute == NULL) {
+		if (ldb_kv->cache->GUID_index_attribute == NULL) {
 			ldb_debug(ldb, LDB_DEBUG_WARNING,
 				  __location__
 				  ": unique index violation on %s in %s, "
@@ -2247,21 +2266,21 @@ static int ltdb_index_add1(struct ldb_module *module,
 				  ldb_dn_get_linearized(dn_key));
 		} else {
 			/* This can't fail, gives a default at worst */
-			const struct ldb_schema_attribute *attr
-				= ldb_schema_attribute_by_name(
-					ldb,
-					ltdb->cache->GUID_index_attribute);
+			const struct ldb_schema_attribute *attr =
+			    ldb_schema_attribute_by_name(
+				ldb, ldb_kv->cache->GUID_index_attribute);
 			struct ldb_val v;
 			ret = attr->syntax->ldif_write_fn(ldb, list,
 							  &list->dn[0], &v);
 			if (ret == LDB_SUCCESS) {
-				ldb_debug(ldb, LDB_DEBUG_WARNING,
+				ldb_debug(ldb,
+					  LDB_DEBUG_WARNING,
 					  __location__
 					  ": unique index violation on %s in "
 					  "%s, conficts with %s %*.*s in %s",
 					  el->name,
 					  ldb_dn_get_linearized(msg->dn),
-					  ltdb->cache->GUID_index_attribute,
+					  ldb_kv->cache->GUID_index_attribute,
 					  (int)v.length,
 					  (int)v.length,
 					  v.data,
@@ -2286,7 +2305,7 @@ static int ltdb_index_add1(struct ldb_module *module,
 		return LDB_ERR_OPERATIONS_ERROR;
 	}
 
-	if (ltdb->cache->GUID_index_attribute == NULL) {
+	if (ldb_kv->cache->GUID_index_attribute == NULL) {
 		const char *dn_str = ldb_dn_get_linearized(msg->dn);
 		list->dn[list->count].data
 			= (uint8_t *)talloc_strdup(list->dn, dn_str);
@@ -2298,14 +2317,14 @@ static int ltdb_index_add1(struct ldb_module *module,
 	} else {
 		const struct ldb_val *key_val;
 		struct ldb_val *exact = NULL, *next = NULL;
-		key_val = ldb_msg_find_ldb_val(msg,
-					       ltdb->cache->GUID_index_attribute);
+		key_val = ldb_msg_find_ldb_val(
+		    msg, ldb_kv->cache->GUID_index_attribute);
 		if (key_val == NULL) {
 			talloc_free(list);
 			return ldb_module_operr(module);
 		}
 
-		if (key_val->length != LTDB_GUID_SIZE) {
+		if (key_val->length != LDB_KV_GUID_SIZE) {
 			talloc_free(list);
 			return ldb_module_operr(module);
 		}
@@ -2322,22 +2341,22 @@ static int ltdb_index_add1(struct ldb_module *module,
 		 */
 		if (exact != NULL && truncation == KEY_NOT_TRUNCATED) {
 			/* This can't fail, gives a default at worst */
-			const struct ldb_schema_attribute *attr
-				= ldb_schema_attribute_by_name(
-					ldb,
-					ltdb->cache->GUID_index_attribute);
+			const struct ldb_schema_attribute *attr =
+			    ldb_schema_attribute_by_name(
+				ldb, ldb_kv->cache->GUID_index_attribute);
 			struct ldb_val v;
 			ret = attr->syntax->ldif_write_fn(ldb, list,
 							  exact, &v);
 			if (ret == LDB_SUCCESS) {
-				ldb_debug(ldb, LDB_DEBUG_WARNING,
+				ldb_debug(ldb,
+					  LDB_DEBUG_WARNING,
 					  __location__
 					  ": duplicate attribute value in %s "
 					  "for index on %s, "
 					  "duplicate of %s %*.*s in %s",
 					  ldb_dn_get_linearized(msg->dn),
 					  el->name,
-					  ltdb->cache->GUID_index_attribute,
+					  ldb_kv->cache->GUID_index_attribute,
 					  (int)v.length,
 					  (int)v.length,
 					  v.data,
@@ -2359,7 +2378,7 @@ static int ltdb_index_add1(struct ldb_module *module,
 	}
 	list->count++;
 
-	ret = ltdb_dn_list_store(module, dn_key, list);
+	ret = ldb_kv_dn_list_store(module, dn_key, list);
 
 	talloc_free(list);
 
@@ -2369,15 +2388,14 @@ static int ltdb_index_add1(struct ldb_module *module,
 /*
   add index entries for one elements in a message
  */
-static int ltdb_index_add_el(struct ldb_module *module,
-			     struct ltdb_private *ltdb,
-			     const struct ldb_message *msg,
-			     struct ldb_message_element *el)
+static int ldb_kv_index_add_el(struct ldb_module *module,
+			       struct ldb_kv_private *ldb_kv,
+			       const struct ldb_message *msg,
+			       struct ldb_message_element *el)
 {
 	unsigned int i;
 	for (i = 0; i < el->num_values; i++) {
-		int ret = ltdb_index_add1(module, ltdb,
-					  msg, el, i);
+		int ret = ldb_kv_index_add1(module, ldb_kv, msg, el, i);
 		if (ret != LDB_SUCCESS) {
 			return ret;
 		}
@@ -2389,9 +2407,9 @@ static int ltdb_index_add_el(struct ldb_module *module,
 /*
   add index entries for all elements in a message
  */
-static int ltdb_index_add_all(struct ldb_module *module,
-			      struct ltdb_private *ltdb,
-			      const struct ldb_message *msg)
+static int ldb_kv_index_add_all(struct ldb_module *module,
+				struct ldb_kv_private *ldb_kv,
+				const struct ldb_message *msg)
 {
 	struct ldb_message_element *elements = msg->elements;
 	unsigned int i;
@@ -2407,22 +2425,21 @@ static int ltdb_index_add_all(struct ldb_module *module,
 		return LDB_ERR_OPERATIONS_ERROR;
 	}
 
-	ret = ltdb_write_index_dn_guid(module, msg, 1);
+	ret = ldb_kv_write_index_dn_guid(module, msg, 1);
 	if (ret != LDB_SUCCESS) {
 		return ret;
 	}
 
-	if (!ltdb->cache->attribute_indexes) {
+	if (!ldb_kv->cache->attribute_indexes) {
 		/* no indexed fields */
 		return LDB_SUCCESS;
 	}
 
 	for (i = 0; i < msg->num_elements; i++) {
-		if (!ltdb_is_indexed(module, ltdb, elements[i].name)) {
+		if (!ldb_kv_is_indexed(module, ldb_kv, elements[i].name)) {
 			continue;
 		}
-		ret = ltdb_index_add_el(module, ltdb,
-					msg, &elements[i]);
+		ret = ldb_kv_index_add_el(module, ldb_kv, msg, &elements[i]);
 		if (ret != LDB_SUCCESS) {
 			struct ldb_context *ldb = ldb_module_get_ctx(module);
 			ldb_asprintf_errstring(ldb,
@@ -2440,11 +2457,12 @@ static int ltdb_index_add_all(struct ldb_module *module,
 /*
   insert a DN index for a message
 */
-static int ltdb_modify_index_dn(struct ldb_module *module,
-				struct ltdb_private *ltdb,
-				const struct ldb_message *msg,
-				struct ldb_dn *dn,
-				const char *index, int add)
+static int ldb_kv_modify_index_dn(struct ldb_module *module,
+				  struct ldb_kv_private *ldb_kv,
+				  const struct ldb_message *msg,
+				  struct ldb_dn *dn,
+				  const char *index,
+				  int add)
 {
 	struct ldb_message_element el;
 	struct ldb_val val;
@@ -2454,12 +2472,11 @@ static int ltdb_modify_index_dn(struct ldb_module *module,
 	if (val.data == NULL) {
 		const char *dn_str = ldb_dn_get_linearized(dn);
 		ldb_asprintf_errstring(ldb_module_get_ctx(module),
-				       __location__
-				       ": Failed to modify %s "
-				       "against %s in %s: failed "
-				       "to get casefold DN",
+				       __location__ ": Failed to modify %s "
+						    "against %s in %s: failed "
+						    "to get casefold DN",
 				       index,
-				       ltdb->cache->GUID_index_attribute,
+				       ldb_kv->cache->GUID_index_attribute,
 				       dn_str);
 		return LDB_ERR_OPERATIONS_ERROR;
 	}
@@ -2470,21 +2487,21 @@ static int ltdb_modify_index_dn(struct ldb_module *module,
 	el.num_values = 1;
 
 	if (add) {
-		ret = ltdb_index_add1(module, ltdb, msg, &el, 0);
+		ret = ldb_kv_index_add1(module, ldb_kv, msg, &el, 0);
 	} else { /* delete */
-		ret = ltdb_index_del_value(module, ltdb, msg, &el, 0);
+		ret = ldb_kv_index_del_value(module, ldb_kv, msg, &el, 0);
 	}
 
 	if (ret != LDB_SUCCESS) {
 		struct ldb_context *ldb = ldb_module_get_ctx(module);
 		const char *dn_str = ldb_dn_get_linearized(dn);
 		ldb_asprintf_errstring(ldb,
-				       __location__
-				       ": Failed to modify %s "
-				       "against %s in %s - %s",
+				       __location__ ": Failed to modify %s "
+						    "against %s in %s - %s",
 				       index,
-				       ltdb->cache->GUID_index_attribute,
-				       dn_str, ldb_errstring(ldb));
+				       ldb_kv->cache->GUID_index_attribute,
+				       dn_str,
+				       ldb_errstring(ldb));
 		return ret;
 	}
 	return ret;
@@ -2493,16 +2510,17 @@ static int ltdb_modify_index_dn(struct ldb_module *module,
 /*
   insert a one level index for a message
 */
-static int ltdb_index_onelevel(struct ldb_module *module,
-			       const struct ldb_message *msg, int add)
+static int ldb_kv_index_onelevel(struct ldb_module *module,
+				 const struct ldb_message *msg,
+				 int add)
 {
-	struct ltdb_private *ltdb = talloc_get_type(ldb_module_get_private(module),
-						    struct ltdb_private);
+	struct ldb_kv_private *ldb_kv = talloc_get_type(
+	    ldb_module_get_private(module), struct ldb_kv_private);
 	struct ldb_dn *pdn;
 	int ret;
 
 	/* We index for ONE Level only if requested */
-	if (!ltdb->cache->one_level_indexes) {
+	if (!ldb_kv->cache->one_level_indexes) {
 		return LDB_SUCCESS;
 	}
 
@@ -2510,8 +2528,8 @@ static int ltdb_index_onelevel(struct ldb_module *module,
 	if (pdn == NULL) {
 		return LDB_ERR_OPERATIONS_ERROR;
 	}
-	ret = ltdb_modify_index_dn(module, ltdb,
-				   msg, pdn, LTDB_IDXONE, add);
+	ret =
+	    ldb_kv_modify_index_dn(module, ldb_kv, msg, pdn, LDB_KV_IDXONE, add);
 
 	talloc_free(pdn);
 
@@ -2521,21 +2539,21 @@ static int ltdb_index_onelevel(struct ldb_module *module,
 /*
   insert a one level index for a message
 */
-static int ltdb_write_index_dn_guid(struct ldb_module *module,
-				    const struct ldb_message *msg,
-				    int add)
+static int ldb_kv_write_index_dn_guid(struct ldb_module *module,
+				      const struct ldb_message *msg,
+				      int add)
 {
 	int ret;
-	struct ltdb_private *ltdb = talloc_get_type(ldb_module_get_private(module),
-						    struct ltdb_private);
+	struct ldb_kv_private *ldb_kv = talloc_get_type(
+	    ldb_module_get_private(module), struct ldb_kv_private);
 
 	/* We index for DN only if using a GUID index */
-	if (ltdb->cache->GUID_index_attribute == NULL) {
+	if (ldb_kv->cache->GUID_index_attribute == NULL) {
 		return LDB_SUCCESS;
 	}
 
-	ret = ltdb_modify_index_dn(module, ltdb, msg, msg->dn,
-				   LTDB_IDXDN, add);
+	ret = ldb_kv_modify_index_dn(
+	    module, ldb_kv, msg, msg->dn, LDB_KV_IDXDN, add);
 
 	if (ret == LDB_ERR_CONSTRAINT_VIOLATION) {
 		ldb_asprintf_errstring(ldb_module_get_ctx(module),
@@ -2550,26 +2568,26 @@ static int ltdb_write_index_dn_guid(struct ldb_module *module,
   add the index entries for a new element in a record
   The caller guarantees that these element values are not yet indexed
 */
-int ltdb_index_add_element(struct ldb_module *module,
-			   struct ltdb_private *ltdb,
-			   const struct ldb_message *msg,
-			   struct ldb_message_element *el)
+int ldb_kv_index_add_element(struct ldb_module *module,
+			     struct ldb_kv_private *ldb_kv,
+			     const struct ldb_message *msg,
+			     struct ldb_message_element *el)
 {
 	if (ldb_dn_is_special(msg->dn)) {
 		return LDB_SUCCESS;
 	}
-	if (!ltdb_is_indexed(module, ltdb, el->name)) {
+	if (!ldb_kv_is_indexed(module, ldb_kv, el->name)) {
 		return LDB_SUCCESS;
 	}
-	return ltdb_index_add_el(module, ltdb, msg, el);
+	return ldb_kv_index_add_el(module, ldb_kv, msg, el);
 }
 
 /*
   add the index entries for a new record
 */
-int ltdb_index_add_new(struct ldb_module *module,
-		       struct ltdb_private *ltdb,
-		       const struct ldb_message *msg)
+int ldb_kv_index_add_new(struct ldb_module *module,
+			 struct ldb_kv_private *ldb_kv,
+			 const struct ldb_message *msg)
 {
 	int ret;
 
@@ -2577,7 +2595,7 @@ int ltdb_index_add_new(struct ldb_module *module,
 		return LDB_SUCCESS;
 	}
 
-	ret = ltdb_index_add_all(module, ltdb, msg);
+	ret = ldb_kv_index_add_all(module, ldb_kv, msg);
 	if (ret != LDB_SUCCESS) {
 		/*
 		 * Because we can't trust the caller to be doing
@@ -2586,11 +2604,11 @@ int ltdb_index_add_new(struct ldb_module *module,
 		 * cleanup
 		 */
 
-		ltdb_index_delete(module, msg);
+		ldb_kv_index_delete(module, msg);
 		return ret;
 	}
 
-	ret = ltdb_index_onelevel(module, msg, 1);
+	ret = ldb_kv_index_onelevel(module, msg, 1);
 	if (ret != LDB_SUCCESS) {
 		/*
 		 * Because we can't trust the caller to be doing
@@ -2598,7 +2616,7 @@ int ltdb_index_add_new(struct ldb_module *module,
 		 * entry rather than relying on a transaction
 		 * cleanup
 		 */
-		ltdb_index_delete(module, msg);
+		ldb_kv_index_delete(module, msg);
 		return ret;
 	}
 	return ret;
@@ -2608,10 +2626,11 @@ int ltdb_index_add_new(struct ldb_module *module,
 /*
   delete an index entry for one message element
 */
-int ltdb_index_del_value(struct ldb_module *module,
-			 struct ltdb_private *ltdb,
-			 const struct ldb_message *msg,
-			 struct ldb_message_element *el, unsigned int v_idx)
+int ldb_kv_index_del_value(struct ldb_module *module,
+			   struct ldb_kv_private *ldb_kv,
+			   const struct ldb_message *msg,
+			   struct ldb_message_element *el,
+			   unsigned int v_idx)
 {
 	struct ldb_context *ldb;
 	struct ldb_dn *dn_key;
@@ -2633,9 +2652,8 @@ int ltdb_index_del_value(struct ldb_module *module,
 		return LDB_SUCCESS;
 	}
 
-	dn_key = ltdb_index_key(ldb, ltdb,
-				el->name, &el->values[v_idx],
-				NULL, &truncation);
+	dn_key = ldb_kv_index_key(
+	    ldb, ldb_kv, el->name, &el->values[v_idx], NULL, &truncation);
 	/*
 	 * We ignore key truncation in ltdb_index_add1() so
 	 * match that by ignoring it here as well
@@ -2652,7 +2670,7 @@ int ltdb_index_del_value(struct ldb_module *module,
 		return LDB_ERR_OPERATIONS_ERROR;
 	}
 
-	ret = ltdb_dn_list_load(module, ltdb, dn_key, list);
+	ret = ldb_kv_dn_list_load(module, ldb_kv, dn_key, list);
 	if (ret == LDB_ERR_NO_SUCH_OBJECT) {
 		/* it wasn't indexed. Did we have an earlier error? If we did then
 		   its gone now */
@@ -2668,7 +2686,7 @@ int ltdb_index_del_value(struct ldb_module *module,
 	/*
 	 * Find one of the values matching this message to remove
 	 */
-	i = ltdb_dn_list_find_msg(ltdb, list, msg);
+	i = ldb_kv_dn_list_find_msg(ldb_kv, list, msg);
 	if (i == -1) {
 		/* nothing to delete */
 		talloc_free(dn_key);
@@ -2687,7 +2705,7 @@ int ltdb_index_del_value(struct ldb_module *module,
 		list->dn = talloc_realloc(list, list->dn, struct ldb_val, list->count);
 	}
 
-	ret = ltdb_dn_list_store(module, dn_key, list);
+	ret = ldb_kv_dn_list_store(module, dn_key, list);
 
 	talloc_free(dn_key);
 
@@ -2698,16 +2716,16 @@ int ltdb_index_del_value(struct ldb_module *module,
   delete the index entries for a element
   return -1 on failure
 */
-int ltdb_index_del_element(struct ldb_module *module,
-			   struct ltdb_private *ltdb,
-			   const struct ldb_message *msg,
-			   struct ldb_message_element *el)
+int ldb_kv_index_del_element(struct ldb_module *module,
+			     struct ldb_kv_private *ldb_kv,
+			     const struct ldb_message *msg,
+			     struct ldb_message_element *el)
 {
 	const char *dn_str;
 	int ret;
 	unsigned int i;
 
-	if (!ltdb->cache->attribute_indexes) {
+	if (!ldb_kv->cache->attribute_indexes) {
 		/* no indexed fields */
 		return LDB_SUCCESS;
 	}
@@ -2721,11 +2739,11 @@ int ltdb_index_del_element(struct ldb_module *module,
 		return LDB_SUCCESS;
 	}
 
-	if (!ltdb_is_indexed(module, ltdb, el->name)) {
+	if (!ldb_kv_is_indexed(module, ldb_kv, el->name)) {
 		return LDB_SUCCESS;
 	}
 	for (i = 0; i < el->num_values; i++) {
-		ret = ltdb_index_del_value(module, ltdb, msg, el, i);
+		ret = ldb_kv_index_del_value(module, ldb_kv, msg, el, i);
 		if (ret != LDB_SUCCESS) {
 			return ret;
 		}
@@ -2738,9 +2756,11 @@ int ltdb_index_del_element(struct ldb_module *module,
   delete the index entries for a record
   return -1 on failure
 */
-int ltdb_index_delete(struct ldb_module *module, const struct ldb_message *msg)
+int ldb_kv_index_delete(struct ldb_module *module,
+			const struct ldb_message *msg)
 {
-	struct ltdb_private *ltdb = talloc_get_type(ldb_module_get_private(module), struct ltdb_private);
+	struct ldb_kv_private *ldb_kv = talloc_get_type(
+	    ldb_module_get_private(module), struct ldb_kv_private);
 	int ret;
 	unsigned int i;
 
@@ -2748,24 +2768,24 @@ int ltdb_index_delete(struct ldb_module *module, const struct ldb_message *msg)
 		return LDB_SUCCESS;
 	}
 
-	ret = ltdb_index_onelevel(module, msg, 0);
+	ret = ldb_kv_index_onelevel(module, msg, 0);
 	if (ret != LDB_SUCCESS) {
 		return ret;
 	}
 
-	ret = ltdb_write_index_dn_guid(module, msg, 0);
+	ret = ldb_kv_write_index_dn_guid(module, msg, 0);
 	if (ret != LDB_SUCCESS) {
 		return ret;
 	}
 
-	if (!ltdb->cache->attribute_indexes) {
+	if (!ldb_kv->cache->attribute_indexes) {
 		/* no indexed fields */
 		return LDB_SUCCESS;
 	}
 
 	for (i = 0; i < msg->num_elements; i++) {
-		ret = ltdb_index_del_element(module, ltdb,
-					     msg, &msg->elements[i]);
+		ret = ldb_kv_index_del_element(
+		    module, ldb_kv, msg, &msg->elements[i]);
 		if (ret != LDB_SUCCESS) {
 			return ret;
 		}
@@ -2783,10 +2803,13 @@ int ltdb_index_delete(struct ldb_module *module, const struct ldb_message *msg)
   commit, which in turn greatly reduces DB churn as we will likely
   be able to do a direct update into the old record.
 */
-static int delete_index(struct ltdb_private *ltdb, struct ldb_val key, struct ldb_val data, void *state)
+static int delete_index(struct ldb_kv_private *ldb_kv,
+			struct ldb_val key,
+			struct ldb_val data,
+			void *state)
 {
 	struct ldb_module *module = state;
-	const char *dnstr = "DN=" LTDB_INDEX ":";
+	const char *dnstr = "DN=" LDB_KV_INDEX ":";
 	struct dn_list list;
 	struct ldb_dn *dn;
 	struct ldb_val v;
@@ -2804,13 +2827,13 @@ static int delete_index(struct ltdb_private *ltdb, struct ldb_val key, struct ld
 	v.data = key.data + 3;
 	v.length = strnlen((char *)key.data, key.length) - 3;
 
-	dn = ldb_dn_from_ldb_val(ltdb, ldb_module_get_ctx(module), &v);
+	dn = ldb_dn_from_ldb_val(ldb_kv, ldb_module_get_ctx(module), &v);
 
 	/*
 	 * This does not actually touch the DB quite yet, just
          * the in-memory index cache
 	 */
-	ret = ltdb_dn_list_store(module, dn, &list);
+	ret = ldb_kv_dn_list_store(module, dn, &list);
 	if (ret != LDB_SUCCESS) {
 		ldb_asprintf_errstring(ldb_module_get_ctx(module),
 				       "Unable to store null index for %s\n",
@@ -2825,33 +2848,33 @@ static int delete_index(struct ltdb_private *ltdb, struct ldb_val key, struct ld
 /*
   traversal function that adds @INDEX records during a re index TODO wrong comment
 */
-static int re_key(struct ltdb_private *ltdb, struct ldb_val ldb_key, struct ldb_val val, void *state)
+static int re_key(struct ldb_kv_private *ldb_kv,
+		  struct ldb_val key,
+		  struct ldb_val val,
+		  void *state)
 {
 	struct ldb_context *ldb;
-	struct ltdb_reindex_context *ctx = (struct ltdb_reindex_context *)state;
+	struct ldb_kv_reindex_context *ctx =
+	    (struct ldb_kv_reindex_context *)state;
 	struct ldb_module *module = ctx->module;
 	struct ldb_message *msg;
 	unsigned int nb_elements_in_db;
 	int ret;
-	TDB_DATA key2;
+	struct ldb_val key2;
 	bool is_record;
-	TDB_DATA key = {
-		.dptr = ldb_key.data,
-		.dsize = ldb_key.length
-	};
-	
+
 	ldb = ldb_module_get_ctx(module);
 
-	if (key.dsize > 4 &&
-	    memcmp(key.dptr, "DN=@", 4) == 0) {
+	if (key.length > 4 &&
+	    memcmp(key.data, "DN=@", 4) == 0) {
 		return 0;
 	}
 
-	is_record = ltdb_key_is_record(key);
+	is_record = ldb_kv_key_is_record(key);
 	if (is_record == false) {
 		return 0;
 	}
-	
+
 	msg = ldb_msg_new(module);
 	if (msg == NULL) {
 		return -1;
@@ -2874,32 +2897,29 @@ static int re_key(struct ltdb_private *ltdb, struct ldb_val ldb_key, struct ldb_
 		ldb_debug(ldb, LDB_DEBUG_ERROR,
 			  "Refusing to re-index as GUID "
 			  "key %*.*s with no DN\n",
-			  (int)key.dsize, (int)key.dsize,
-			  (char *)key.dptr);
+			  (int)key.length, (int)key.length,
+			  (char *)key.data);
 		talloc_free(msg);
 		return -1;
 	}
-	
+
 	/* check if the DN key has changed, perhaps due to the case
 	   insensitivity of an element changing, or a change from DN
 	   to GUID keys */
-	key2 = ltdb_key_msg(module, msg, msg);
-	if (key2.dptr == NULL) {
+	key2 = ldb_kv_key_msg(module, msg, msg);
+	if (key2.data == NULL) {
 		/* probably a corrupt record ... darn */
 		ldb_debug(ldb, LDB_DEBUG_ERROR, "Invalid DN in re_index: %s",
 						ldb_dn_get_linearized(msg->dn));
 		talloc_free(msg);
 		return 0;
 	}
-	if (key.dsize != key2.dsize ||
-	    (memcmp(key.dptr, key2.dptr, key.dsize) != 0)) {
-		struct ldb_val ldb_key2 = {
-			.data = key2.dptr,
-			.length = key2.dsize
-		};
-		ltdb->kv_ops->update_in_iterate(ltdb, ldb_key, ldb_key2, val, ctx);
+	if (key.length != key2.length ||
+	    (memcmp(key.data, key2.data, key.length) != 0)) {
+		ldb_kv->kv_ops->update_in_iterate(
+		    ldb_kv, key, key2, val, ctx);
 	}
-	talloc_free(key2.dptr);
+	talloc_free(key2.data);
 
 	talloc_free(msg);
 
@@ -2916,32 +2936,32 @@ static int re_key(struct ltdb_private *ltdb, struct ldb_val ldb_key, struct ldb_
 /*
   traversal function that adds @INDEX records during a re index
 */
-static int re_index(struct ltdb_private *ltdb, struct ldb_val ldb_key, struct ldb_val val, void *state)
+static int re_index(struct ldb_kv_private *ldb_kv,
+		    struct ldb_val key,
+		    struct ldb_val val,
+		    void *state)
 {
 	struct ldb_context *ldb;
-	struct ltdb_reindex_context *ctx = (struct ltdb_reindex_context *)state;
+	struct ldb_kv_reindex_context *ctx =
+	    (struct ldb_kv_reindex_context *)state;
 	struct ldb_module *module = ctx->module;
 	struct ldb_message *msg;
 	unsigned int nb_elements_in_db;
-	TDB_DATA key = {
-		.dptr = ldb_key.data,
-		.dsize = ldb_key.length
-	};
 	int ret;
 	bool is_record;
-	
+
 	ldb = ldb_module_get_ctx(module);
 
-	if (key.dsize > 4 &&
-	    memcmp(key.dptr, "DN=@", 4) == 0) {
+	if (key.length > 4 &&
+	    memcmp(key.data, "DN=@", 4) == 0) {
 		return 0;
 	}
 
-	is_record = ltdb_key_is_record(key);
+	is_record = ldb_kv_key_is_record(key);
 	if (is_record == false) {
 		return 0;
 	}
-	
+
 	msg = ldb_msg_new(module);
 	if (msg == NULL) {
 		return -1;
@@ -2964,13 +2984,13 @@ static int re_index(struct ltdb_private *ltdb, struct ldb_val ldb_key, struct ld
 		ldb_debug(ldb, LDB_DEBUG_ERROR,
 			  "Refusing to re-index as GUID "
 			  "key %*.*s with no DN\n",
-			  (int)key.dsize, (int)key.dsize,
-			  (char *)key.dptr);
+			  (int)key.length, (int)key.length,
+			  (char *)key.data);
 		talloc_free(msg);
 		return -1;
 	}
 
-	ret = ltdb_index_onelevel(module, msg, 1);
+	ret = ldb_kv_index_onelevel(module, msg, 1);
 	if (ret != LDB_SUCCESS) {
 		ldb_debug(ldb, LDB_DEBUG_ERROR,
 			  "Adding special ONE LEVEL index failed (%s)!",
@@ -2979,7 +2999,7 @@ static int re_index(struct ltdb_private *ltdb, struct ldb_val ldb_key, struct ld
 		return -1;
 	}
 
-	ret = ltdb_index_add_all(module, ltdb, msg);
+	ret = ldb_kv_index_add_all(module, ldb_kv, msg);
 
 	if (ret != LDB_SUCCESS) {
 		ctx->error = ret;
@@ -3002,21 +3022,22 @@ static int re_index(struct ltdb_private *ltdb, struct ldb_val ldb_key, struct ld
 /*
   force a complete reindex of the database
 */
-int ltdb_reindex(struct ldb_module *module)
+int ldb_kv_reindex(struct ldb_module *module)
 {
-	struct ltdb_private *ltdb = talloc_get_type(ldb_module_get_private(module), struct ltdb_private);
+	struct ldb_kv_private *ldb_kv = talloc_get_type(
+	    ldb_module_get_private(module), struct ldb_kv_private);
 	int ret;
-	struct ltdb_reindex_context ctx;
+	struct ldb_kv_reindex_context ctx;
 
 	/*
 	 * Only triggered after a modification, but make clear we do
 	 * not re-index a read-only DB
 	 */
-	if (ltdb->read_only) {
+	if (ldb_kv->read_only) {
 		return LDB_ERR_UNWILLING_TO_PERFORM;
 	}
 
-	if (ltdb_cache_reload(module) != 0) {
+	if (ldb_kv_cache_reload(module) != 0) {
 		return LDB_ERR_OPERATIONS_ERROR;
 	}
 
@@ -3025,9 +3046,9 @@ int ltdb_reindex(struct ldb_module *module)
 	 * DB, no values stored so far are any use as we want to do a
 	 * re-index
 	 */
-	ltdb_index_transaction_cancel(module);
+	ldb_kv_index_transaction_cancel(module);
 
-	ret = ltdb_index_transaction_start(module);
+	ret = ldb_kv_index_transaction_start(module);
 	if (ret != LDB_SUCCESS) {
 		return ret;
 	}
@@ -3035,7 +3056,7 @@ int ltdb_reindex(struct ldb_module *module)
 	/* first traverse the database deleting any @INDEX records by
 	 * putting NULL entries in the in-memory tdb
 	 */
-	ret = ltdb->kv_ops->iterate(ltdb, delete_index, module);
+	ret = ldb_kv->kv_ops->iterate(ldb_kv, delete_index, module);
 	if (ret < 0) {
 		struct ldb_context *ldb = ldb_module_get_ctx(module);
 		ldb_asprintf_errstring(ldb, "index deletion traverse failed: %s",
@@ -3047,7 +3068,7 @@ int ltdb_reindex(struct ldb_module *module)
 	ctx.error = 0;
 	ctx.count = 0;
 
-	ret = ltdb->kv_ops->iterate(ltdb, re_key, &ctx);
+	ret = ldb_kv->kv_ops->iterate(ldb_kv, re_key, &ctx);
 	if (ret < 0) {
 		struct ldb_context *ldb = ldb_module_get_ctx(module);
 		ldb_asprintf_errstring(ldb, "key correction traverse failed: %s",
@@ -3065,7 +3086,7 @@ int ltdb_reindex(struct ldb_module *module)
 	ctx.count = 0;
 
 	/* now traverse adding any indexes for normal LDB records */
-	ret = ltdb->kv_ops->iterate(ltdb, re_index, &ctx);
+	ret = ldb_kv->kv_ops->iterate(ldb_kv, re_index, &ctx);
 	if (ret < 0) {
 		struct ldb_context *ldb = ldb_module_get_ctx(module);
 		ldb_asprintf_errstring(ldb, "reindexing traverse failed: %s",
@@ -3081,9 +3102,10 @@ int ltdb_reindex(struct ldb_module *module)
 
 	if (ctx.count > 10000) {
 		ldb_debug(ldb_module_get_ctx(module),
-			  LDB_DEBUG_WARNING, "Reindexing: re_index successful on %s, "
+			  LDB_DEBUG_WARNING,
+			  "Reindexing: re_index successful on %s, "
 			  "final index write-out will be in transaction commit",
-			  ltdb->kv_ops->name(ltdb));
+			  ldb_kv->kv_ops->name(ldb_kv));
 	}
 	return LDB_SUCCESS;
 }
