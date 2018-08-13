@@ -683,7 +683,7 @@ NTSTATUS cli_smb2_rmdir(struct cli_state *cli, const char *dname)
 			FILE_ATTRIBUTE_DIRECTORY, /* file attributes */
 			FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE, /* share_access */
 			FILE_OPEN,		/* create_disposition */
-			FILE_DIRECTORY_FILE|FILE_DELETE_ON_CLOSE,	/* create_options */
+			FILE_DIRECTORY_FILE,	/* create_options */
 			&fnum,
 			NULL);
 
@@ -711,6 +711,13 @@ NTSTATUS cli_smb2_rmdir(struct cli_state *cli, const char *dname)
 	if (!NT_STATUS_IS_OK(status)) {
 		return status;
 	}
+
+	status = cli_smb2_delete_on_close(cli, fnum, true);
+	if (!NT_STATUS_IS_OK(status)) {
+		cli_smb2_close_fnum(cli, fnum);
+		return status;
+	}
+
 	return cli_smb2_close_fnum(cli, fnum);
 }
 
@@ -2943,10 +2950,6 @@ NTSTATUS cli_smb2_get_user_quota(struct cli_state *cli,
 	sid_len = ndr_size_dom_sid(&pqt->sid, 0);
 
 	query.return_single = 1;
-	if (sid_len < 0) {
-		status = NT_STATUS_INVALID_PARAMETER;
-		goto fail;
-	}
 
 	info.next_entry_offset = 0;
 	info.sid_length = sid_len;
