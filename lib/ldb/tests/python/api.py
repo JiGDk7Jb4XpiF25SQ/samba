@@ -423,6 +423,19 @@ class SimpleLdb(LdbBaseTest):
         finally:
             l.delete(ldb.Dn(l, "dc=bar"))
 
+    def test_rename_bad_string_dns(self):
+        l = ldb.Ldb(self.url(), flags=self.flags())
+        m = ldb.Message()
+        m.dn = ldb.Dn(l, "dc=foo8")
+        m["bla"] = b"bla"
+        m["objectUUID"] = b"0123456789abcdef"
+        self.assertEqual(len(l.search()), 0)
+        l.add(m)
+        self.assertEqual(len(l.search()), 1)
+        self.assertRaises(ldb.LdbError,lambda: l.rename("dcXfoo8", "dc=bar"))
+        self.assertRaises(ldb.LdbError,lambda: l.rename("dc=foo8", "dcXbar"))
+        l.delete(ldb.Dn(l, "dc=foo8"))
+
     def test_empty_dn(self):
         l = ldb.Ldb(self.url(), flags=self.flags())
         self.assertEqual(0, len(l.search()))
@@ -1192,6 +1205,145 @@ class SearchTests(LdbBaseTest):
         # At some point we should fix this, but it isn't trivial
         self.assertEqual(len(res11), 1)
 
+    def test_distinguishedName_filter_one(self):
+        """Testing that a distinguishedName= filter succeeds
+        when the scope is SCOPE_ONELEVEL.
+
+        This should be made more consistent, but for now lock in
+        the behaviour
+
+        """
+
+        res11 = self.l.search(base="DC=SAMBA,DC=ORG",
+                              scope=ldb.SCOPE_ONELEVEL,
+                              expression="(distinguishedName=OU=OU1,DC=SAMBA,DC=ORG)")
+        self.assertEqual(len(res11), 1)
+
+    def test_distinguishedName_filter_subtree(self):
+        """Testing that a distinguishedName= filter succeeds
+        when the scope is SCOPE_SUBTREE"""
+
+        res11 = self.l.search(base="DC=SAMBA,DC=ORG",
+                              scope=ldb.SCOPE_SUBTREE,
+                              expression="(distinguishedName=OU=OU1,DC=SAMBA,DC=ORG)")
+        self.assertEqual(len(res11), 1)
+
+    def test_distinguishedName_filter_base(self):
+        """Testing that (incorrectly) a distinguishedName= filter works
+        when the scope is SCOPE_BASE"""
+
+        res11 = self.l.search(base="OU=OU1,DC=SAMBA,DC=ORG",
+                              scope=ldb.SCOPE_BASE,
+                              expression="(distinguishedName=OU=OU1,DC=SAMBA,DC=ORG)")
+
+        # At some point we should fix this, but it isn't trivial
+        self.assertEqual(len(res11), 1)
+
+    def test_bad_dn_filter_base(self):
+        """Testing that a dn= filter on an invalid DN works
+        when the scope is SCOPE_BASE but
+        returns zero results"""
+
+        res11 = self.l.search(base="OU=OU1,DC=SAMBA,DC=ORG",
+                              scope=ldb.SCOPE_BASE,
+                              expression="(dn=OU=OU1,DC=SAMBA,DCXXXX)")
+
+        # At some point we should fix this, but it isn't trivial
+        self.assertEqual(len(res11), 0)
+
+
+    def test_bad_dn_filter_one(self):
+        """Testing that a dn= filter succeeds but returns zero
+        results when the DN is not valid on a SCOPE_ONELEVEL search
+
+        """
+
+        res11 = self.l.search(base="DC=SAMBA,DC=ORG",
+                              scope=ldb.SCOPE_ONELEVEL,
+                              expression="(dn=OU=OU1,DC=SAMBA,DCXXXX)")
+        self.assertEqual(len(res11), 0)
+
+    def test_bad_dn_filter_subtree(self):
+        """Testing that a dn= filter succeeds but returns zero
+        results when the DN is not valid on a SCOPE_SUBTREE search
+
+        """
+
+        res11 = self.l.search(base="DC=SAMBA,DC=ORG",
+                              scope=ldb.SCOPE_SUBTREE,
+                              expression="(dn=OU=OU1,DC=SAMBA,DCXXXX)")
+        self.assertEqual(len(res11), 0)
+
+    def test_bad_distinguishedName_filter_base(self):
+        """Testing that a distinguishedName= filter on an invalid DN works
+        when the scope is SCOPE_BASE but
+        returns zero results"""
+
+        res11 = self.l.search(base="OU=OU1,DC=SAMBA,DC=ORG",
+                              scope=ldb.SCOPE_BASE,
+                              expression="(distinguishedName=OU=OU1,DC=SAMBA,DCXXXX)")
+
+        # At some point we should fix this, but it isn't trivial
+        self.assertEqual(len(res11), 0)
+
+
+    def test_bad_distinguishedName_filter_one(self):
+        """Testing that a distinguishedName= filter succeeds but returns zero
+        results when the DN is not valid on a SCOPE_ONELEVEL search
+
+        """
+
+        res11 = self.l.search(base="DC=SAMBA,DC=ORG",
+                              scope=ldb.SCOPE_ONELEVEL,
+                              expression="(distinguishedName=OU=OU1,DC=SAMBA,DCXXXX)")
+        self.assertEqual(len(res11), 0)
+
+    def test_bad_distinguishedName_filter_subtree(self):
+        """Testing that a distinguishedName= filter succeeds but returns zero
+        results when the DN is not valid on a SCOPE_SUBTREE search
+
+        """
+
+        res11 = self.l.search(base="DC=SAMBA,DC=ORG",
+                              scope=ldb.SCOPE_SUBTREE,
+                              expression="(distinguishedName=OU=OU1,DC=SAMBA,DCXXXX)")
+        self.assertEqual(len(res11), 0)
+
+    def test_bad_dn_search_base(self):
+        """Testing with a bad base DN (SCOPE_BASE)"""
+
+        try:
+            res11 = self.l.search(base="OU=OU1,DC=SAMBA,DCXXX",
+                                  scope=ldb.SCOPE_BASE)
+            self.fail("Should have failed with ERR_INVALID_DN_SYNTAX")
+        except ldb.LdbError as err:
+            enum = err.args[0]
+            self.assertEqual(enum, ldb.ERR_INVALID_DN_SYNTAX)
+
+
+    def test_bad_dn_search_one(self):
+        """Testing with a bad base DN (SCOPE_ONELEVEL)"""
+
+        try:
+            res11 = self.l.search(base="DC=SAMBA,DCXXXX",
+                              scope=ldb.SCOPE_ONELEVEL)
+            self.fail("Should have failed with ERR_INVALID_DN_SYNTAX")
+        except ldb.LdbError as err:
+            enum = err.args[0]
+            self.assertEqual(enum, ldb.ERR_INVALID_DN_SYNTAX)
+
+    def test_bad_dn_search_subtree(self):
+        """Testing with a bad base DN (SCOPE_SUBTREE)"""
+
+        try:
+            res11 = self.l.search(base="DC=SAMBA,DCXXXX",
+                                  scope=ldb.SCOPE_SUBTREE)
+            self.fail("Should have failed with ERR_INVALID_DN_SYNTAX")
+        except ldb.LdbError as err:
+            enum = err.args[0]
+            self.assertEqual(enum, ldb.ERR_INVALID_DN_SYNTAX)
+
+
 
 # Run the search tests against an lmdb backend
 class SearchTestsLmdb(SearchTests):
@@ -1258,8 +1410,10 @@ class IndexedAndOneLevelDNFilterSearchTests(SearchTests):
     def setUp(self):
         super(IndexedAndOneLevelDNFilterSearchTests, self).setUp()
         self.l.add({"dn": "@OPTIONS",
-                    "disallowDNFilter": "TRUE"})
+                    "disallowDNFilter": "TRUE",
+                    "checkBaseOnSearch": "TRUE"})
         self.disallowDNFilter = True
+        self.checkBaseOnSearch = True
 
         self.l.add({"dn": "@INDEXLIST",
                     "@IDXATTR": [b"x", b"y", b"ou"],
@@ -1291,8 +1445,10 @@ class GUIDIndexedDNFilterSearchTests(SearchTests):
                       "@IDX_DN_GUID": [b"GUID"]}
         super(GUIDIndexedDNFilterSearchTests, self).setUp()
         self.l.add({"dn": "@OPTIONS",
-                    "disallowDNFilter": "TRUE"})
+                    "disallowDNFilter": "TRUE",
+                    "checkBaseOnSearch": "TRUE"})
         self.disallowDNFilter = True
+        self.checkBaseOnSearch = True
         self.IDX = True
         self.IDXGUID = True
 
@@ -1306,8 +1462,10 @@ class GUIDAndOneLevelIndexedSearchTests(SearchTests):
                       "@IDX_DN_GUID": [b"GUID"]}
         super(GUIDAndOneLevelIndexedSearchTests, self).setUp()
         self.l.add({"dn": "@OPTIONS",
-                    "disallowDNFilter": "TRUE"})
+                    "disallowDNFilter": "TRUE",
+                    "checkBaseOnSearch": "TRUE"})
         self.disallowDNFilter = True
+        self.checkBaseOnSearch = True
         self.IDX = True
         self.IDXGUID = True
         self.IDXONE = True
@@ -1382,6 +1540,17 @@ class AddModifyTests(LdbBaseTest):
         except ldb.LdbError as err:
             enum = err.args[0]
             self.assertEqual(enum, ldb.ERR_ENTRY_ALREADY_EXISTS)
+
+    def test_add_bad(self):
+        try:
+            self.l.add({"dn": "BAD,DC=SAMBA,DC=ORG",
+                        "name": b"Admins",
+                        "x": "z", "y": "a",
+                        "objectUUID": b"0123456789abcde1"})
+            self.fail("Should have failed adding entry with invalid DN")
+        except ldb.LdbError as err:
+            enum = err.args[0]
+            self.assertEqual(enum, ldb.ERR_INVALID_DN_SYNTAX)
 
     def test_add_del_add(self):
         self.l.add({"dn": "OU=DUP,DC=SAMBA,DC=ORG",
@@ -1476,6 +1645,34 @@ class AddModifyTests(LdbBaseTest):
         except ldb.LdbError as err:
             enum = err.args[0]
             self.assertEqual(enum, ldb.ERR_NO_SUCH_OBJECT)
+
+    def test_move_bad(self):
+        self.l.add({"dn": "OU=DUP2,DC=SAMBA,DC=ORG",
+                    "name": b"Admins",
+                    "x": "z", "y": "a",
+                    "objectUUID": b"0123456789abcde2"})
+
+        try:
+            self.l.rename("OUXDUP,DC=SAMBA,DC=ORG",
+                          "OU=DUP2,DC=SAMBA,DC=ORG")
+            self.fail("Should have failed on invalid DN")
+        except ldb.LdbError as err:
+            enum = err.args[0]
+            self.assertEqual(enum, ldb.ERR_INVALID_DN_SYNTAX)
+
+    def test_move_bad2(self):
+        self.l.add({"dn": "OU=DUP2,DC=SAMBA,DC=ORG",
+                    "name": b"Admins",
+                    "x": "z", "y": "a",
+                    "objectUUID": b"0123456789abcde2"})
+
+        try:
+            self.l.rename("OU=DUP,DC=SAMBA,DC=ORG",
+                          "OUXDUP2,DC=SAMBA,DC=ORG")
+            self.fail("Should have failed on missing")
+        except ldb.LdbError as err:
+            enum = err.args[0]
+            self.assertEqual(enum, ldb.ERR_INVALID_DN_SYNTAX)
 
     def test_move_fail_move_add(self):
         self.l.add({"dn": "OU=DUP,DC=SAMBA,DC=ORG",

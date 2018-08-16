@@ -1172,11 +1172,20 @@ static int ldb_kv_index_dn_leaf(struct ldb_module *module,
 	}
 	if (ldb_attr_dn(tree->u.equality.attr) == 0) {
 		enum key_truncation truncation = KEY_NOT_TRUNCATED;
+		bool valid_dn = false;
 		struct ldb_dn *dn
 			= ldb_dn_from_ldb_val(list,
 					      ldb_module_get_ctx(module),
 					      &tree->u.equality.value);
 		if (dn == NULL) {
+			/* If we can't parse it, no match */
+			list->dn = NULL;
+			list->count = 0;
+			return LDB_SUCCESS;
+		}
+
+		valid_dn = ldb_dn_validate(dn);
+		if (valid_dn == false) {
 			/* If we can't parse it, no match */
 			list->dn = NULL;
 			list->count = 0;
@@ -1613,6 +1622,15 @@ static int ldb_kv_index_dn_attr(struct ldb_module *module,
 
 	/* work out the index key from the parent DN */
 	val.data = (uint8_t *)((uintptr_t)ldb_dn_get_casefold(dn));
+	if (val.data == NULL) {
+		const char *dn_str = ldb_dn_get_linearized(dn);
+		ldb_asprintf_errstring(ldb_module_get_ctx(module),
+				       __location__
+				       ": Failed to get casefold DN "
+				       "from: %s",
+				       dn_str);
+		return LDB_ERR_OPERATIONS_ERROR;
+	}
 	val.length = strlen((char *)val.data);
 	key = ldb_kv_index_key(ldb, ldb_kv, attr, &val, NULL, truncation);
 	if (!key) {
@@ -1666,6 +1684,7 @@ static int ldb_kv_index_dn_base_dn(struct ldb_module *module,
 		dn_list->dn[0].data = discard_const_p(unsigned char,
 						      ldb_dn_get_linearized(base_dn));
 		if (dn_list->dn[0].data == NULL) {
+			talloc_free(dn_list->dn);
 			return ldb_module_oom(module);
 		}
 		dn_list->dn[0].length = strlen((char *)dn_list->dn[0].data);
@@ -2021,6 +2040,7 @@ int ldb_kv_search_indexed(struct ldb_kv_context *ac, uint32_t *match_count)
 			struct dn_list *idx_one_tree_list
 				= talloc_zero(ac, struct dn_list);
 			if (idx_one_tree_list == NULL) {
+				talloc_free(dn_list);
 				return ldb_module_oom(ac->module);
 			}
 
