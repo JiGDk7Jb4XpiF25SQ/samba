@@ -154,7 +154,7 @@ struct g_lock_ctx *g_lock_ctx_init(TALLOC_CTX *mem_ctx,
 	}
 	result->msg = msg;
 
-	db_path = lock_path("g_lock.tdb");
+	db_path = lock_path(talloc_tos(), "g_lock.tdb");
 	if (db_path == NULL) {
 		TALLOC_FREE(result);
 		return NULL;
@@ -167,14 +167,14 @@ struct g_lock_ctx *g_lock_ctx_init(TALLOC_CTX *mem_ctx,
 			  DBWRAP_FLAG_NONE);
 	TALLOC_FREE(db_path);
 	if (backend == NULL) {
-		DEBUG(1, ("g_lock_init: Could not open g_lock.tdb\n"));
+		DBG_WARNING("Could not open g_lock.tdb\n");
 		TALLOC_FREE(result);
 		return NULL;
 	}
 
-	result->db = db_open_watched(result, backend, msg);
+	result->db = db_open_watched(result, &backend, msg);
 	if (result->db == NULL) {
-		DBG_WARNING("g_lock_init: db_open_watched failed\n");
+		DBG_WARNING("db_open_watched failed\n");
 		TALLOC_FREE(result);
 		return NULL;
 	}

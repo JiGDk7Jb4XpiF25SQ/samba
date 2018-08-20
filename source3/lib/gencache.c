@@ -64,7 +64,7 @@ static bool gencache_init(void)
 
 	hash_size = lp_parm_int(-1, "gencache", "hash_size", 10000);
 
-	cache_fname = cache_path("gencache.tdb");
+	cache_fname = cache_path(talloc_tos(), "gencache.tdb");
 	if (cache_fname == NULL) {
 		return false;
 	}
@@ -91,7 +91,7 @@ static bool gencache_init(void)
 		return false;
 	}
 
-	cache_fname = lock_path("gencache_notrans.tdb");
+	cache_fname = lock_path(talloc_tos(), "gencache_notrans.tdb");
 	if (cache_fname == NULL) {
 		TALLOC_FREE(cache);
 		return false;
