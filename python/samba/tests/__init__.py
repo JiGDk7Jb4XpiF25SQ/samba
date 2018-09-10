@@ -56,7 +56,8 @@ except ImportError:
     class SkipTest(Exception):
         """Test skipped."""
 
-HEXDUMP_FILTER=bytearray([x if ((len(repr(chr(x)))==3) and (x < 127)) else ord('.') for x in range(256)])
+HEXDUMP_FILTER = bytearray([x if ((len(repr(chr(x))) == 3) and (x < 127)) else ord('.') for x in range(256)])
+
 
 class TestCase(unittest.TestCase):
     """A Samba test case."""
@@ -101,7 +102,7 @@ class TestCase(unittest.TestCase):
                 hr = ' '.join(["%02X" % x for x in lr])
                 ll = ll.translate(HEXDUMP_FILTER).decode('utf8')
                 lr = lr.translate(HEXDUMP_FILTER).decode('utf8')
-            result += "[%04X] %-*s  %-*s  %s %s\n" % (N, 8*3, hl, 8*3, hr, ll, lr)
+            result += "[%04X] %-*s  %-*s  %s %s\n" % (N, 8 * 3, hl, 8 * 3, hr, ll, lr)
             N += 16
         return result
 
@@ -133,8 +134,6 @@ class TestCase(unittest.TestCase):
                               | gensec.FEATURE_SEAL)
         c.set_kerberos_state(kerberos_state)
         return c
-
-
 
     # These functions didn't exist before Python2.7:
     if sys.version_info < (2, 7):
@@ -195,7 +194,8 @@ class TestCase(unittest.TestCase):
                 result.addSuccess(self)
 
         def run(self, result=None):
-            if result is None: result = self.defaultTestResult()
+            if result is None:
+                result = self.defaultTestResult()
             result.startTest(self)
             testMethod = getattr(self, self._testMethodName)
             try:
@@ -236,7 +236,8 @@ class TestCase(unittest.TestCase):
 
                 for (fn, args, kwargs) in reversed(getattr(self, "_cleanups", [])):
                     fn(*args, **kwargs)
-                if ok: result.addSuccess(self)
+                if ok:
+                    result.addSuccess(self)
             finally:
                 result.stopTest(self)
 
@@ -252,7 +253,7 @@ class TestCase(unittest.TestCase):
                              "a diff follows\n"
                              % ('when stripped ' if strip else '',
                                 len(a), len(b),
-                             ))
+                                ))
 
             from difflib import unified_diff
             diff = unified_diff(a.splitlines(True),
@@ -320,6 +321,7 @@ def env_get_var_value(var_name, allow_missing=False):
 
 cmdline_credentials = None
 
+
 class RpcInterfaceTestCase(TestCase):
     """DCE/RPC Test case."""
 
@@ -330,7 +332,7 @@ class ValidNetbiosNameTests(TestCase):
         self.assertTrue(samba.valid_netbios_name("FOO"))
 
     def test_too_long(self):
-        self.assertFalse(samba.valid_netbios_name("FOO"*10))
+        self.assertFalse(samba.valid_netbios_name("FOO" * 10))
 
     def test_invalid_characters(self):
         self.assertFalse(samba.valid_netbios_name("*BLA"))
@@ -358,6 +360,7 @@ class BlackboxProcessError(Exception):
             s = "%s; message: %s" % (s, self.msg)
 
         return s
+
 
 class BlackboxTestCase(TestCaseInTempDir):
     """Base test case for blackbox tests."""
@@ -414,7 +417,7 @@ def connect_samdb(samdb_url, lp=None, session_info=None, credentials=None,
     to make proper URL for ldb.connect() while using default
     parameters for connection based on test environment
     """
-    if not "://" in samdb_url:
+    if "://" not in samdb_url:
         if not ldap_only and os.path.isfile(samdb_url):
             samdb_url = "tdb://%s" % samdb_url
         else:
@@ -490,6 +493,7 @@ def delete_force(samdb, dn, **kwargs):
         (num, errstr) = error.args
         assert num == ldb.ERR_NO_SUCH_OBJECT, "ldb.delete() failed: %s" % errstr
 
+
 def create_test_ou(samdb, name):
     """Creates a unique OU for the test"""
 
@@ -498,6 +502,6 @@ def create_test_ou(samdb, name):
     # objects can be slow to replicate out. So the OU created by a previous
     # testenv may still exist at the point that tests start on another testenv.
     rand = randint(1, 10000000)
-    dn = ldb.Dn(samdb, "OU=%s%d,%s" %(name, rand, samdb.get_default_basedn()))
-    samdb.add({ "dn": dn, "objectclass": "organizationalUnit"})
+    dn = ldb.Dn(samdb, "OU=%s%d,%s" % (name, rand, samdb.get_default_basedn()))
+    samdb.add({"dn": dn, "objectclass": "organizationalUnit"})
     return dn

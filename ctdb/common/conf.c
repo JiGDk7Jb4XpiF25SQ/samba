@@ -122,12 +122,12 @@ static int string_to_integer(const char *str, int *int_val)
 
 static int string_to_boolean(const char *str, bool *bool_val)
 {
-	if (strcasecmp(str, "true") == 0) {
+	if (strcasecmp(str, "true") == 0 || strcasecmp(str, "yes") == 0) {
 		*bool_val = true;
 		return 0;
 	}
 
-	if (strcasecmp(str, "false") == 0) {
+	if (strcasecmp(str, "false") == 0 || strcasecmp(str, "no") == 0) {
 		*bool_val = false;
 		return 0;
 	}
@@ -155,7 +155,7 @@ static int conf_value_from_string(TALLOC_CTX *mem_ctx,
 		break;
 
 	default:
-		return ENOENT;
+		return EINVAL;
 	}
 
 	return ret;
@@ -232,7 +232,7 @@ static int conf_value_copy(TALLOC_CTX *mem_ctx,
 		break;
 
 	default:
-		return ENOENT;
+		return EINVAL;
 	}
 
 	return 0;
@@ -1048,6 +1048,10 @@ static int conf_load_internal(struct conf_context *conf)
 		}
 	}
 
+	if (state.err != 0) {
+		goto fail;
+	}
+
 	conf_all_update(conf);
 	return 0;
 
@@ -1066,7 +1070,7 @@ static bool conf_load_section(const char *section, void *private_data)
 		ok = conf_section_validate(state->conf, state->s, state->mode);
 		if (!ok) {
 			state->err = EINVAL;
-			return false;
+			return true;
 		}
 	}
 
@@ -1078,7 +1082,7 @@ static bool conf_load_section(const char *section, void *private_data)
 		} else {
 			D_ERR("conf: unknown section [%s]\n", section);
 			state->err = EINVAL;
-			return false;
+			return true;
 		}
 	}
 
@@ -1099,23 +1103,30 @@ static bool conf_load_option(const char *name,
 
 	if (state->s == NULL) {
 		if (state->conf->ignore_unknown) {
-			D_DEBUG("conf: ignoring unknown option \"%s\"\n",
+			D_DEBUG("conf: unknown section for option \"%s\"\n",
 				name);
 			return true;
 		} else {
-			D_ERR("conf: unknown option \"%s\"\n", name);
+			D_ERR("conf: unknown section for option \"%s\"\n",
+			      name);
 			state->err = EINVAL;
-			return false;
+			return true;
 		}
 	}
 
 	opt = conf_option_find(state->s, name);
 	if (opt == NULL) {
 		if (state->conf->ignore_unknown) {
+			D_DEBUG("conf: unknown option [%s] -> \"%s\"\n",
+				state->s->name,
+				name);
 			return true;
 		} else {
-			state->err = ENOENT;
-			return false;
+			D_ERR("conf: unknown option [%s] -> \"%s\"\n",
+			      state->s->name,
+			      name);
+			state->err = EINVAL;
+			return true;
 		}
 	}
 
@@ -1128,9 +1139,13 @@ static bool conf_load_option(const char *name,
 	value.type = opt->type;
 	ret = conf_value_from_string(tmp_ctx, value_str, &value);
 	if (ret != 0) {
+		D_ERR("conf: invalid value [%s] -> \"%s\" = \"%s\"\n",
+		      state->s->name,
+		      name,
+		      value_str);
 		talloc_free(tmp_ctx);
 		state->err = ret;
-		return false;
+		return true;
 	}
 
 	ok = conf_option_same_value(opt, &value);
@@ -1142,7 +1157,7 @@ static bool conf_load_option(const char *name,
 	if (ret != 0) {
 		talloc_free(tmp_ctx);
 		state->err = ret;
-		return false;
+		return true;
 	}
 
 done:
@@ -1196,16 +1211,16 @@ static int conf_set(struct conf_context *conf,
 
 	s = conf_section_find(conf, section);
 	if (s == NULL) {
-		return ENOENT;
+		return EINVAL;
 	}
 
 	opt = conf_option_find(s, key);
 	if (opt == NULL) {
-		return ENOENT;
+		return EINVAL;
 	}
 
 	if (opt->type != value->type) {
-		return ENOENT;
+		return EINVAL;
 	}
 
 	ok = conf_option_same_value(opt, value);
@@ -1280,12 +1295,12 @@ static int conf_get(struct conf_context *conf,
 
 	s = conf_section_find(conf, section);
 	if (s == NULL) {
-		return ENOENT;
+		return EINVAL;
 	}
 
 	opt = conf_option_find(s, key);
 	if (opt == NULL) {
-		return ENOENT;
+		return EINVAL;
 	}
 
 	if (opt->type != type) {

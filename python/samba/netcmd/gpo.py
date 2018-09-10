@@ -32,7 +32,7 @@ from samba.netcmd import (
     CommandError,
     Option,
     SuperCommand,
-    )
+)
 from samba.samdb import SamDB
 from samba import dsdb
 from samba.dcerpc import security
@@ -108,7 +108,7 @@ def parse_gplink(gplink):
         d = g.split(';')
         if len(d) != 2 or not d[0].startswith("[LDAP://"):
             raise RuntimeError("Badly formed gPLink '%s'" % g)
-        ret.append({ 'dn' : d[0][8:], 'options' : int(d[1])})
+        ret.append({'dn': d[0][8:], 'options': int(d[1])})
     return ret
 
 
@@ -144,7 +144,10 @@ def get_gpo_dn(samdb, gpo):
 
 
 def get_gpo_info(samdb, gpo=None, displayname=None, dn=None,
-                 sd_flags=security.SECINFO_OWNER|security.SECINFO_GROUP|security.SECINFO_DACL|security.SECINFO_SACL):
+                 sd_flags=(security.SECINFO_OWNER |
+                           security.SECINFO_GROUP |
+                           security.SECINFO_DACL |
+                           security.SECINFO_SACL)):
     '''Get GPO information using gpo, displayname or dn'''
 
     policies_dn = samdb.get_default_basedn()
@@ -166,14 +169,14 @@ def get_gpo_info(samdb, gpo=None, displayname=None, dn=None,
 
     try:
         msg = samdb.search(base=base_dn, scope=search_scope,
-                            expression=search_expr,
-                            attrs=['nTSecurityDescriptor',
-                                    'versionNumber',
-                                    'flags',
-                                    'name',
-                                    'displayName',
-                                    'gPCFileSysPath'],
-                            controls=['sd_flags:1:%d' % sd_flags])
+                           expression=search_expr,
+                           attrs=['nTSecurityDescriptor',
+                                  'versionNumber',
+                                  'flags',
+                                  'name',
+                                  'displayName',
+                                  'gPCFileSysPath'],
+                           controls=['sd_flags:1:%d' % sd_flags])
     except Exception as e:
         if gpo is not None:
             mesg = "Cannot get information for GPO %s" % gpo
@@ -201,8 +204,8 @@ def del_gpo_link(samdb, container_dn, gpo):
     # Check if valid Container DN and get existing GPlinks
     try:
         msg = samdb.search(base=container_dn, scope=ldb.SCOPE_BASE,
-                            expression="(objectClass=*)",
-                            attrs=['gPLink'])[0]
+                           expression="(objectClass=*)",
+                           attrs=['gPLink'])[0]
     except Exception as e:
         raise CommandError("Container '%s' does not exist" % container_dn, e)
 
@@ -305,11 +308,12 @@ attr_flags = smb.FILE_ATTRIBUTE_SYSTEM | \
              smb.FILE_ATTRIBUTE_ARCHIVE | \
              smb.FILE_ATTRIBUTE_HIDDEN
 
+
 def copy_directory_remote_to_local(conn, remotedir, localdir):
     if not os.path.isdir(localdir):
         os.mkdir(localdir)
-    r_dirs = [ remotedir ]
-    l_dirs = [ localdir ]
+    r_dirs = [remotedir]
+    l_dirs = [localdir]
     while r_dirs:
         r_dir = r_dirs.pop()
         l_dir = l_dirs.pop()
@@ -333,8 +337,8 @@ def copy_directory_local_to_remote(conn, localdir, remotedir,
                                    ignore_existing=False):
     if not conn.chkpath(remotedir):
         conn.mkdir(remotedir)
-    l_dirs = [ localdir ]
-    r_dirs = [ remotedir ]
+    l_dirs = [localdir]
+    r_dirs = [remotedir]
     while l_dirs:
         l_dir = l_dirs.pop()
         r_dir = r_dirs.pop()
@@ -381,7 +385,7 @@ class cmd_listall(Command):
     takes_options = [
         Option("-H", "--URL", help="LDB URL for database or target server", type=str,
                metavar="URL", dest="H")
-        ]
+    ]
 
     def run(self, H=None, sambaopts=None, credopts=None, versionopts=None):
 
@@ -418,8 +422,8 @@ class cmd_list(Command):
 
     takes_options = [
         Option("-H", "--URL", help="LDB URL for database or target server",
-            type=str, metavar="URL", dest="H")
-        ]
+               type=str, metavar="URL", dest="H")
+    ]
 
     def run(self, username, H=None, sambaopts=None, credopts=None, versionopts=None):
 
@@ -432,7 +436,7 @@ class cmd_list(Command):
 
         try:
             msg = self.samdb.search(expression='(&(|(samAccountName=%s)(samAccountName=%s$))(objectClass=User))' %
-                                                (ldb.binary_encode(username),ldb.binary_encode(username)))
+                                    (ldb.binary_encode(username), ldb.binary_encode(username)))
             user_dn = msg[0].dn
         except Exception:
             raise CommandError("Failed to find account %s" % username)
@@ -444,8 +448,8 @@ class cmd_list(Command):
         except Exception:
             raise CommandError("Failed to find objectClass for user %s" % username)
 
-        session_info_flags = ( AUTH_SESSION_INFO_DEFAULT_GROUPS |
-                               AUTH_SESSION_INFO_AUTHENTICATED )
+        session_info_flags = (AUTH_SESSION_INFO_DEFAULT_GROUPS |
+                              AUTH_SESSION_INFO_AUTHENTICATED)
 
         # When connecting to a remote server, don't look up the local privilege DB
         if self.url is not None and self.url.startswith('ldap'):
@@ -471,7 +475,9 @@ class cmd_list(Command):
                         continue
 
                     try:
-                        sd_flags=security.SECINFO_OWNER|security.SECINFO_GROUP|security.SECINFO_DACL
+                        sd_flags = (security.SECINFO_OWNER |
+                                    security.SECINFO_GROUP |
+                                    security.SECINFO_DACL)
                         gmsg = self.samdb.search(base=g['dn'], scope=ldb.SCOPE_BASE,
                                                  attrs=['name', 'displayName', 'flags',
                                                         'nTSecurityDescriptor'],
@@ -480,7 +486,7 @@ class cmd_list(Command):
                         secdesc = ndr_unpack(security.descriptor, secdesc_ndr)
                     except Exception:
                         self.outf.write("Failed to fetch gpo object with nTSecurityDescriptor %s\n" %
-                            g['dn'])
+                                        g['dn'])
                         continue
 
                     try:
@@ -534,7 +540,7 @@ class cmd_show(Command):
 
     takes_options = [
         Option("-H", help="LDB URL for database or target server", type=str)
-        ]
+    ]
 
     def run(self, gpo, H=None, sambaopts=None, credopts=None, versionopts=None):
 
@@ -582,10 +588,10 @@ class cmd_getlink(Command):
 
     takes_options = [
         Option("-H", help="LDB URL for database or target server", type=str)
-        ]
+    ]
 
     def run(self, container_dn, H=None, sambaopts=None, credopts=None,
-                versionopts=None):
+            versionopts=None):
 
         self.lp = sambaopts.get_loadparm()
         self.creds = credopts.get_credentials(self.lp, fallback_machine=True)
@@ -630,13 +636,13 @@ class cmd_setlink(Command):
     takes_options = [
         Option("-H", help="LDB URL for database or target server", type=str),
         Option("--disable", dest="disabled", default=False, action='store_true',
-            help="Disable policy"),
+               help="Disable policy"),
         Option("--enforce", dest="enforced", default=False, action='store_true',
-            help="Enforce policy")
-        ]
+               help="Enforce policy")
+    ]
 
     def run(self, container_dn, gpo, H=None, disabled=False, enforced=False,
-                sambaopts=None, credopts=None, versionopts=None):
+            sambaopts=None, credopts=None, versionopts=None):
 
         self.lp = sambaopts.get_loadparm()
         self.creds = credopts.get_credentials(self.lp, fallback_machine=True)
@@ -680,10 +686,10 @@ class cmd_setlink(Command):
             if found:
                 raise CommandError("GPO '%s' already linked to this container" % gpo)
             else:
-                gplist.insert(0, { 'dn' : gpo_dn, 'options' : gplink_options })
+                gplist.insert(0, {'dn': gpo_dn, 'options': gplink_options})
         else:
             gplist = []
-            gplist.append({ 'dn' : gpo_dn, 'options' : gplink_options })
+            gplist.append({'dn': gpo_dn, 'options': gplink_options})
 
         gplink_str = encode_gplink(gplist)
 
@@ -719,10 +725,10 @@ class cmd_dellink(Command):
 
     takes_options = [
         Option("-H", help="LDB URL for database or target server", type=str),
-        ]
+    ]
 
     def run(self, container, gpo, H=None, sambaopts=None, credopts=None,
-                versionopts=None):
+            versionopts=None):
 
         self.lp = sambaopts.get_loadparm()
         self.creds = credopts.get_credentials(self.lp, fallback_machine=True)
@@ -758,10 +764,10 @@ class cmd_listcontainers(Command):
 
     takes_options = [
         Option("-H", help="LDB URL for database or target server", type=str)
-        ]
+    ]
 
     def run(self, gpo, H=None, sambaopts=None, credopts=None,
-                versionopts=None):
+            versionopts=None):
 
         self.lp = sambaopts.get_loadparm()
         self.creds = credopts.get_credentials(self.lp, fallback_machine=True)
@@ -794,10 +800,10 @@ class cmd_getinheritance(Command):
 
     takes_options = [
         Option("-H", help="LDB URL for database or target server", type=str)
-        ]
+    ]
 
     def run(self, container_dn, H=None, sambaopts=None, credopts=None,
-                versionopts=None):
+            versionopts=None):
 
         self.lp = sambaopts.get_loadparm()
         self.creds = credopts.get_credentials(self.lp, fallback_machine=True)
@@ -834,14 +840,14 @@ class cmd_setinheritance(Command):
         "credopts": options.CredentialsOptions,
     }
 
-    takes_args = [ 'container_dn', 'inherit_state' ]
+    takes_args = ['container_dn', 'inherit_state']
 
     takes_options = [
         Option("-H", help="LDB URL for database or target server", type=str)
-        ]
+    ]
 
     def run(self, container_dn, inherit_state, H=None, sambaopts=None, credopts=None,
-                versionopts=None):
+            versionopts=None):
 
         if inherit_state.lower() == 'block':
             inheritance = dsdb.GPO_BLOCK_INHERITANCE
@@ -893,7 +899,7 @@ class cmd_fetch(Command):
     takes_options = [
         Option("-H", help="LDB URL for database or target server", type=str),
         Option("--tmpdir", help="Temporary directory for copying policy files", type=str)
-        ]
+    ]
 
     def run(self, gpo, H=None, tmpdir=None, sambaopts=None, credopts=None, versionopts=None):
 
@@ -974,7 +980,7 @@ class cmd_backup(Command):
                default=False, action='store_true'),
         Option("--entities", help="File to export defining XML entities for the restore",
                dest='ent_file', type=str)
-        ]
+    ]
 
     def run(self, gpo, H=None, tmpdir=None, generalize=False, sambaopts=None,
             credopts=None, versionopts=None, ent_file=None):
@@ -1119,7 +1125,7 @@ class cmd_create(Command):
     takes_options = [
         Option("-H", help="LDB URL for database or target server", type=str),
         Option("--tmpdir", help="Temporary directory for copying policy files", type=str)
-        ]
+    ]
 
     def run(self, displayname, H=None, tmpdir=None, sambaopts=None, credopts=None,
             versionopts=None):
@@ -1218,9 +1224,9 @@ class cmd_create(Command):
             self.samdb.add(m)
 
             # Get new security descriptor
-            ds_sd_flags = ( security.SECINFO_OWNER |
-                            security.SECINFO_GROUP |
-                            security.SECINFO_DACL )
+            ds_sd_flags = (security.SECINFO_OWNER |
+                           security.SECINFO_GROUP |
+                           security.SECINFO_DACL)
             msg = get_gpo_info(self.samdb, gpo=gpo, sd_flags=ds_sd_flags)[0]
             ds_sd_ndr = msg['nTSecurityDescriptor'][0]
             ds_sd = ndr_unpack(security.descriptor, ds_sd_ndr).as_sddl()
@@ -1234,10 +1240,10 @@ class cmd_create(Command):
             create_directory_hier(conn, sharepath)
 
             # Set ACL
-            sio = ( security.SECINFO_OWNER |
-                    security.SECINFO_GROUP |
-                    security.SECINFO_DACL |
-                    security.SECINFO_PROTECTED_DACL )
+            sio = (security.SECINFO_OWNER |
+                   security.SECINFO_GROUP |
+                   security.SECINFO_DACL |
+                   security.SECINFO_PROTECTED_DACL)
             conn.set_acl(sharepath, fs_sd, sio)
 
             # Copy GPO files over SMB
@@ -1250,7 +1256,7 @@ class cmd_create(Command):
             m['a05'] = ldb.MessageElement("0", ldb.FLAG_MOD_REPLACE, "versionNumber")
             m['a07'] = ldb.MessageElement("2", ldb.FLAG_MOD_REPLACE, "gpcFunctionalityVersion")
             m['a04'] = ldb.MessageElement("0", ldb.FLAG_MOD_REPLACE, "flags")
-            controls=["permissive_modify:0"]
+            controls = ["permissive_modify:0"]
             self.samdb.modify(m, controls=controls)
         except Exception:
             self.samdb.transaction_cancel()
@@ -1278,7 +1284,7 @@ class cmd_restore(cmd_create):
         Option("-H", help="LDB URL for database or target server", type=str),
         Option("--tmpdir", help="Temporary directory for copying policy files", type=str),
         Option("--entities", help="File defining XML entities to insert into DOCTYPE header", type=str)
-        ]
+    ]
 
     def restore_from_backup_to_local_dir(self, sourcedir, targetdir, dtd_header=''):
         SUFFIX = '.SAMBABACKUP'
@@ -1379,7 +1385,7 @@ class cmd_restore(cmd_create):
             dtd_header += '\n]>\n'
 
         super(cmd_restore, self).run(displayname, H, tmpdir, sambaopts,
-                                    credopts, versionopts)
+                                     credopts, versionopts)
 
         try:
             # Iterate over backup files and restore with DTD
@@ -1418,10 +1424,10 @@ class cmd_del(Command):
 
     takes_options = [
         Option("-H", help="LDB URL for database or target server", type=str),
-        ]
+    ]
 
     def run(self, gpo, H=None, sambaopts=None, credopts=None,
-                versionopts=None):
+            versionopts=None):
 
         self.lp = sambaopts.get_loadparm()
         self.creds = credopts.get_credentials(self.lp, fallback_machine=True)
@@ -1493,7 +1499,7 @@ class cmd_aclcheck(Command):
     takes_options = [
         Option("-H", "--URL", help="LDB URL for database or target server", type=str,
                metavar="URL", dest="H")
-        ]
+    ]
 
     def run(self, H=None, sambaopts=None, credopts=None, versionopts=None):
 

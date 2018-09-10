@@ -839,6 +839,15 @@ NTSTATUS cli_pull(struct cli_state *cli, uint16_t fnum,
 		  off_t start_offset, off_t size, size_t window_size,
 		  NTSTATUS (*sink)(char *buf, size_t n, void *priv),
 		  void *priv, off_t *received);
+struct tevent_req *cli_read_send(
+	TALLOC_CTX *mem_ctx,
+	struct tevent_context *ev,
+	struct cli_state *cli,
+	uint16_t fnum,
+	char *buf,
+	off_t offset,
+	size_t size);
+NTSTATUS cli_read_recv(struct tevent_req *req, size_t *received);
 NTSTATUS cli_read(struct cli_state *cli, uint16_t fnum,
 		  char *buf, off_t offset, size_t size,
 		  size_t *nread);
@@ -859,6 +868,16 @@ struct tevent_req *cli_write_andx_send(TALLOC_CTX *mem_ctx,
 				       off_t offset, size_t size);
 NTSTATUS cli_write_andx_recv(struct tevent_req *req, size_t *pwritten);
 
+struct tevent_req *cli_writeall_send(
+	TALLOC_CTX *mem_ctx,
+	struct tevent_context *ev,
+	struct cli_state *cli,
+	uint16_t fnum,
+	uint16_t mode,
+	const uint8_t *buf,
+	off_t offset,
+	size_t size);
+NTSTATUS cli_writeall_recv(struct tevent_req *req, size_t *pwritten);
 NTSTATUS cli_writeall(struct cli_state *cli, uint16_t fnum, uint16_t mode,
 		      const uint8_t *buf, off_t offset, size_t size,
 		      size_t *pwritten);

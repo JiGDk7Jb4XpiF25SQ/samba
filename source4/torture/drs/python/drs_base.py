@@ -38,8 +38,9 @@ from ldb import (
     SCOPE_BASE,
     Message,
     FLAG_MOD_REPLACE,
-    )
+)
 from samba.compat import cmp_fn
+
 
 class DrsBaseTestCase(SambaToolCmdTest):
     """Base class implementation for all DRS python tests.
@@ -141,7 +142,7 @@ class DrsBaseTestCase(SambaToolCmdTest):
 
         (result, out, err) = self.runsubcmd(*samba_tool_cmdline)
         self.assertCmdSuccess(result, out, err)
-        self.assertEquals(err,"","Shouldn't be any error messages")
+        self.assertEquals(err, "", "Shouldn't be any error messages")
 
     def _enable_inbound_repl(self, DC):
         # make base command line
@@ -150,7 +151,7 @@ class DrsBaseTestCase(SambaToolCmdTest):
         samba_tool_cmd += [DC, "--dsa-option=-DISABLE_INBOUND_REPL"]
         (result, out, err) = self.runsubcmd(*samba_tool_cmd)
         self.assertCmdSuccess(result, out, err)
-        self.assertEquals(err,"","Shouldn't be any error messages")
+        self.assertEquals(err, "", "Shouldn't be any error messages")
 
     def _disable_inbound_repl(self, DC):
         # make base command line
@@ -159,7 +160,7 @@ class DrsBaseTestCase(SambaToolCmdTest):
         samba_tool_cmd += [DC, "--dsa-option=+DISABLE_INBOUND_REPL"]
         (result, out, err) = self.runsubcmd(*samba_tool_cmd)
         self.assertCmdSuccess(result, out, err)
-        self.assertEquals(err,"","Shouldn't be any error messages")
+        self.assertEquals(err, "", "Shouldn't be any error messages")
 
     def _enable_all_repl(self, DC):
         self._enable_inbound_repl(DC)
@@ -169,7 +170,7 @@ class DrsBaseTestCase(SambaToolCmdTest):
         samba_tool_cmd += [DC, "--dsa-option=-DISABLE_OUTBOUND_REPL"]
         (result, out, err) = self.runsubcmd(*samba_tool_cmd)
         self.assertCmdSuccess(result, out, err)
-        self.assertEquals(err,"","Shouldn't be any error messages")
+        self.assertEquals(err, "", "Shouldn't be any error messages")
 
     def _disable_all_repl(self, DC):
         self._disable_inbound_repl(DC)
@@ -179,7 +180,7 @@ class DrsBaseTestCase(SambaToolCmdTest):
         samba_tool_cmd += [DC, "--dsa-option=+DISABLE_OUTBOUND_REPL"]
         (result, out, err) = self.runsubcmd(*samba_tool_cmd)
         self.assertCmdSuccess(result, out, err)
-        self.assertEquals(err,"","Shouldn't be any error messages")
+        self.assertEquals(err, "", "Shouldn't be any error messages")
 
     def _get_highest_hwm_utdv(self, ldb_conn):
         res = ldb_conn.search("", scope=ldb.SCOPE_BASE, attrs=["highestCommittedUSN"])
@@ -200,7 +201,7 @@ class DrsBaseTestCase(SambaToolCmdTest):
 
     def _get_identifier(self, ldb_conn, dn):
         res = ldb_conn.search(dn, scope=ldb.SCOPE_BASE,
-                attrs=["objectGUID", "objectSid"])
+                              attrs=["objectGUID", "objectSid"])
         id = drsuapi.DsReplicaObjectIdentifier()
         id.guid = ndr_unpack(misc.GUID, res[0]['objectGUID'][0])
         if "objectSid" in res[0]:
@@ -252,8 +253,8 @@ class DrsBaseTestCase(SambaToolCmdTest):
 
             next_object = ctr6.first_object
             for i in range(0, ctr6.object_count):
-                print("Obj %d: %s %s" %(i, next_object.object.identifier.dn[:25],
-                                        next_object.object.identifier.guid))
+                print("Obj %d: %s %s" % (i, next_object.object.identifier.dn[:25],
+                                         next_object.object.identifier.guid))
                 next_object = next_object.next_object
 
             print("Linked Attributes: %d" % ctr6.linked_attributes_count)
@@ -267,23 +268,23 @@ class DrsBaseTestCase(SambaToolCmdTest):
                                         l.value.blob)
 
                 print("Link Tgt %s... <-- Src %s"
-                      %(target.dn[:25], l.identifier.guid))
+                      % (target.dn[:25], l.identifier.guid))
                 state = "Del"
                 if l.flags & drsuapi.DRSUAPI_DS_LINKED_ATTRIBUTE_FLAG_ACTIVE:
                     state = "Act"
-                print("  v%u %s changed %u" %(l.meta_data.version, state,
-                    l.meta_data.originating_change_time))
+                print("  v%u %s changed %u" % (l.meta_data.version, state,
+                                               l.meta_data.originating_change_time))
 
-            print("HWM:     %d" %(ctr6.new_highwatermark.highest_usn))
-            print("Tmp HWM: %d" %(ctr6.new_highwatermark.tmp_highest_usn))
-            print("More data: %d" %(ctr6.more_data))
+            print("HWM:     %d" % (ctr6.new_highwatermark.highest_usn))
+            print("Tmp HWM: %d" % (ctr6.new_highwatermark.tmp_highest_usn))
+            print("More data: %d" % (ctr6.more_data))
 
     def _get_replication(self, replica_flags,
-                          drs_error=drsuapi.DRSUAPI_EXOP_ERR_NONE, drs=None, drs_handle=None,
-                          highwatermark=None, uptodateness_vector=None,
-                          more_flags=0, max_objects=133, exop=0,
-                          dest_dsa=drsuapi.DRSUAPI_DS_BIND_GUID_W2K3,
-                          source_dsa=None, invocation_id=None, nc_dn_str=None):
+                         drs_error=drsuapi.DRSUAPI_EXOP_ERR_NONE, drs=None, drs_handle=None,
+                         highwatermark=None, uptodateness_vector=None,
+                         more_flags=0, max_objects=133, exop=0,
+                         dest_dsa=drsuapi.DRSUAPI_DS_BIND_GUID_W2K3,
+                         source_dsa=None, invocation_id=None, nc_dn_str=None):
         """
         Builds a DsGetNCChanges request based on the information provided
         and returns the response received from the DC.
@@ -362,7 +363,6 @@ class DrsBaseTestCase(SambaToolCmdTest):
                          dn_ordered=dn_ordered)
         return (ctr6.new_highwatermark, ctr6.uptodateness_vector)
 
-
     def _get_ctr6_dn_list(self, ctr6):
         """
         Returns the DNs contained in a DsGetNCChanges response.
@@ -375,7 +375,6 @@ class DrsBaseTestCase(SambaToolCmdTest):
         self.assertEqual(next_object, None)
 
         return dn_list
-
 
     def _check_ctr6(self, ctr6, expected_dns=[], expected_links=[],
                     dn_ordered=True, links_ordered=True,
@@ -490,7 +489,6 @@ class DrsBaseTestCase(SambaToolCmdTest):
         partial_attribute_set.attids = attids
         partial_attribute_set.num_attids = len(attids)
         return partial_attribute_set
-
 
 
 class AbstractLink:

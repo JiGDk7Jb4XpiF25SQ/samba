@@ -87,6 +87,7 @@ class GlobalState(object):
     test_number = 0
     active_links = set()
 
+
 class UserTests(samba.tests.TestCase):
 
     def add_if_possible(self, *args, **kwargs):
@@ -201,7 +202,7 @@ class UserTests(samba.tests.TestCase):
     def _test_indexed_search(self):
         expressions = ['(objectclass=group)',
                        '(samaccountname=Administrator)'
-        ]
+                       ]
         for expression in expressions:
             t = time.time()
             for i in range(4000):
@@ -254,7 +255,7 @@ class UserTests(samba.tests.TestCase):
     def _test_complex_search(self, n=100):
         classes = ['samaccountname', 'objectCategory', 'dn', 'member']
         values = ['*', '*t*', 'g*', 'user']
-        comparators = ['=', '<=', '>='] # '~=' causes error
+        comparators = ['=', '<=', '>=']  # '~=' causes error
         maybe_not = ['!(', '']
         joiners = ['&', '|']
 

@@ -106,6 +106,7 @@ EOF
 
 required_result 22 <<EOF
 conf: unknown section [section2]
+conf: unknown section for option "foo"
 [section1]
 	# key1 = value1
 	# key2 = 10
@@ -120,7 +121,8 @@ cat > "$conffile" <<EOF
     key2 = 20
 EOF
 
-required_result 2 <<EOF
+required_error EINVAL <<EOF
+conf: unknown option [section1] -> "foo"
 [section1]
 	# key1 = value1
 	# key2 = 10

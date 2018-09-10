@@ -275,7 +275,7 @@ class cmd_reps(GraphCommand):
                 res = local_kcc.samdb.search(dsa_dn,
                                              scope=SCOPE_BASE,
                                              attrs=["dNSHostName"])
-                dns_name = res[0]["dNSHostName"][0]
+                dns_name = str(res[0]["dNSHostName"][0])
                 print("Attempting to contact ldap://%s (%s)" %
                       (dns_name, dsa_dn),
                       file=sys.stderr)
@@ -320,7 +320,7 @@ class cmd_reps(GraphCommand):
                     if partition is None or part == partition:
                         nc_reps[part]['needed'].append((dsa_dn, rep))
 
-        all_edges = {'needed':  {'to': [], 'from': []},
+        all_edges = {'needed': {'to': [], 'from': []},
                      'current': {'to': [], 'from': []}}
 
         short_partitions, long_partitions = get_partition_maps(local_kcc.samdb)
@@ -501,14 +501,14 @@ class cmd_ntdsconn(GraphCommand):
                                expression="(objectClass=nTDSConnection)",
                                attrs=['fromServer'],
                                # XXX can't be critical for ldif test
-                               #controls=["search_options:1:2"],
+                               # controls=["search_options:1:2"],
                                controls=["search_options:0:2"],
-            )
+                               )
 
             for msg in res:
                 msgdn = str(msg.dn)
                 dest_dn = msgdn[msgdn.index(',') + 1:]
-                attested_edges.append((msg['fromServer'][0],
+                attested_edges.append((str(msg['fromServer'][0]),
                                        dest_dn, ntds_dn))
 
         if importldif and H == self._tmp_fn_to_delete:
@@ -694,7 +694,7 @@ class cmd_uptodateness(GraphCommand):
                                expression=("(&(invocationId=%s)"
                                            "(objectClass=nTDSDSA))" % inv_id),
                                attrs=["distinguishedName", "invocationId"])
-            settings_dn = res[0]["distinguishedName"][0]
+            settings_dn = str(res[0]["distinguishedName"][0])
             prefix, dsa_dn = settings_dn.split(',', 1)
             if prefix != 'CN=NTDS Settings':
                 raise CommandError("Expected NTDS Settings DN, got %s" %

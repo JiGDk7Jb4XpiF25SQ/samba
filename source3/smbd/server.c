@@ -1776,7 +1776,7 @@ extern void build_options(bool screen);
 	 * initialized before the messaging context, cause the messaging
 	 * context holds an event context.
 	 */
-	ev_ctx = server_event_context();
+	ev_ctx = global_event_context();
 	if (ev_ctx == NULL) {
 		exit(1);
 	}
@@ -1785,7 +1785,7 @@ extern void build_options(bool screen);
 	 * Init the messaging context
 	 * FIXME: This should only call messaging_init()
 	 */
-	msg_ctx = server_messaging_context();
+	msg_ctx = global_messaging_context();
 	if (msg_ctx == NULL) {
 		exit(1);
 	}

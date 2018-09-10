@@ -50,6 +50,7 @@ def norm(x):
     x = x.decode('utf-8')
     return normalize('NFKC', x).upper().encode('utf-8')
 
+
 # Python, Windows, and Samba all sort the following sequence in
 # drastically different ways. The order here is what you get from
 # Windows2012R2.
@@ -103,7 +104,7 @@ class BaseSortTests(samba.tests.TestCase):
                                                                  chr(i & 255),
                                                                  i),
                 "displayNamePrintable": "%d\x00%c" % (i, i & 255),
-                "adminDisplayName": "%d\x00b" % (n-i),
+                "adminDisplayName": "%d\x00b" % (n - i),
                 "title": "%d%sb" % (n - i, '\x00' * i),
 
                 # Names that vary only in case. Windows returns
@@ -331,8 +332,8 @@ class BaseSortTests(samba.tests.TestCase):
                     # Let's remind ourselves.
                     if result_attr == "msTSExpireDate4":
                         print('-' * 72)
-                        print ("This test fails against Windows with the "
-                               "default number of elements (33).")
+                        print("This test fails against Windows with the "
+                              "default number of elements (33).")
                         print("Try with --elements=27 (or similar).")
                         print('-' * 72)
 
@@ -345,6 +346,7 @@ class BaseSortTests(samba.tests.TestCase):
 
 class SimpleSortTests(BaseSortTests):
     avoid_tricky_sort = True
+
     def test_server_sort_different_attr(self):
         self._test_server_sort_different_attr()
 

@@ -216,8 +216,8 @@ def read_ms_markdown(in_file, out_folder=None, out_dict={}):
     for node in tree:
         if node.text and node.text.startswith('|Operation'):
             # Strip first and last |
-            updates = [x[1:len(x)-1].split('|') for x in
-                       ET.tostring(node,method='text').splitlines()]
+            updates = [x[1:len(x) - 1].split('|') for x in
+                       ET.tostring(node, method='text').splitlines()]
             for update in updates[2:]:
                 output = re.match('Operation (\d+): {(.*)}', update[0])
                 if output:
@@ -258,6 +258,7 @@ def read_ms_markdown(in_file, out_folder=None, out_dict={}):
                     raise Exception(update)
 
             # print ET.tostring(node, method='text')
+
 
 if __name__ == '__main__':
     import sys

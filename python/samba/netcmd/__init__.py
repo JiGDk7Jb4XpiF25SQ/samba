@@ -16,36 +16,42 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-import optparse, samba
+import optparse
+import samba
 from samba import getopt as options
 from samba import colour
 from ldb import LdbError
-import sys, traceback
+import sys
+import traceback
 import textwrap
+
 
 class Option(optparse.Option):
     pass
 
 # This help formatter does text wrapping and preserves newlines
+
+
 class PlainHelpFormatter(optparse.IndentedHelpFormatter):
-    def format_description(self,description=""):
-            desc_width = self.width - self.current_indent
-            indent = " "*self.current_indent
-            paragraphs = description.split('\n')
-            wrapped_paragraphs = [
-                textwrap.fill(p,
-                        desc_width,
-                        initial_indent=indent,
-                        subsequent_indent=indent)
-                for p in paragraphs]
-            result = "\n".join(wrapped_paragraphs) + "\n"
-            return result
+    def format_description(self, description=""):
+        desc_width = self.width - self.current_indent
+        indent = " " * self.current_indent
+        paragraphs = description.split('\n')
+        wrapped_paragraphs = [
+            textwrap.fill(p,
+                          desc_width,
+                          initial_indent=indent,
+                          subsequent_indent=indent)
+            for p in paragraphs]
+        result = "\n".join(wrapped_paragraphs) + "\n"
+        return result
 
     def format_epilog(self, epilog):
         if epilog:
             return "\n" + epilog + "\n"
         else:
             return ""
+
 
 class Command(object):
     """A samba-tool command."""
@@ -128,7 +134,7 @@ class Command(object):
             usage=self.synopsis,
             description=self.full_description,
             formatter=PlainHelpFormatter(),
-            prog=prog,epilog=epilog)
+            prog=prog, epilog=epilog)
         parser.add_options(self.takes_options)
         optiongroups = {}
         for name, optiongroup in self.takes_optiongroups.items():
@@ -137,7 +143,7 @@ class Command(object):
         return parser, optiongroups
 
     def message(self, text):
-        self.outf.write(text+"\n")
+        self.outf.write(text + "\n")
 
     def _run(self, *argv):
         parser, optiongroups = self._create_parser(argv[0])
@@ -160,11 +166,11 @@ class Command(object):
         undetermined_max_args = False
         for i, arg in enumerate(self.takes_args):
             if arg[-1] != "?" and arg[-1] != "*":
-               min_args += 1
+                min_args += 1
             if arg[-1] == "+" or arg[-1] == "*":
-               undetermined_max_args = True
+                undetermined_max_args = True
             else:
-               max_args += 1
+                max_args += 1
         if (len(args) < min_args) or (not undetermined_max_args and len(args) > max_args):
             parser.print_usage()
             return -1

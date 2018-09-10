@@ -23,6 +23,7 @@ import samba
 from samba.tests.samba_tool.base import SambaToolCmdTest
 import shutil
 
+
 def has_difference(path1, path2, binary=True, xml=True, sortlines=False):
     """Use this function to determine if the GPO backup differs from another.
 
@@ -71,6 +72,7 @@ def has_difference(path1, path2, binary=True, xml=True, sortlines=False):
                         return l_name
 
     return None
+
 
 class GpoCmdTestCase(SambaToolCmdTest):
     """Tests for samba-tool time subcommands"""
@@ -145,9 +147,9 @@ class GpoCmdTestCase(SambaToolCmdTest):
 
             # Compare the directories
             self.assertIsNone(has_difference(os.path.join(new_path, 'policy',
-                                                         gpo_guid),
-                                            static_path, binary=True,
-                                            xml=False))
+                                                          gpo_guid),
+                                             static_path, binary=True,
+                                             xml=False))
         finally:
             if gpo_guid:
                 (result, out, err) = self.runsubcmd("gpo", "del", gpo_guid,
@@ -220,10 +222,10 @@ class GpoCmdTestCase(SambaToolCmdTest):
 
             # Compare the directories
             self.assertIsNone(has_difference(os.path.join(new_path, 'policy',
-                                                         gpo_guid1),
-                                            os.path.join(new_path, 'policy',
-                                                         gpo_guid2),
-                                            binary=True, xml=False))
+                                                          gpo_guid1),
+                                             os.path.join(new_path, 'policy',
+                                                          gpo_guid2),
+                                             binary=True, xml=False))
         finally:
             if gpo_guid1:
                 (result, out, err) = self.runsubcmd("gpo", "del", gpo_guid1,
@@ -301,10 +303,10 @@ class GpoCmdTestCase(SambaToolCmdTest):
 
             # Compare the directories
             self.assertIsNone(has_difference(os.path.join(new_path, 'policy',
-                                                         gpo_guid1),
-                                            os.path.join(new_path, 'policy',
-                                                         gpo_guid2),
-                                            binary=True, xml=True))
+                                                          gpo_guid1),
+                                             os.path.join(new_path, 'policy',
+                                                          gpo_guid2),
+                                             binary=True, xml=True))
         finally:
             if gpo_guid1:
                 (result, out, err) = self.runsubcmd("gpo", "del", gpo_guid1,
@@ -389,9 +391,9 @@ class GpoCmdTestCase(SambaToolCmdTest):
 
             # Compare the directories (XML)
             self.assertIsNone(has_difference(os.path.join(new_path, 'policy',
-                                                         gpo_guid),
-                                            static_path, binary=False,
-                                            xml=True))
+                                                          gpo_guid),
+                                             static_path, binary=False,
+                                             xml=True))
         finally:
             if gpo_guid:
                 (result, out, err) = self.runsubcmd("gpo", "del", gpo_guid,

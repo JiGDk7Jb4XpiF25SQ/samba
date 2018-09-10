@@ -120,7 +120,7 @@ class VLVTests(samba.tests.TestCase):
             "audio": "%sn octet string %s%s ♫♬\x00lalala" % ('Aa'[i & 1],
                                                              chr(i & 255), i),
             "displayNamePrintable": "%d\x00%c" % (i, i & 255),
-            "adminDisplayName": "%d\x00b" % (n-i),
+            "adminDisplayName": "%d\x00b" % (n - i),
             "title": "%d%sb" % (n - i, '\x00' * i),
             "comment": "Favourite colour is %d" % (n % (i + 1)),
 
@@ -505,7 +505,7 @@ class VLVTests(samba.tests.TestCase):
         deal with the objects originally found.
         """
         attrs = ['cn'] + [x for x in self.users[0].keys() if x not in
-                 ('dn', 'objectclass')]
+                          ('dn', 'objectclass')]
         user_number = 0
         iteration = 0
         for attr in attrs:
@@ -521,7 +521,7 @@ class VLVTests(samba.tests.TestCase):
                     start = max(before - 1, 1)
                     end = max(start + 4, original_n - after + 2)
                     for offset in range(start, end):
-                        #if iteration > 2076:
+                        # if iteration > 2076:
                         #    return
                         cookie = get_cookie(controls, original_n)
                         vlv_search = encode_vlv_control(before=before,
@@ -558,8 +558,8 @@ class VLVTests(samba.tests.TestCase):
                                 skipped += 1
 
                         if expected_results != results:
-                            print ("attr %s before %d after %d offset %d" %
-                                   (attr, before, after, offset))
+                            print("attr %s before %d after %d offset %d" %
+                                  (attr, before, after, offset))
                         self.assertEquals(expected_results, results)
 
                         n = len(self.users)
@@ -701,11 +701,11 @@ class VLVTests(samba.tests.TestCase):
                             except ldb.LdbError as e:
                                 if offset != 0:
                                     raise
-                                print ("offset %d denominator %d raised error "
-                                       "expected error %s\n"
-                                       "(offset zero is illegal unless "
-                                       "content count is zero)" %
-                                       (offset, denominator, e))
+                                print("offset %d denominator %d raised error "
+                                      "expected error %s\n"
+                                      "(offset zero is illegal unless "
+                                      "content count is zero)" %
+                                      (offset, denominator, e))
                                 continue
 
                             results = [x[attr][0].lower() for x in res]
@@ -728,7 +728,7 @@ class VLVTests(samba.tests.TestCase):
                                                int(round((n_users - 1) *
                                                          (offset - 1) /
                                                          (denominator - 1.0)))
-                                )
+                                               )
 
                             self.assertCorrectResults(results, full_results,
                                                       real_offset, before,
@@ -740,8 +740,8 @@ class VLVTests(samba.tests.TestCase):
                                     cstr = str(c)
                                     if cstr.startswith('vlv_resp'):
                                         bits = cstr.rsplit(':')
-                                        print ("the answer is %s; we said %d" %
-                                               (bits[2], real_offset))
+                                        print("the answer is %s; we said %d" %
+                                              (bits[2], real_offset))
                                         break
 
     def test_server_vlv_no_cookie(self):
@@ -803,7 +803,7 @@ class VLVTests(samba.tests.TestCase):
                  'name',
                  'whenChanged',
                  'usnChanged'
-        ]
+                 ]
 
         # add some deleted users first, just in case there are none
         self.add_deleted_users(6)
@@ -832,8 +832,8 @@ class VLVTests(samba.tests.TestCase):
                                                         "vlv:1:%d:%d:%d:0" %
                                                         (before, after,
                                                          offset)
-                                              ]
-                        )
+                                                        ]
+                                              )
                         results = [x[attr][0] for x in res]
                         self.assertCorrectResults(results, expected_order,
                                                   offset, before, after)
@@ -846,7 +846,7 @@ class VLVTests(samba.tests.TestCase):
                  'sAMAccountName',
                  'objectSid',
                  'whenChanged',
-        ]
+                 ]
 
         # add some deleted users first, just in case there are none
         self.add_deleted_users(4)
@@ -855,11 +855,11 @@ class VLVTests(samba.tests.TestCase):
         for attr in attrs:
             show_deleted_control = "show_deleted:1"
             expected_order = self.get_expected_order_showing_deleted(attr,
-                                                    expression=expression,
-                                                    base=base,
-                                                    scope=ldb.SCOPE_ONELEVEL)
-            print ("searching for attr %s amongst %d deleted objects" %
-                   (attr, len(expected_order)))
+                                                                     expression=expression,
+                                                                     base=base,
+                                                                     scope=ldb.SCOPE_ONELEVEL)
+            print("searching for attr %s amongst %d deleted objects" %
+                  (attr, len(expected_order)))
             sort_control = "server_sort:1:0:%s" % attr
             step = max(len(expected_order) // 10, 1)
             for before in [3, 0]:
@@ -880,8 +880,6 @@ class VLVTests(samba.tests.TestCase):
                         self.assertCorrectResults(results, expected_order,
                                                   offset, before, after)
 
-
-
     def test_server_vlv_with_cookie_show_deleted(self):
         """What do we see with the show_deleted control?"""
         attrs = ['objectGUID',
@@ -891,7 +889,7 @@ class VLVTests(samba.tests.TestCase):
                  'name',
                  'whenChanged',
                  'usnChanged'
-        ]
+                 ]
         self.add_deleted_users(6)
         random.seed(23)
         for attr in attrs:
@@ -928,7 +926,6 @@ class VLVTests(samba.tests.TestCase):
 
                     self.assertCorrectResults(results, expected_order,
                                               offset, before, after)
-
 
     def test_server_vlv_gte_with_cookie(self):
         attrs = [x for x in self.users[0].keys() if x not in
@@ -1010,9 +1007,9 @@ class VLVTests(samba.tests.TestCase):
                             print(middle)
                             print(expected_order)
                             print()
-                            print ("\nattr %s offset %d before %d "
-                                   "after %d gte %s" %
-                                   (attr, offset, before, after, gte))
+                            print("\nattr %s offset %d before %d "
+                                  "after %d gte %s" %
+                                  (attr, offset, before, after, gte))
                         self.assertEquals(expected_results, results)
 
     def test_multiple_searches(self):

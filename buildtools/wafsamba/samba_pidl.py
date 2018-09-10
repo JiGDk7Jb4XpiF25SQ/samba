@@ -1,8 +1,8 @@
 # waf build tool for building IDL files with pidl
 
 import os
-import Build
-from TaskGen import feature, before
+from waflib import Build, Utils
+from waflib.TaskGen import feature, before
 from samba_utils import SET_TARGET_TYPE, TO_LIST, LOCAL_CACHE
 
 def SAMBA_PIDL(bld, pname, source,
@@ -78,7 +78,7 @@ def SAMBA_PIDL(bld, pname, source,
 
     t = bld(rule='cd .. && %s %s ${PERL} "${PIDL}" --quiet ${OPTIONS} --outputdir ${OUTPUTDIR} -- "${SRC[0].abspath(env)}"' % (cpp, cc),
             ext_out    = '.c',
-            before     = 'cc',
+            before     = 'c',
             update_outputs = True,
             shell      = True,
             source     = source,
@@ -91,13 +91,13 @@ def SAMBA_PIDL(bld, pname, source,
 
     t.env.PIDL = os.path.join(bld.srcnode.abspath(), 'pidl/pidl')
     t.env.OPTIONS = TO_LIST(options)
-    t.env.OUTPUTDIR = bld.bldnode.name + '/' + bld.path.find_dir(output_dir).bldpath(t.env)
+    t.env.OUTPUTDIR = bld.bldnode.parent.name + '/default/' + bld.path.find_dir(output_dir).path_from(bld.srcnode)
 
     if generate_tables and table_header_idx is not None:
         pidl_headers = LOCAL_CACHE(bld, 'PIDL_HEADERS')
         pidl_headers[name] = [bld.path.find_or_declare(out_files[table_header_idx])]
 
-    t.more_includes = '#' + bld.path.relpath_gen(bld.srcnode)
+    t.more_includes = '#' + bld.path.path_from(bld.srcnode)
 Build.BuildContext.SAMBA_PIDL = SAMBA_PIDL
 
 
@@ -117,13 +117,14 @@ Build.BuildContext.SAMBA_PIDL_LIST = SAMBA_PIDL_LIST
 @before('exec_rule')
 def collect(self):
     pidl_headers = LOCAL_CACHE(self.bld, 'PIDL_HEADERS')
+    self.source = Utils.to_list(self.source)
     for (name, hd) in pidl_headers.items():
         y = self.bld.get_tgen_by_name(name)
         self.bld.ASSERT(y is not None, 'Failed to find PIDL header %s' % name)
         y.post()
         for node in hd:
             self.bld.ASSERT(node is not None, 'Got None as build node generating PIDL table for %s' % name)
-            self.source += " " + node.relpath_gen(self.path)
+            self.source.append(node)
 
 
 def SAMBA_PIDL_TABLES(bld, name, target):
@@ -133,7 +134,7 @@ def SAMBA_PIDL_TABLES(bld, name, target):
             features = 'collect',
             rule     = '${PERL} ${SRC} --output ${TGT} | sed "s|default/||" > ${TGT}',
             ext_out  = '.c',
-            before   = 'cc',
+            before   = 'c',
             update_outputs = True,
             shell    = True,
             source   = '../../librpc/tables.pl',

@@ -60,6 +60,7 @@ host = args[0]
 lp = sambaopts.get_loadparm()
 creds = credopts.get_credentials(lp)
 
+
 class UserTests(samba.tests.TestCase):
 
     def setUp(self):
@@ -73,7 +74,7 @@ class UserTests(samba.tests.TestCase):
 
         for x in range(1, 1000):
             samdb = SamDB(host, credentials=creds,
-                         session_info=system_session(self.lp), lp=self.lp)
+                          session_info=system_session(self.lp), lp=self.lp)
             samdb.search(base=samdb.domain_dn(),
                          scope=SCOPE_BASE, attrs=["*"])
 

@@ -66,6 +66,7 @@ dns_servers = args[2:]
 
 creds.set_krb_forwardable(credentials.NO_KRB_FORWARDABLE)
 
+
 def make_txt_record(records):
     rdata_txt = dns.txt_record()
     s_list = dnsp.string_list()
@@ -89,7 +90,7 @@ class DNSTest(TestCase):
         "Helper function to check opcode"
         p_opcode = packet.operation & 0x7800
         self.assertEquals(p_opcode, opcode, "Expected OPCODE %s, got %s" %
-                            (opcode, p_opcode))
+                          (opcode, p_opcode))
 
     def make_name_packet(self, opcode, qid=None):
         "Helper creating a dns.name_packet"
@@ -156,7 +157,6 @@ class DNSTest(TestCase):
         p.nsrecs = [r]
         response = self.dns_transaction_udp(p)
         self.assert_dns_rcode_equals(response, dns.DNS_RCODE_OK)
-
 
 
 def contact_real_server(host, port):
@@ -330,7 +330,6 @@ class TestDnsForwarding(DNSTest):
             self.assert_dns_rcode_equals(data, dns.DNS_RCODE_SERVFAIL)
         except socket.timeout:
             self.fail("DNS server is too slow (timeout %s)" % timeout)
-
 
     def test_single_forwarder_waiting_forever(self):
         s = self.start_toy_server(dns_servers[0], 53, 'forwarder1')
@@ -603,5 +602,6 @@ class TestDnsForwarding(DNSTest):
             self.assertEqual(name3, data.answers[-1].rdata)
         except socket.timeout:
             self.fail("DNS server is too slow (timeout %s)" % timeout)
+
 
 TestProgram(module=__name__, opts=subunitopts)

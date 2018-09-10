@@ -23,20 +23,26 @@ import os
 import subprocess
 import sys
 
+
 def srcdir():
     return os.path.normpath(os.getenv("SRCDIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")))
+
 
 def source4dir():
     return os.path.normpath(os.path.join(srcdir(), "source4"))
 
+
 def source3dir():
     return os.path.normpath(os.path.join(srcdir(), "source3"))
+
 
 def bindir():
     return os.path.normpath(os.getenv("BINDIR", "./bin"))
 
+
 def binpath(name):
     return os.path.join(bindir(), name)
+
 
 # Split perl variable to allow $PERL to be set to e.g. "perl -W"
 perl = os.getenv("PERL", "perl").split()
@@ -100,9 +106,9 @@ def plantestsuite_loadlist(name, env, cmdline):
     if isinstance(cmdline, list):
         cmdline = " ".join(cmdline)
     support_list = ("$LISTOPT" in cmdline)
-    if not "$LISTOPT" in cmdline:
+    if "$LISTOPT" not in cmdline:
         raise AssertionError("loadlist test %s does not support not --list" % name)
-    if not "$LOADLIST" in cmdline:
+    if "$LOADLIST" not in cmdline:
         raise AssertionError("loadlist test %s does not support --load-list" % name)
     print(("%s | %s" % (cmdline.replace("$LOADLIST", ""), add_prefix(name, env, support_list))).replace("$LISTOPT", "--list"))
     print(cmdline.replace("$LISTOPT", "") + " 2>&1 " + " | " + add_prefix(name, env, False))
@@ -167,7 +173,7 @@ smbtorture4_options = [
     "--maximum-runtime=$SELFTEST_MAXTIME",
     "--basedir=$SELFTEST_TMPDIR",
     "--format=subunit"
-    ] + get_env_torture_options()
+] + get_env_torture_options()
 
 
 def plansmbtorture4testsuite(name, env, options, target, modname=None):

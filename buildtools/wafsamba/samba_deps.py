@@ -2,9 +2,10 @@
 
 import os, sys, re, time
 
-import Build, Environment, Options, Logs, Utils
-from Logs import debug
-from Configure import conf
+from waflib import Build, Options, Logs, Utils, Errors
+from waflib.Logs import debug
+from waflib.Configure import conf
+from waflib import ConfigSet
 
 from samba_bundled import BUILTIN_LIBRARY
 from samba_utils import LOCAL_CACHE, TO_LIST, get_tgt_list, unique_list, os_path_relpath
@@ -85,7 +86,7 @@ def build_dependencies(self):
         # extra link flags from pkg_config
         libs = self.final_syslibs.copy()
 
-        (ccflags, ldflags, cpppath) = library_flags(self, list(libs))
+        (cflags, ldflags, cpppath) = library_flags(self, list(libs))
         new_ldflags        = getattr(self, 'samba_ldflags', [])[:]
         new_ldflags.extend(ldflags)
         self.ldflags       = new_ldflags
@@ -102,7 +103,7 @@ def build_dependencies(self):
               self.sname, self.uselib, self.uselib_local, self.add_objects)
 
     if self.samba_type in ['SUBSYSTEM']:
-        # this is needed for the ccflags of libs that come from pkg_config
+        # this is needed for the cflags of libs that come from pkg_config
         self.uselib = list(self.final_syslibs)
         self.uselib.extend(list(self.direct_syslibs))
         for lib in self.final_libs:
@@ -235,7 +236,7 @@ def add_init_functions(self):
         if sentinel == 'NULL':
             proto = "extern void __%s_dummy_module_proto(void)" % (sname)
             cflags.append('-DSTATIC_%s_MODULES_PROTO=%s' % (sname, proto))
-        self.ccflags = cflags
+        self.cflags = cflags
         return
 
     for m in modules:
@@ -257,7 +258,7 @@ def add_init_functions(self):
                 proto += '_MODULE_PROTO(%s)' % f
             proto += "extern void __%s_dummy_module_proto(void)" % (m)
             cflags.append('-DSTATIC_%s_MODULES_PROTO=%s' % (m, proto))
-    self.ccflags = cflags
+    self.cflags = cflags
 
 
 def check_duplicate_sources(bld, tgt_list):
@@ -271,6 +272,9 @@ def check_duplicate_sources(bld, tgt_list):
         tpath = os.path.normpath(os_path_relpath(t.path.abspath(bld.env), t.env.BUILD_DIRECTORY + '/default'))
         obj_sources = set()
         for s in source_list:
+            if not isinstance(s, str):
+                print('strange path in check_duplicate_sources %r' % s)
+                s = s.abspath()
             p = os.path.normpath(os.path.join(tpath, s))
             if p in obj_sources:
                 Logs.error("ERROR: source %s appears twice in target '%s'" % (p, t.sname))
@@ -299,7 +303,7 @@ def check_duplicate_sources(bld, tgt_list):
             Logs.warn("WARNING: source %s is in more than one target: %s" % (s, subsystems[s].keys()))
         for tname in subsystems[s]:
             if len(subsystems[s][tname]) > 1:
-                raise Utils.WafError("ERROR: source %s is in more than one subsystem of target '%s': %s" % (s, tname, subsystems[s][tname]))
+                raise Errors.WafError("ERROR: source %s is in more than one subsystem of target '%s': %s" % (s, tname, subsystems[s][tname]))
 
     return True
 
@@ -372,7 +376,7 @@ def add_samba_attributes(bld, tgt_list):
         t.samba_abspath = t.path.abspath(bld.env)
         t.samba_deps_extended = t.samba_deps[:]
         t.samba_includes_extended = TO_LIST(t.samba_includes)[:]
-        t.ccflags = getattr(t, 'samba_cflags', '')
+        t.cflags = getattr(t, 'samba_cflags', '')
 
 def replace_grouping_libraries(bld, tgt_list):
     '''replace dependencies based on grouping libraries
@@ -951,7 +955,7 @@ savedeps_inputs  = ['samba_deps', 'samba_includes', 'local_include', 'local_incl
                     'source', 'grouping_library', 'samba_ldflags', 'allow_undefined_symbols',
                     'use_global_deps', 'global_include' ]
 savedeps_outputs = ['uselib', 'uselib_local', 'add_objects', 'includes',
-                    'ccflags', 'ldflags', 'samba_deps_extended', 'final_libs']
+                    'cflags', 'ldflags', 'samba_deps_extended', 'final_libs']
 savedeps_outenv  = ['INC_PATHS']
 savedeps_envvars = ['NONSHARED_BINARIES', 'GLOBAL_DEPENDENCIES', 'EXTRA_CFLAGS', 'EXTRA_LDFLAGS', 'EXTRA_INCLUDES' ]
 savedeps_caches  = ['GLOBAL_DEPENDENCIES', 'TARGET_TYPE', 'INIT_FUNCTIONS', 'SYSLIB_DEPS']
@@ -960,7 +964,7 @@ savedeps_files   = ['buildtools/wafsamba/samba_deps.py']
 def save_samba_deps(bld, tgt_list):
     '''save the dependency calculations between builds, to make
        further builds faster'''
-    denv = Environment.Environment()
+    denv = ConfigSet.ConfigSet()
 
     denv.version = savedeps_version
     denv.savedeps_inputs = savedeps_inputs
@@ -1014,8 +1018,8 @@ def save_samba_deps(bld, tgt_list):
 
 def load_samba_deps(bld, tgt_list):
     '''load a previous set of build dependencies if possible'''
-    depsfile = os.path.join(bld.bdir, "sambadeps")
-    denv = Environment.Environment()
+    depsfile = os.path.join(bld.bldnode.abspath(), "sambadeps")
+    denv = ConfigSet.ConfigSet()
     try:
         debug('deps: checking saved dependencies')
         denv.load_fast(depsfile)

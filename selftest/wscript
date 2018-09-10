@@ -3,14 +3,19 @@
 
 # selftest main code.
 
-import Scripting, os, Options, Utils, Environment, optparse, sys
+import sys
+import os
+import optparse
+from waflib import Scripting, Options, Utils
+from waflib.ConfigSet import ConfigSet as Environment
+
 from samba_utils import *
 from samba_autoconf import *
 import types
 
 DEFAULT_SELFTEST_PREFIX="./st"
 
-def set_options(opt):
+def options(opt):
 
     opt.add_option('--enable-selftest',
                    help=("enable options necessary for selftest (default=no)"),
@@ -197,13 +202,18 @@ def cmd_testonly(opt):
     # if we are using a system version of ldb then we need to tell it to
     # load modules from our modules path
     if env.USING_SYSTEM_LDB:
-        os.environ['LDB_MODULES_PATH'] = os.path.abspath(os.path.join(env.cwd, 'bin/modules/ldb'))
+        os.environ['LDB_MODULES_PATH'] = os.path.abspath(
+                os.path.join(*(env.cwd + ['bin/modules/ldb'])))
 
     # tell build system where to find config.h
     os.environ['CONFIG_H'] = 'bin/default/include/config.h'
 
     # tell the test system where perl is
-    os.environ['PERL'] = env.PERL
+    if isinstance(env.PERL, list):
+        perl = ' '.join(env.PERL)
+    else:
+        perl = env.PERL
+    os.environ['PERL'] = perl
 
     st_done = os.path.join(env.SELFTEST_PREFIX, 'st_done')
     if os.path.exists(st_done):
@@ -323,5 +333,5 @@ def cmd_test(opt):
     # if running all tests, then force a symbol check
     env = LOAD_ENVIRONMENT()
     CHECK_MAKEFLAGS(env)
-    Scripting.commands.append('build')
-    Scripting.commands.append('testonly')
+    Options.commands.append('build')
+    Options.commands.append('testonly')

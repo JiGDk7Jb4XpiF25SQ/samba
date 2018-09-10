@@ -26,6 +26,7 @@ import talloc
 
 talloc.enable_null_tracking()
 
+
 class RpcTests(object):
     '''test type behaviour of pidl generated python RPC code'''
 
@@ -95,10 +96,10 @@ class RpcTests(object):
                 continue
             value = getattr(interface, n)
             if isinstance(value, str):
-                #print "%s=\"%s\"" % (n, value)
+                # print "%s=\"%s\"" % (n, value)
                 pass
             elif isinstance(value, int) or isinstance(value, long):
-                #print "%s=%d" % (n, value)
+                # print "%s=%d" % (n, value)
                 pass
             elif isinstance(value, type):
                 try:
@@ -109,7 +110,7 @@ class RpcTests(object):
                     print("ERROR: Failed to check_type %s.%s: %r: %s" % (iname, n, e.__class__, e))
                     self.errcount += 1
             elif callable(value):
-                pass # Method
+                pass  # Method
             else:
                 print("UNKNOWN: %s=%s" % (n, value))
         if self.errcount - errcount != 0:
@@ -132,6 +133,7 @@ class RpcTests(object):
         self.errcount = 0
         self.check_all_interfaces()
         return self.errcount
+
 
 tests = RpcTests()
 errcount = tests.run()

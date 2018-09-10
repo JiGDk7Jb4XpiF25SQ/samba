@@ -24,6 +24,7 @@ import os
 import ldb
 import drs_base
 
+
 class SambaToolDrsTests(drs_base.DrsBaseTestCase):
     """Blackbox test case for samba-tool drs."""
 
@@ -107,9 +108,9 @@ class SambaToolDrsTests(drs_base.DrsBaseTestCase):
         # Output should be like 'Replicate from <DC-SRC> to <DC-DEST> was started.'
         nc_name = self._get_rootDSE(self.dc1)["defaultNamingContext"]
         out = self.check_output("samba-tool drs replicate --async-op %s %s %s %s" % (self.dc1,
-                                                                          self.dc2,
-                                                                          nc_name,
-                                                                          self.cmdline_creds))
+                                                                                     self.dc2,
+                                                                                     nc_name,
+                                                                                     self.cmdline_creds))
         self.assertTrue("Replicate from" in out)
         self.assertTrue("was started" in out)
 
@@ -130,8 +131,8 @@ class SambaToolDrsTests(drs_base.DrsBaseTestCase):
         # Output should be like 'Replicate from <DC-SRC> to <DC-DEST> was started.'
         nc_name = self._get_rootDSE(self.dc1)["defaultNamingContext"]
         out = self.check_output("samba-tool drs replicate --local-online --async-op %s %s %s" % (self.dc1,
-                                                                                      self.dc2,
-                                                                                      nc_name))
+                                                                                                 self.dc2,
+                                                                                                 nc_name))
         self.assertTrue("Replicate from" in out)
         self.assertTrue("was started" in out)
 
@@ -294,6 +295,7 @@ class SambaToolDrsTests(drs_base.DrsBaseTestCase):
 
         samdb = samba.tests.connect_samdb("ldb://" + os.path.join(self.tempdir, "private", "sam.ldb"),
                                           ldap_only=False, lp=self.get_loadparm())
+
         def get_krbtgt_pw():
             krbtgt_pw = samdb.searchone("unicodePwd", "cn=krbtgt,CN=users,%s" % nc_name)
         self.assertRaises(KeyError, get_krbtgt_pw)
@@ -377,8 +379,8 @@ class SambaToolDrsTests(drs_base.DrsBaseTestCase):
         def demote_self():
             # While we have this cloned, try demoting the other server on the clone
             out = self.check_output("samba-tool domain demote --remove-other-dead-server=%s -H %s/private/sam.ldb"
-                                % (self.dc1,
-                                   self.tempdir))
+                                    % (self.dc1,
+                                       self.tempdir))
         self.assertRaises(samba.tests.BlackboxProcessError, demote_self)
 
         # While we have this cloned, try demoting the other server on the clone
@@ -412,6 +414,7 @@ class SambaToolDrsTests(drs_base.DrsBaseTestCase):
         server_ldap_service_name = str(server_rootdse["ldapServiceName"][0])
         server_realm = server_ldap_service_name.split(":")[0]
         creds = self.get_credentials()
+
         def attempt_clone():
             out = self.check_output("samba-tool drs clone-dc-database %s --server=%s %s"
                                     % (server_realm,

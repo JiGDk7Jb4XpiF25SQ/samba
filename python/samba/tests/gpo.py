@@ -26,6 +26,7 @@ poldir = r'\\addom.samba.example.com\sysvol\addom.samba.example.com\Policies'
 dspath = 'CN=Policies,CN=System,DC=addom,DC=samba,DC=example,DC=com'
 gpt_data = '[General]\nVersion=%d'
 
+
 class GPOTests(tests.TestCase):
     def setUp(self):
         super(GPOTests, self).setUp()
@@ -48,12 +49,11 @@ class GPOTests(tests.TestCase):
         ds_paths = [None, 'CN=%s,%s' % (guid, dspath)]
         for i in range(0, len(gpos)):
             self.assertEquals(gpos[i].name, names[i],
-              'The gpo name did not match expected name %s' % gpos[i].name)
+                              'The gpo name did not match expected name %s' % gpos[i].name)
             self.assertEquals(gpos[i].file_sys_path, file_sys_paths[i],
-              'file_sys_path did not match expected %s' % gpos[i].file_sys_path)
+                              'file_sys_path did not match expected %s' % gpos[i].file_sys_path)
             self.assertEquals(gpos[i].ds_path, ds_paths[i],
-              'ds_path did not match expected %s' % gpos[i].ds_path)
-
+                              'ds_path did not match expected %s' % gpos[i].ds_path)
 
     def test_gpo_ads_does_not_segfault(self):
         try:
@@ -72,12 +72,12 @@ class GPOTests(tests.TestCase):
         with open(os.path.join(gpo_path, 'GPT.INI'), 'w') as gpt:
             gpt.write(gpt_data % 42)
         self.assertEquals(gpo.gpo_get_sysvol_gpt_version(gpo_path)[1], 42,
-          'gpo_get_sysvol_gpt_version() did not return the expected version')
+                          'gpo_get_sysvol_gpt_version() did not return the expected version')
 
         with open(os.path.join(gpo_path, 'GPT.INI'), 'w') as gpt:
             gpt.write(gpt_data % old_vers)
         self.assertEquals(gpo.gpo_get_sysvol_gpt_version(gpo_path)[1], old_vers,
-          'gpo_get_sysvol_gpt_version() did not return the expected version')
+                          'gpo_get_sysvol_gpt_version() did not return the expected version')
 
     def test_check_refresh_gpo_list(self):
         cache = self.lp.cache_path('gpo_cache')
@@ -109,8 +109,8 @@ class GPOTests(tests.TestCase):
         after = 'addom.samba.example.com/Policies/' \
             '{31B2F340-016D-11D2-945F-00C04FB984F9}/GPT.INI'
         result = check_safe_path(before)
-        self.assertEquals(result, after, 'check_safe_path() didn\'t' \
-            ' correctly convert \\ to /')
+        self.assertEquals(result, after, 'check_safe_path() didn\'t'
+                          ' correctly convert \\ to /')
 
     def test_gpt_ext_register(self):
         this_path = os.path.dirname(os.path.realpath(__file__))
@@ -123,14 +123,14 @@ class GPOTests(tests.TestCase):
         self.assertTrue(ret, 'Failed to register a gp ext')
         gp_exts = list_gp_extensions(self.lp.configfile)
         self.assertTrue(ext_guid in gp_exts.keys(),
-            'Failed to list gp exts')
+                        'Failed to list gp exts')
         self.assertEquals(gp_exts[ext_guid]['DllName'], ext_path,
-            'Failed to list gp exts')
+                          'Failed to list gp exts')
 
         unregister_gp_extension(ext_guid)
         gp_exts = list_gp_extensions(self.lp.configfile)
         self.assertTrue(ext_guid not in gp_exts.keys(),
-            'Failed to unregister gp exts')
+                        'Failed to unregister gp exts')
 
         self.assertTrue(check_guid(ext_guid), 'Failed to parse valid guid')
         self.assertFalse(check_guid('AAAAAABBBBBBBCCC'), 'Parsed invalid guid')
@@ -143,9 +143,8 @@ class GPOTests(tests.TestCase):
 
         lp, parser = parse_gpext_conf(self.lp.configfile)
         self.assertTrue('test_section' in parser.sections(),
-            'test_section not found in gpext.conf')
+                        'test_section not found in gpext.conf')
         self.assertEquals(parser.get('test_section', 'test_var'), ext_guid,
-            'Failed to find test variable in gpext.conf')
+                          'Failed to find test variable in gpext.conf')
         parser.remove_section('test_section')
         atomic_write_conf(lp, parser)
-

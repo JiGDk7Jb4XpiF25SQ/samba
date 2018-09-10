@@ -63,6 +63,7 @@ lp = sambaopts.get_loadparm()
 creds = credopts.get_credentials(lp)
 creds.set_gensec_features(creds.get_gensec_features() | gensec.FEATURE_SEAL)
 
+
 class LDAPNotificationTest(samba.tests.TestCase):
 
     def setUp(self):
@@ -363,7 +364,8 @@ delete: otherLoginWorkstations
                 print("va[%s]" % va)
             self.assertEquals(num, ERR_UNWILLING_TO_PERFORM)
 
-if not "://" in url:
+
+if "://" not in url:
     if os.path.isfile(url):
         url = "tdb://%s" % url
     else:

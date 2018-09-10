@@ -78,14 +78,14 @@ bool run_dbwrap_do_locked1(int dummy)
 	int ret = false;
 	NTSTATUS status;
 
-	ev = server_event_context();
+	ev = global_event_context();
 	if (ev == NULL) {
-		fprintf(stderr, "server_event_context() failed\n");
+		fprintf(stderr, "global_event_context() failed\n");
 		return false;
 	}
-	msg = server_messaging_context();
+	msg = global_messaging_context();
 	if (msg == NULL) {
-		fprintf(stderr, "server_messaging_context() failed\n");
+		fprintf(stderr, "global_messaging_context() failed\n");
 		return false;
 	}
 

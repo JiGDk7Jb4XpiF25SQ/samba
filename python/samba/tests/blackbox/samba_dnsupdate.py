@@ -17,13 +17,15 @@
 #
 
 import samba.tests
-from StringIO import StringIO
+from samba.compat import StringIO
 from samba.netcmd.main import cmd_sambatool
 from samba.credentials import Credentials
 from samba.auth import system_session
 from samba.samdb import SamDB
 import ldb
-import shutil, os
+import shutil
+import os
+
 
 class SambaDnsUpdateTests(samba.tests.BlackboxTestCase):
     """Blackbox test case for samba_dnsupdate."""

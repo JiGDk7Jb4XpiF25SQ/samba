@@ -31,12 +31,12 @@ static bool get_g_lock_ctx(TALLOC_CTX *mem_ctx,
 			   struct messaging_context **msg,
 			   struct g_lock_ctx **ctx)
 {
-	*ev = server_event_context();
+	*ev = global_event_context();
 	if (*ev == NULL) {
 		fprintf(stderr, "tevent_context_init failed\n");
 		return false;
 	}
-	*msg = server_messaging_context();
+	*msg = global_messaging_context();
 	if (*msg == NULL) {
 		fprintf(stderr, "messaging_init failed\n");
 		TALLOC_FREE(*ev);

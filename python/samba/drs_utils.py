@@ -23,9 +23,11 @@ from samba.ndr import ndr_unpack
 from samba import dsdb
 from samba import werror
 from samba import WERRORError
-import samba, ldb
+import samba
+import ldb
 from samba.dcerpc.drsuapi import DRSUAPI_ATTID_name
 import re
+
 
 class drsException(Exception):
     """Base element for drs errors"""
@@ -62,7 +64,7 @@ def drsuapi_connect(server, lp, creds):
 
 
 def sendDsReplicaSync(drsuapiBind, drsuapi_handle, source_dsa_guid,
-        naming_context, req_option):
+                      naming_context, req_option):
     """Send DS replica sync request.
 
     :param drsuapiBind: a drsuapi Bind object
@@ -78,7 +80,7 @@ def sendDsReplicaSync(drsuapiBind, drsuapi_handle, source_dsa_guid,
     nc.dn = naming_context
 
     req1 = drsuapi.DsReplicaSyncRequest1()
-    req1.naming_context = nc;
+    req1.naming_context = nc
     req1.options = req_option
     req1.source_dsa_guid = misc.GUID(source_dsa_guid)
 
@@ -166,7 +168,7 @@ def drs_get_rodc_partial_attribute_set(samdb):
                               "searchFlags"])
 
     for r in res:
-        ldap_display_name = r["lDAPDisplayName"][0]
+        ldap_display_name = str(r["lDAPDisplayName"][0])
         if "systemFlags" in r:
             system_flags      = r["systemFlags"][0]
             if (int(system_flags) & (samba.dsdb.DS_FLAG_ATTR_NOT_REPLICATED |

@@ -1,12 +1,14 @@
 # a waf tool to add autoconf-like macros to the configure section
 # and for SAMBA_ macros for building libraries, binaries etc
 
-import os, sys, re, fnmatch, shlex
+import os, sys, re, fnmatch, shlex, inspect
 from optparse import SUPPRESS_HELP
-import Build, Options, Utils, Task, Logs, Configure
-from TaskGen import feature, before, after
-from Configure import conf, ConfigurationContext
-from Logs import debug
+from waflib import Build, Options, Utils, Task, Logs, Configure, Errors, Context
+from waflib.TaskGen import feature, before, after
+from waflib.Configure import ConfigurationContext
+from waflib.Logs import debug
+from waflib import ConfigSet
+from waflib.Build import CACHE_SUFFIX
 
 # TODO: make this a --option
 LIB_PATH="shared"
@@ -16,15 +18,39 @@ LIB_PATH="shared"
 MODE_644 = int('644', 8)
 MODE_755 = int('755', 8)
 
+def conf(f):
+    # override in order to propagate the argument "mandatory"
+    def fun(*k, **kw):
+        mandatory = True
+        if 'mandatory' in kw:
+            mandatory = kw['mandatory']
+            del kw['mandatory']
+
+        try:
+            return f(*k, **kw)
+        except Errors.ConfigurationError:
+            if mandatory:
+                raise
+
+    fun.__name__ = f.__name__
+    if 'mandatory' in inspect.getsource(f):
+        fun = f
+
+    setattr(Configure.ConfigurationContext, f.__name__, fun)
+    setattr(Build.BuildContext, f.__name__, fun)
+    return f
+Configure.conf = conf
+Configure.conftest = conf
+
 @conf
 def SET_TARGET_TYPE(ctx, target, value):
     '''set the target type of a target'''
     cache = LOCAL_CACHE(ctx, 'TARGET_TYPE')
     if target in cache and cache[target] != 'EMPTY':
-        Logs.error("ERROR: Target '%s' in directory %s re-defined as %s - was %s" % (target, ctx.curdir, value, cache[target]))
+        Logs.error("ERROR: Target '%s' in directory %s re-defined as %s - was %s" % (target, ctx.path.abspath(), value, cache[target]))
         sys.exit(1)
     LOCAL_CACHE_SET(ctx, 'TARGET_TYPE', target, value)
-    debug("task_gen: Target '%s' created of type '%s' in %s" % (target, value, ctx.curdir))
+    debug("task_gen: Target '%s' created of type '%s' in %s" % (target, value, ctx.path.abspath()))
     return True
 
 
@@ -101,7 +127,7 @@ def LOCAL_CACHE_SET(ctx, cachename, key, value):
 def ASSERT(ctx, expression, msg):
     '''a build assert call'''
     if not expression:
-        raise Utils.WafError("ERROR: %s\n" % msg)
+        raise Errors.WafError("ERROR: %s\n" % msg)
 Build.BuildContext.ASSERT = ASSERT
 
 
@@ -122,9 +148,9 @@ def dict_concat(d1, d2):
 
 def ADD_COMMAND(opt, name, function):
     '''add a new top level command to waf'''
-    Utils.g_module.__dict__[name] = function
+    Context.g_module.__dict__[name] = function
     opt.name = function
-Options.Handler.ADD_COMMAND = ADD_COMMAND
+Options.OptionsContext.ADD_COMMAND = ADD_COMMAND
 
 
 @feature('c', 'cc', 'cshlib', 'cprogram')
@@ -199,8 +225,10 @@ def subst_vars_error(string, env):
         if re.match('\$\{\w+\}', v):
             vname = v[2:-1]
             if not vname in env:
-                raise KeyError("Failed to find variable %s in %s" % (vname, string))
+                raise KeyError("Failed to find variable %s in %s in env %s <%s>" % (vname, string, env.__class__, str(env)))
             v = env[vname]
+            if isinstance(v, list):
+                v = ' '.join(v)
         out.append(v)
     return ''.join(out)
 
@@ -210,51 +238,6 @@ def SUBST_ENV_VAR(ctx, varname):
     '''Substitute an environment variable for any embedded variables'''
     return subst_vars_error(ctx.env[varname], ctx.env)
 Build.BuildContext.SUBST_ENV_VAR = SUBST_ENV_VAR
-
-
-def ENFORCE_GROUP_ORDERING(bld):
-    '''enforce group ordering for the project. This
-       makes the group ordering apply only when you specify
-       a target with --target'''
-    if Options.options.compile_targets:
-        @feature('*')
-        @before('exec_rule', 'apply_core', 'collect')
-        def force_previous_groups(self):
-            if getattr(self.bld, 'enforced_group_ordering', False):
-                return
-            self.bld.enforced_group_ordering = True
-
-            def group_name(g):
-                tm = self.bld.task_manager
-                return [x for x in tm.groups_names if id(tm.groups_names[x]) == id(g)][0]
-
-            my_id = id(self)
-            bld = self.bld
-            stop = None
-            for g in bld.task_manager.groups:
-                for t in g.tasks_gen:
-                    if id(t) == my_id:
-                        stop = id(g)
-                        debug('group: Forcing up to group %s for target %s',
-                              group_name(g), self.name or self.target)
-                        break
-                if stop is not None:
-                    break
-            if stop is None:
-                return
-
-            for i in xrange(len(bld.task_manager.groups)):
-                g = bld.task_manager.groups[i]
-                bld.task_manager.current_group = i
-                if id(g) == stop:
-                    break
-                debug('group: Forcing group %s', group_name(g))
-                for t in g.tasks_gen:
-                    if not getattr(t, 'forced_groups', False):
-                        debug('group: Posting %s', t.name or t.target)
-                        t.forced_groups = True
-                        t.post()
-Build.BuildContext.ENFORCE_GROUP_ORDERING = ENFORCE_GROUP_ORDERING
 
 
 def recursive_dirlist(dir, relbase, pattern=None):
@@ -312,8 +295,7 @@ def EXPAND_VARIABLES(ctx, varstr, vars=None):
     if not isinstance(varstr, str):
         return varstr
 
-    import Environment
-    env = Environment.Environment()
+    env = ConfigSet.ConfigSet()
     ret = varstr
     # substitute on user supplied dict if avaiilable
     if vars is not None:
@@ -352,9 +334,11 @@ def RUN_COMMAND(cmd,
 def RUN_PYTHON_TESTS(testfiles, pythonpath=None, extra_env=None):
     env = LOAD_ENVIRONMENT()
     if pythonpath is None:
-        pythonpath = os.path.join(Utils.g_module.blddir, 'python')
+        pythonpath = os.path.join(Context.g_module.out, 'python')
     result = 0
     for interp in env.python_interpreters:
+        if not isinstance(interp, str):
+            interp = ' '.join(interp)
         for testfile in testfiles:
             cmd = "PYTHONPATH=%s %s %s" % (pythonpath, interp, testfile)
             if extra_env:
@@ -382,8 +366,7 @@ except:
         # Try to use MD5 function. In FIPS mode this will cause an exception
         foo = md5.md5('abcd')
     except:
-        import Constants
-        Constants.SIG_NIL = hash('abcd')
+        Context.SIG_NIL = hash('abcd')
         class replace_md5(object):
             def __init__(self):
                 self.val = None
@@ -409,20 +392,20 @@ except:
 def LOAD_ENVIRONMENT():
     '''load the configuration environment, allowing access to env vars
        from new commands'''
-    import Environment
-    env = Environment.Environment()
+    env = ConfigSet.ConfigSet()
     try:
-        env.load('.lock-wscript')
-        env.load(env.blddir + '/c4che/default.cache.py')
-    except:
+        p = os.path.join(Context.g_module.out, 'c4che/default'+CACHE_SUFFIX)
+        env.load(p)
+    except (OSError, IOError):
         pass
     return env
 
 
 def IS_NEWER(bld, file1, file2):
     '''return True if file1 is newer than file2'''
-    t1 = os.stat(os.path.join(bld.curdir, file1)).st_mtime
-    t2 = os.stat(os.path.join(bld.curdir, file2)).st_mtime
+    curdir = bld.path.abspath()
+    t1 = os.stat(os.path.join(curdir, file1)).st_mtime
+    t2 = os.stat(os.path.join(curdir, file2)).st_mtime
     return t1 > t2
 Build.BuildContext.IS_NEWER = IS_NEWER
 
@@ -432,29 +415,27 @@ def RECURSE(ctx, directory):
     '''recurse into a directory, relative to the curdir or top level'''
     try:
         visited_dirs = ctx.visited_dirs
-    except:
+    except AttributeError:
         visited_dirs = ctx.visited_dirs = set()
-    d = os.path.join(ctx.curdir, directory)
+    d = os.path.join(ctx.path.abspath(), directory)
     if os.path.exists(d):
         abspath = os.path.abspath(d)
     else:
-        abspath = os.path.abspath(os.path.join(Utils.g_module.srcdir, directory))
+        abspath = os.path.abspath(os.path.join(Context.g_module.top, directory))
     ctxclass = ctx.__class__.__name__
     key = ctxclass + ':' + abspath
     if key in visited_dirs:
         # already done it
         return
     visited_dirs.add(key)
-    relpath = os_path_relpath(abspath, ctx.curdir)
-    if ctxclass == 'Handler':
-        return ctx.sub_options(relpath)
-    if ctxclass == 'ConfigurationContext':
-        return ctx.sub_config(relpath)
-    if ctxclass == 'BuildContext':
-        return ctx.add_subdirs(relpath)
-    Logs.error('Unknown RECURSE context class', ctxclass)
+    relpath = os_path_relpath(abspath, ctx.path.abspath())
+    if ctxclass in ['tmp', 'OptionsContext', 'ConfigurationContext', 'BuildContext']:
+        return ctx.recurse(relpath)
+    if 'waflib.extras.compat15' in sys.modules:
+        return ctx.recurse(relpath)
+    Logs.error('Unknown RECURSE context class: {}'.format(ctxclass))
     raise
-Options.Handler.RECURSE = RECURSE
+Options.OptionsContext.RECURSE = RECURSE
 Build.BuildContext.RECURSE = RECURSE
 
 
@@ -467,6 +448,7 @@ def CHECK_MAKEFLAGS(bld):
     if makeflags is None:
         return
     jobs_set = False
+    jobs = None
     # we need to use shlex.split to cope with the escaping of spaces
     # in makeflags
     for opt in shlex.split(makeflags):
@@ -489,17 +471,21 @@ def CHECK_MAKEFLAGS(bld):
             setattr(Options.options, opt[0:loc], opt[loc+1:])
         elif opt[0] != '-':
             for v in opt:
-                if v == 'j':
+                if re.search(r'j[0-9]*$', v):
                     jobs_set = True
+                    jobs = opt.strip('j')
                 elif v == 'k':
                     Options.options.keep = True
-        elif opt == '-j':
+        elif re.search(r'-j[0-9]*$', opt):
             jobs_set = True
+            jobs = opt.strip('-j')
         elif opt == '-k':
             Options.options.keep = True
     if not jobs_set:
         # default to one job
         Options.options.jobs = 1
+    elif jobs_set and jobs:
+        Options.options.jobs = int(jobs)
 
 Build.BuildContext.CHECK_MAKEFLAGS = CHECK_MAKEFLAGS
 
@@ -513,7 +499,7 @@ def option_group(opt, name):
     gr = opt.add_option_group(name)
     option_groups[name] = gr
     return gr
-Options.Handler.option_group = option_group
+Options.OptionsContext.option_group = option_group
 
 
 def save_file(filename, contents, create_dir=False):
@@ -542,9 +528,9 @@ def load_file(filename):
 
 def reconfigure(ctx):
     '''rerun configure if necessary'''
-    import Configure, samba_wildcard, Scripting
     if not os.path.exists(".lock-wscript"):
-        raise Utils.WafError('configure has not been run')
+        raise Errors.WafError('configure has not been run')
+    import samba_wildcard
     bld = samba_wildcard.fake_build_environment()
     Configure.autoconfig = True
     Scripting.check_configured(bld)
@@ -561,7 +547,7 @@ def map_shlib_extension(ctx, name, python=False):
     if python:
         return ctx.env.pyext_PATTERN % root1
     else:
-        (root2, ext2) = os.path.splitext(ctx.env.shlib_PATTERN)
+        (root2, ext2) = os.path.splitext(ctx.env.cshlib_PATTERN)
     return root1+ext2
 Build.BuildContext.map_shlib_extension = map_shlib_extension
 
@@ -583,7 +569,7 @@ def make_libname(ctx, name, nolibprefix=False, version=None, python=False):
     if python:
         libname = apply_pattern(name, ctx.env.pyext_PATTERN)
     else:
-        libname = apply_pattern(name, ctx.env.shlib_PATTERN)
+        libname = apply_pattern(name, ctx.env.cshlib_PATTERN)
     if nolibprefix and libname[0:3] == 'lib':
         libname = libname[3:]
     if version:
@@ -617,7 +603,7 @@ def get_tgt_list(bld):
         tgt_list.append(t)
     return tgt_list
 
-from Constants import WSCRIPT_FILE
+from waflib.Context import WSCRIPT_FILE
 def PROCESS_SEPARATE_RULE(self, rule):
     ''' cause waf to process additional script based on `rule'.
         You should have file named wscript_<stage>_rule in the current directory
@@ -628,15 +614,21 @@ def PROCESS_SEPARATE_RULE(self, rule):
         stage = 'configure'
     elif isinstance(self, Build.BuildContext):
         stage = 'build'
-    file_path = os.path.join(self.curdir, WSCRIPT_FILE+'_'+stage+'_'+rule)
-    txt = load_file(file_path)
-    if txt:
-        dc = {'ctx': self}
-        if getattr(self.__class__, 'pre_recurse', None):
-            dc = self.pre_recurse(txt, file_path, self.curdir)
-        exec(compile(txt, file_path, 'exec'), dc)
-        if getattr(self.__class__, 'post_recurse', None):
-            dc = self.post_recurse(txt, file_path, self.curdir)
+    file_path = os.path.join(self.path.abspath(), WSCRIPT_FILE+'_'+stage+'_'+rule)
+    node = self.root.find_node(file_path)
+    if node:
+        try:
+            cache = self.recurse_cache
+        except AttributeError:
+            cache = self.recurse_cache = {}
+        if node not in cache:
+            cache[node] = True
+            self.pre_recurse(node)
+            try:
+                function_code = node.read('rU', None)
+                exec(compile(function_code, node.abspath(), 'exec'), self.exec_dict)
+            finally:
+                self.post_recurse(node)
 
 Build.BuildContext.PROCESS_SEPARATE_RULE = PROCESS_SEPARATE_RULE
 ConfigurationContext.PROCESS_SEPARATE_RULE = PROCESS_SEPARATE_RULE
@@ -693,4 +685,4 @@ def samba_add_onoff_option(opt, option, help=(), dest=None, default=True,
                    default=default)
     opt.add_option(without_val, help=SUPPRESS_HELP, action="store_false",
                    dest=dest)
-Options.Handler.samba_add_onoff_option = samba_add_onoff_option
+Options.OptionsContext.samba_add_onoff_option = samba_add_onoff_option

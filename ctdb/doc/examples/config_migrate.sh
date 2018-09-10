@@ -109,33 +109,44 @@ out_file_remove_if_empty ()
 # script
 #
 
-# Convert a ctdbd.conf opt+val into a ctdb.conf section+opt
+# Convert a ctdbd.conf opt+val into a ctdb.conf section+opt+val
 #
 # If opt is matched and val is empty then output is printed, allowing
 # this function to be reused to check if opt is valid.
+#
+# Note that for boolean options, the expected value and the new value
+# form part of the data.
 get_ctdb_conf_option ()
 {
 	_opt="$1"
 	_val="$2"
 
 	awk -v opt="${_opt}" -v val="${_val}" \
-	    '$3 == opt { if (!$4 || !val || val ==$4) { print $1, $2 } }' <<EOF
-cluster		node-address			CTDB_NODE_ADDRESS
-cluster		recovery-lock			CTDB_RECOVERY_LOCK
-cluster		transport			CTDB_TRANSPORT
-database	lock-debug-script		CTDB_DEBUG_LOCKS
-database	persistent-database-directory	CTDB_DBDIR_PERSISTENT
-database	state-database-directory	CTDB_DBDIR_STATE
-database	volatile-database-directory	CTDB_DBDIR
-event		debug-script			CTDB_DEBUG_HUNG_SCRIPT
-legacy		lmaster-capability		CTDB_CAPABILITY_LMASTER	     no
-legacy		no-realtime			CTDB_NOSETSCHED		     yes
-legacy		recmaster-capability		CTDB_CAPABILITY_RECMASTER    no
-legacy		script-log-level		CTDB_SCRIPT_LOG_LEVEL
-legacy		start-as-disabled		CTDB_START_AS_DISABLED	     yes
-legacy		start-as-stopped		CTDB_START_AS_STOPPED	     yes
-logging		location			CTDB_LOGGING
-logging		log-level			CTDB_DEBUGLEVEL
+	    '$3 == opt {
+		if (!$4 || !val || val == $4) {
+		    if ($5) {
+			print $1, $2, $5
+		    } else {
+			print $1, $2, val
+		    }
+		}
+	    }' <<EOF
+cluster	  node-address			CTDB_NODE_ADDRESS
+cluster   recovery-lock			CTDB_RECOVERY_LOCK
+cluster   transport			CTDB_TRANSPORT
+database  lock-debug-script		CTDB_DEBUG_LOCKS
+database  persistent-database-directory CTDB_DBDIR_PERSISTENT
+database  state-database-directory	CTDB_DBDIR_STATE
+database  volatile-database-directory	CTDB_DBDIR
+event     debug-script			CTDB_DEBUG_HUNG_SCRIPT
+legacy    lmaster-capability		CTDB_CAPABILITY_LMASTER		no  false
+legacy    realtime-scheduling		CTDB_NOSETSCHED			yes false
+legacy    recmaster-capability		CTDB_CAPABILITY_RECMASTER       no  false
+legacy    script-log-level		CTDB_SCRIPT_LOG_LEVEL
+legacy    start-as-disabled		CTDB_START_AS_DISABLED		yes true
+legacy    start-as-stopped		CTDB_START_AS_STOPPED		yes true
+logging   location			CTDB_LOGGING
+logging   log-level			CTDB_DEBUGLEVEL
 EOF
 
 }
@@ -149,12 +160,48 @@ check_ctdb_conf_option ()
 	[ -n "$_out" ]
 }
 
+# Convert a ctdbd.conf tunable option into a ctdb.conf section+opt
+#
+# The difference between this and get_ctdb_conf_option() is that only
+# the tunable part of the option is passed as opt and it is matched
+# case-insensitively.
+get_ctdb_conf_tunable_option ()
+{
+	_opt="$1"
+	_val="$2"
+
+	awk -v opt="${_opt}" -v val="${_val}" \
+	    'tolower($3) == tolower(opt) {
+		if (!$4 || !val || (val == 0 ? 0 : 1) == $4) {
+		    if ($5) {
+			print $1, $2, $5
+		    } else {
+			print $1, $2, val
+		    }
+		}
+	    }' <<EOF
+database  tdb-mutexes			TDBMutexEnabled		0 false
+failover  disabled			DisableIPFailover	1 true
+EOF
+
+}
+
+# Check if a tunable will convert to a ctdb.conf option
+check_ctdb_conf_tunable_option ()
+{
+	_opt="$1"
+
+	_out=$(get_ctdb_conf_tunable_option "$_opt" "")
+	[ -n "$_out" ]
+}
+
 # Check if an option has been removed
 check_removed_option ()
 {
 	_option="$1"
 
 	grep -Fqx "$_option" <<EOF
+CTDB_BASE
 CTDB_PIDFILE
 CTDB_SOCKET
 CTDB_EVENT_SCRIPT_DIR
@@ -496,16 +543,17 @@ build_ctdb_conf ()
 
 	list_options |
 	while read -r _opt _val ; do
-		_out=$(get_ctdb_conf_option "$_opt" "$_val")
+		case "$_opt" in
+		CTDB_SET_*)
+			_opt="${_opt#CTDB_SET_}"
+			_out=$(get_ctdb_conf_tunable_option "$_opt" "$_val")
+			;;
+		*)
+			_out=$(get_ctdb_conf_option "$_opt" "$_val")
+		esac
 		if [ -z "$_out" ] ; then
 			continue
 		fi
-
-		# ctdb.conf needs true/false, not yes/no
-		case "$_val" in
-		yes) _val="true"  ;;
-		no)  _val="false" ;;
-		esac
 
 		# $_out is section and key, replace dashes with spaces
 		# Intentional word splitting
@@ -513,6 +561,7 @@ build_ctdb_conf ()
 		set -- $_out
 		_section=$(echo "$1" | sed -e 's|-| |g')
 		_key=$(echo "$2" | sed -e 's|-| |g')
+		_newval="$3"
 
 		if ! grep -Fqx "[${_section}]" "$_out_file" ; then
 			# Add blank line if file is not empty
@@ -525,7 +574,7 @@ build_ctdb_conf ()
 
 		# Must escape leading TAB or sed eats it
 		sed -i -e "/\\[${_section}\\]/a\
-\\	${_key} = ${_val}
+\\	${_key} = ${_newval}
 " "$_out_file"
 
 	done
@@ -556,6 +605,9 @@ build_ctdb_tunables ()
 
 	list_tunables |
 	while read -r _var _val ; do
+		if check_ctdb_conf_tunable_option "$_var" ; then
+			continue
+		fi
 		if ! check_valid_tunable "$_var" ; then
 			continue
 		fi

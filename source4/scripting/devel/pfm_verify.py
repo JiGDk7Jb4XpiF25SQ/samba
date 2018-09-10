@@ -48,6 +48,7 @@ def _samdb_fetch_pfm(samdb):
 
     return (pfm.ctr, pfm_schi)
 
+
 def _samdb_fetch_schi(samdb):
     """Fetch schemaInfo stored in SamDB using LDB connection"""
     res = samdb.search(base=samdb.get_schema_basedn(), expression="", scope=SCOPE_BASE, attrs=["*"])
@@ -57,8 +58,9 @@ def _samdb_fetch_schi(samdb):
                               str(res[0]['schemaInfo']))
     else:
         pfm_schi = drsblobs.schemaInfoBlob()
-        pfm_schi.marker = 0xFF;
+        pfm_schi.marker = 0xFF
     return pfm_schi
+
 
 def _drs_fetch_pfm(server, samdb, creds, lp):
     """Fetch prefixMap using DRS interface"""
@@ -107,6 +109,7 @@ def _drs_fetch_pfm(server, samdb, creds, lp):
     pfm.num_mappings -= 1
     return (pfm, pfm_schi)
 
+
 def _pfm_verify(drs_pfm, ldb_pfm):
     errors = []
     if drs_pfm.num_mappings != ldb_pfm.num_mappings:
@@ -127,6 +130,7 @@ def _pfm_verify(drs_pfm, ldb_pfm):
             errors.append("[%2d] differences in (%s)" % (i, it_err))
     return errors
 
+
 def _pfm_schi_verify(drs_schi, ldb_schi):
     errors = []
     print(drs_schi.revision)
@@ -141,6 +145,7 @@ def _pfm_schi_verify(drs_schi, ldb_schi):
         errors.append("Different invocation_id in schemaInfo: drs = %s, ldb = %s"
                       % (drs_schi.invocation_id, ldb_schi.invocation_id))
     return errors
+
 
 ########### main code ###########
 if __name__ == "__main__":
@@ -158,8 +163,8 @@ if __name__ == "__main__":
 
     if len(args) != 1:
         import os
-        if not "DC_SERVER" in os.environ.keys():
-             parser.error("You must supply a server")
+        if "DC_SERVER" not in os.environ.keys():
+            parser.error("You must supply a server")
         args.append(os.environ["DC_SERVER"])
 
     if creds.is_anonymous():

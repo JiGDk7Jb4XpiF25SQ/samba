@@ -50,6 +50,7 @@ from samba.dsdb import (
 from samba.dcerpc.misc import SEC_CHAN_BDC
 from samba import gensec
 from samba import sd_utils
+from samba.compat import get_string
 
 SLEEP_OVERHEAD = 3e-4
 
@@ -238,7 +239,7 @@ class Packet(object):
             fn = getattr(traffic_packets, fn_name)
 
         except AttributeError as e:
-            print("Conversation(%s) Missing handler %s" % \
+            print("Conversation(%s) Missing handler %s" %
                   (conversation.conversation_id, fn_name),
                   file=sys.stderr)
             return
@@ -404,8 +405,8 @@ class ReplayContext(object):
                                      'conversation-%d' %
                                      conversation.conversation_id)
 
-        self.lp.set("private dir",     self.tempdir)
-        self.lp.set("lock dir",        self.tempdir)
+        self.lp.set("private dir", self.tempdir)
+        self.lp.set("lock dir", self.tempdir)
         self.lp.set("state directory", self.tempdir)
         self.lp.set("tls verify peer", "no_check")
 
@@ -436,8 +437,8 @@ class ReplayContext(object):
            than that requested, but not significantly.
         """
         if not failed_last_time:
-            if (self.badpassword_frequency > 0 and
-               random.random() < self.badpassword_frequency):
+            if (self.badpassword_frequency and self.badpassword_frequency > 0
+                and random.random() < self.badpassword_frequency):
                 try:
                     f(bad)
                 except:
@@ -718,7 +719,7 @@ class ReplayContext(object):
     def get_authenticator(self):
         auth = self.machine_creds.new_client_authenticator()
         current  = netr_Authenticator()
-        current.cred.data = [ord(x) for x in auth["credential"]]
+        current.cred.data = [x if isinstance(x, int) else ord(x) for x in auth["credential"]]
         current.timestamp = auth["timestamp"]
 
         subsequent = netr_Authenticator()
@@ -1267,7 +1268,7 @@ class TrafficModel(object):
             client += 1
 
         print(("we have %d conversations at rate %f" %
-                              (len(conversations), rate)), file=sys.stderr)
+               (len(conversations), rate)), file=sys.stderr)
         conversations.sort()
         return conversations
 
@@ -1500,7 +1501,7 @@ def replay(conversations,
     finally:
         for s in (15, 15, 9):
             print(("killing %d children with -%d" %
-                                 (len(children), s)), file=sys.stderr)
+                   (len(children), s)), file=sys.stderr)
             for pid in children:
                 try:
                     os.kill(pid, s)
@@ -1565,7 +1566,7 @@ def create_ou(ldb, instance_id):
     """
     ou = ou_name(ldb, instance_id)
     try:
-        ldb.add({"dn":          ou.split(',', 1)[1],
+        ldb.add({"dn": ou.split(',', 1)[1],
                  "objectclass": "organizationalunit"})
     except LdbError as e:
         (status, _) = e.args
@@ -1573,7 +1574,7 @@ def create_ou(ldb, instance_id):
         if status != 68:
             raise
     try:
-        ldb.add({"dn":          ou,
+        ldb.add({"dn": ou,
                  "objectclass": "organizationalunit"})
     except LdbError as e:
         (status, _) = e.args
@@ -1658,9 +1659,8 @@ def create_machine_account(ldb, instance_id, netbios_name, machinepass):
 
     ou = ou_name(ldb, instance_id)
     dn = "cn=%s,%s" % (netbios_name, ou)
-    utf16pw = unicode(
-        '"' + machinepass.encode('utf-8') + '"', 'utf-8'
-    ).encode('utf-16-le')
+    utf16pw = ('"%s"' % get_string(machinepass)).encode('utf-16-le')
+
     start = time.time()
     ldb.add({
         "dn": dn,
@@ -1678,9 +1678,7 @@ def create_user_account(ldb, instance_id, username, userpass):
     """Create a user account via ldap."""
     ou = ou_name(ldb, instance_id)
     user_dn = "cn=%s,%s" % (username, ou)
-    utf16pw = unicode(
-        '"' + userpass.encode('utf-8') + '"', 'utf-8'
-    ).encode('utf-16-le')
+    utf16pw = ('"%s"' % get_string(userpass)).encode('utf-16-le')
     start = time.time()
     ldb.add({
         "dn": user_dn,
@@ -1692,7 +1690,7 @@ def create_user_account(ldb, instance_id, username, userpass):
 
     # grant user write permission to do things like write account SPN
     sdutils = sd_utils.SDUtils(ldb)
-    sdutils.dacl_add_ace(user_dn,  "(A;;WP;;;PS)")
+    sdutils.dacl_add_ace(user_dn, "(A;;WP;;;PS)")
 
     end = time.time()
     duration = end - start

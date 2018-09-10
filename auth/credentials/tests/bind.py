@@ -46,6 +46,7 @@ creds_user2 = copy.deepcopy(creds)
 creds_user3 = copy.deepcopy(creds)
 creds_user4 = copy.deepcopy(creds)
 
+
 class BindTests(samba.tests.TestCase):
 
     info_dc = None
@@ -111,8 +112,8 @@ unicodePwd:: """ + base64.b64encode(u"\"P@ssw0rd\"".encode('utf-16-le')).decode(
         # create user
         self.ldb.newuser(username=self.username, password=self.password)
         ldb_res = self.ldb.search(base=self.domain_dn,
-                                      scope=SCOPE_SUBTREE,
-                                      expression="(samAccountName=%s)" % self.username)
+                                  scope=SCOPE_SUBTREE,
+                                  expression="(samAccountName=%s)" % self.username)
         self.assertEquals(len(ldb_res), 1)
         user_dn = ldb_res[0]["dn"]
         self.addCleanup(delete_force, self.ldb, user_dn)
@@ -145,8 +146,8 @@ unicodePwd:: """ + base64.b64encode(u"\"P@ssw0rd\"".encode('utf-16-le')).decode(
         # create user
         self.ldb.newuser(username=self.username, password=self.password)
         ldb_res = self.ldb.search(base=self.domain_dn,
-                                      scope=SCOPE_SUBTREE,
-                                      expression="(samAccountName=%s)" % self.username)
+                                  scope=SCOPE_SUBTREE,
+                                  expression="(samAccountName=%s)" % self.username)
         self.assertEquals(len(ldb_res), 1)
         user_dn = ldb_res[0]["dn"]
         self.addCleanup(delete_force, self.ldb, user_dn)
@@ -158,10 +159,11 @@ unicodePwd:: """ + base64.b64encode(u"\"P@ssw0rd\"".encode('utf-16-le')).decode(
         print("BindTest (no domain) with: " + self.username)
         try:
             ldb_user4 = samba.tests.connect_samdb(host, credentials=creds_user4,
-                                              lp=lp, ldap_only=True)
+                                                  lp=lp, ldap_only=True)
         except:
             self.fail("Failed to connect without the domain set")
 
         res = ldb_user4.search(base="", expression="", scope=SCOPE_BASE, attrs=["*"])
+
 
 TestProgram(module=__name__, opts=subunitopts)

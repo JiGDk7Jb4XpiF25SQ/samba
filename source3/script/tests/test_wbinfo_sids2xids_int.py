@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 
 from __future__ import print_function
-import sys,os,subprocess
+import sys
+import os
+import subprocess
 
 
 if len(sys.argv) != 3:
@@ -11,6 +13,7 @@ if len(sys.argv) != 3:
 wbinfo = sys.argv[1]
 netcmd = sys.argv[2]
 
+
 def flush_cache(sids=[], uids=[], gids=[]):
     for sid in sids:
         os.system(netcmd + (" cache del IDMAP/SID2XID/%s" % (sid)))
@@ -19,6 +22,7 @@ def flush_cache(sids=[], uids=[], gids=[]):
     for gids in gids:
         os.system(netcmd + (" cache del IDMAP/GID2SID/%s" % (gid)))
 
+
 def fill_cache(inids, idtype='gid'):
     for inid in inids:
         if inid is None:
@@ -26,24 +30,25 @@ def fill_cache(inids, idtype='gid'):
         subprocess.Popen([wbinfo, '--%s-to-sid=%s' % (idtype, inid)],
                          stdout=subprocess.PIPE).communicate()
 
+
 domain = subprocess.Popen([wbinfo, "--own-domain"],
                           stdout=subprocess.PIPE).communicate()[0].strip()
 domsid = subprocess.Popen([wbinfo, "-n", domain + "/"],
                           stdout=subprocess.PIPE).communicate()[0]
 domsid = domsid.split(' ')[0]
 
-#print domain
-#print domsid
+# print domain
+# print domsid
 
-sids=[ domsid + '-512', 'S-1-5-32-545', domsid + '-513', 'S-1-1-0', 'S-1-3-1', 'S-1-5-1' ]
+sids = [domsid + '-512', 'S-1-5-32-545', domsid + '-513', 'S-1-1-0', 'S-1-3-1', 'S-1-5-1']
 
 flush_cache(sids=sids)
 
-sids2xids = subprocess.Popen([wbinfo, '--sids-to-unix-ids=' +  ','.join(sids)],
+sids2xids = subprocess.Popen([wbinfo, '--sids-to-unix-ids=' + ','.join(sids)],
                              stdout=subprocess.PIPE).communicate()[0].strip()
 
-gids=[]
-uids=[]
+gids = []
+uids = []
 idtypes = []
 
 for line in sids2xids.split('\n'):
@@ -70,6 +75,8 @@ for line in sids2xids.split('\n'):
 
 # Check the list produced by the sids-to-xids call with the
 # singular variant (sid-to-xid) for each sid in turn.
+
+
 def check_singular(sids, ids, idtype='gid'):
     i = 0
     for sid in sids:
@@ -86,8 +93,10 @@ def check_singular(sids, ids, idtype='gid'):
 
 # Check the list produced by the sids-to-xids call with the
 # multiple variant (sid-to-xid) for each sid in turn.
+
+
 def check_multiple(sids, idtypes):
-    sids2xids = subprocess.Popen([wbinfo, '--sids-to-unix-ids=' +  ','.join(sids)],
+    sids2xids = subprocess.Popen([wbinfo, '--sids-to-unix-ids=' + ','.join(sids)],
                                  stdout=subprocess.PIPE).communicate()[0].strip()
     # print sids2xids
     i = 0
@@ -99,6 +108,7 @@ def check_multiple(sids, idtypes):
             flush_cache(sids=sids, uids=uids, gids=gids)
             sys.exit(1)
         i += 1
+
 
 # first round: with filled cache via sid-to-id
 check_singular(sids, gids, 'gid')

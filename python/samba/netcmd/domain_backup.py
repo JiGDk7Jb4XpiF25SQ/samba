@@ -35,7 +35,7 @@ from samba.dcerpc.security import dom_sid
 from samba.netcmd import Option, CommandError
 from samba.dcerpc import misc, security
 from samba import Ldb
-from fsmo import cmd_fsmo_seize
+from . fsmo import cmd_fsmo_seize
 from samba.provision import make_smbconf
 from samba.upgradehelpers import update_krbtgt_account_password
 from samba.remove_dc import remove_dc
@@ -208,7 +208,7 @@ class cmd_domain_backup_online(samba.netcmd.Command):
                help="Directory to write the backup file to"),
         Option("--no-secrets", action="store_true", default=False,
                help="Exclude secret values from the backup created")
-       ]
+    ]
 
     def run(self, sambaopts=None, credopts=None, server=None, targetdir=None,
             no_secrets=False):
@@ -585,7 +585,7 @@ class cmd_domain_backup_rename(samba.netcmd.Command):
                help="Retain the DNS entries for the old realm in the backup"),
         Option("--no-secrets", action="store_true", default=False,
                help="Exclude secret values from the backup created")
-       ]
+    ]
 
     takes_args = ["new_domain_name", "new_dns_realm"]
 
@@ -891,7 +891,7 @@ class cmd_domain_backup_offline(samba.netcmd.Command):
         # If more than one directory is a parent of this path, then at least
         # one configured path is a subdir of another. Use closest match.
         if len(matching_dirs) > 1:
-            arc_path, fs_path = max(matching_dirs, key=lambda (_, p): len(p))
+            arc_path, fs_path = max(matching_dirs, key=lambda p: len(p[1]))
         arc_path += path[len(fs_path):]
 
         return arc_path

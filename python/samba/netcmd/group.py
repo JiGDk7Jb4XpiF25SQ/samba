@@ -89,12 +89,12 @@ Example3 adds a new RFC2307 enabled group for NIS domain samdom and GID 12345 (b
         Option("-H", "--URL", help="LDB URL for database or target server", type=str,
                metavar="URL", dest="H"),
         Option("--groupou",
-           help="Alternative location (without domainDN counterpart) to default CN=Users in which new user object will be created",
-           type=str),
+               help="Alternative location (without domainDN counterpart) to default CN=Users in which new user object will be created",
+               type=str),
         Option("--group-scope", type="choice", choices=["Domain", "Global", "Universal"],
-            help="Group scope (Domain | Global | Universal)"),
+               help="Group scope (Domain | Global | Universal)"),
         Option("--group-type", type="choice", choices=["Security", "Distribution"],
-            help="Group type (Security | Distribution)"),
+               help="Group type (Security | Distribution)"),
         Option("--description", help="Group's description", type=str),
         Option("--mail-address", help="Group's email address", type=str),
         Option("--notes", help="Groups's notes", type=str),
@@ -122,9 +122,9 @@ Example3 adds a new RFC2307 enabled group for NIS domain samdom and GID 12345 (b
         try:
             samdb = SamDB(url=H, session_info=system_session(),
                           credentials=creds, lp=lp)
-            samdb.newgroup(groupname, groupou=groupou, grouptype = gtype,
-                          description=description, mailaddress=mail_address, notes=notes,
-                          gidnumber=gid_number, nisdomain=nis_domain)
+            samdb.newgroup(groupname, groupou=groupou, grouptype=gtype,
+                           description=description, mailaddress=mail_address, notes=notes,
+                           gidnumber=gid_number, nisdomain=nis_domain)
         except Exception as e:
             # FIXME: catch more specific exception
             raise CommandError('Failed to create group "%s"' % groupname, e)
@@ -239,7 +239,7 @@ Example2 shows how to add a single user account, User2, to the supergroup AD gro
                           credentials=creds, lp=lp)
             groupmembers = listofmembers.split(',')
             samdb.add_remove_group_members(groupname, groupmembers,
-                    add_members_operation=True)
+                                           add_members_operation=True)
         except Exception as e:
             # FIXME: catch more specific exception
             raise CommandError('Failed to add members "%s" to group "%s"' % (
@@ -290,7 +290,7 @@ Example2 shows how to remove a single user account, User2, from the supergroup A
             samdb = SamDB(url=H, session_info=system_session(),
                           credentials=creds, lp=lp)
             samdb.add_remove_group_members(groupname, listofmembers.split(","),
-                    add_members_operation=False)
+                                           add_members_operation=False)
         except Exception as e:
             # FIXME: Catch more specific exception
             raise CommandError('Failed to remove members "%s" from group "%s"' % (listofmembers, groupname), e)
@@ -309,13 +309,13 @@ class cmd_group_list(Command):
                help="Verbose output, showing group type and group scope.",
                action="store_true"),
 
-        ]
+    ]
 
     takes_optiongroups = {
         "sambaopts": options.SambaOptions,
         "credopts": options.CredentialsOptions,
         "versionopts": options.VersionOptions,
-        }
+    }
 
     def run(self, sambaopts=None, credopts=None, versionopts=None, H=None,
             verbose=False):
@@ -323,12 +323,12 @@ class cmd_group_list(Command):
         creds = credopts.get_credentials(lp, fallback_machine=True)
 
         samdb = SamDB(url=H, session_info=system_session(),
-            credentials=creds, lp=lp)
+                      credentials=creds, lp=lp)
 
         domain_dn = samdb.domain_dn()
         res = samdb.search(domain_dn, scope=ldb.SCOPE_SUBTREE,
-                    expression=("(objectClass=group)"),
-                    attrs=["samaccountname", "grouptype"])
+                           expression=("(objectClass=group)"),
+                           attrs=["samaccountname", "grouptype"])
         if (len(res) == 0):
             return
 
@@ -359,6 +359,7 @@ class cmd_group_list(Command):
             for msg in res:
                 self.outf.write("%s\n" % msg.get("samaccountname", idx=0))
 
+
 class cmd_group_list_members(Command):
     """List all members of an AD group.
 
@@ -373,13 +374,13 @@ samba-tool group listmembers \"Domain Users\" -H ldap://samba.samdom.example.com
     takes_options = [
         Option("-H", "--URL", help="LDB URL for database or target server", type=str,
                metavar="URL", dest="H"),
-        ]
+    ]
 
     takes_optiongroups = {
         "sambaopts": options.SambaOptions,
         "credopts": options.CredentialsOptions,
         "versionopts": options.VersionOptions,
-        }
+    }
 
     takes_args = ["groupname"]
 
@@ -422,6 +423,7 @@ samba-tool group listmembers \"Domain Users\" -H ldap://samba.samdom.example.com
         except Exception as e:
             raise CommandError('Failed to list members of "%s" group ' % groupname, e)
 
+
 class cmd_group_move(Command):
     """Move a group to an organizational unit/container.
 
@@ -459,12 +461,12 @@ class cmd_group_move(Command):
                type=str, metavar="URL", dest="H"),
     ]
 
-    takes_args = [ "groupname", "new_parent_dn" ]
+    takes_args = ["groupname", "new_parent_dn"]
     takes_optiongroups = {
         "sambaopts": options.SambaOptions,
         "credopts": options.CredentialsOptions,
         "versionopts": options.VersionOptions,
-        }
+    }
 
     def run(self, groupname, new_parent_dn, credopts=None, sambaopts=None,
             versionopts=None, H=None):
@@ -491,7 +493,7 @@ class cmd_group_move(Command):
                                (new_parent_dn, e.message))
 
         full_new_group_dn = ldb.Dn(samdb, str(group_dn))
-        full_new_group_dn.remove_base_components(len(group_dn)-1)
+        full_new_group_dn.remove_base_components(len(group_dn) - 1)
         full_new_group_dn.add_base(full_new_parent_dn)
 
         try:
@@ -500,6 +502,7 @@ class cmd_group_move(Command):
             raise CommandError('Failed to move group "%s"' % groupname, e)
         self.outf.write('Moved group "%s" into "%s"\n' %
                         (groupname, full_new_parent_dn))
+
 
 class cmd_group_show(Command):
     """Display a group AD object.
@@ -549,7 +552,7 @@ Example3 shows how to display a users objectGUID and member attributes.
         "sambaopts": options.SambaOptions,
         "credopts": options.CredentialsOptions,
         "versionopts": options.VersionOptions,
-        }
+    }
 
     def run(self, groupname, credopts=None, sambaopts=None, versionopts=None,
             H=None, group_attrs=None):
@@ -564,8 +567,8 @@ Example3 shows how to display a users objectGUID and member attributes.
             attrs = group_attrs.split(",")
 
         filter = ("(&(sAMAccountType=%d)(sAMAccountName=%s))" %
-                     ( ATYPE_SECURITY_GLOBAL_GROUP,
-                       ldb.binary_encode(groupname)))
+                  (ATYPE_SECURITY_GLOBAL_GROUP,
+                   ldb.binary_encode(groupname)))
 
         domaindn = samdb.domain_dn()
 
@@ -579,6 +582,7 @@ Example3 shows how to display a users objectGUID and member attributes.
         for msg in res:
             user_ldif = samdb.write_ldif(msg, ldb.CHANGETYPE_NONE)
             self.outf.write(user_ldif)
+
 
 class cmd_group(SuperCommand):
     """Group management."""

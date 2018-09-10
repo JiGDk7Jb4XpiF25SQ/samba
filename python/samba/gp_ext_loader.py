@@ -20,6 +20,7 @@ from samba.gpclass import gp_ext
 
 try:
     import importlib.util
+
     def import_file(name, location):
         spec = importlib.util.spec_from_file_location(name, location)
         module = importlib.util.module_from_spec(spec)
@@ -27,8 +28,10 @@ try:
         return module
 except ImportError:
     import imp
+
     def import_file(name, location):
         return imp.load_source(name, location)
+
 
 def get_gp_ext_from_module(name, mod):
     if mod:
@@ -36,6 +39,7 @@ def get_gp_ext_from_module(name, mod):
             if k == name and issubclass(v, gp_ext):
                 return v
     return None
+
 
 def get_gp_client_side_extensions(logger, smb_conf):
     user_exts = []
@@ -53,4 +57,3 @@ def get_gp_client_side_extensions(logger, smb_conf):
             logger.info('Loaded user extension from %s: %s'
                         % (gp_ext['DllName'], ext.__name__))
     return (machine_exts, user_exts)
-

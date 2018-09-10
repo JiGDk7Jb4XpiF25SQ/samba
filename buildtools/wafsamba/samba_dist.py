@@ -2,13 +2,41 @@
 # uses git ls-files to get file lists
 
 import os, sys, tarfile
-import Utils, Scripting, Logs, Options
-from Configure import conf
+from waflib import Utils, Scripting, Logs, Options
+from waflib.Configure import conf
 from samba_utils import os_path_relpath
+from waflib import Context
 
 dist_dirs = None
 dist_files = None
 dist_blacklist = ""
+dist_archive = None
+
+class Dist(Context.Context):
+    # TODO remove
+    cmd = 'dist'
+    fun = 'dist'
+    def execute(self):
+        Context.g_module.dist()
+
+class DistCheck(Scripting.DistCheck):
+    fun = 'distcheck'
+    cmd = 'distcheck'
+    def execute(self):
+        Options.options.distcheck_args = ''
+        if Context.g_module.distcheck is Scripting.distcheck:
+            # default
+            Context.g_module.distcheck(self)
+        else:
+            Context.g_module.distcheck()
+        Context.g_module.dist()
+        self.check()
+    def get_arch_name(self):
+        global dist_archive
+        return dist_archive
+    def make_distcheck_cmd(self, tmpdir):
+        waf = os.path.abspath(sys.argv[0])
+        return [sys.executable, waf, 'configure', 'build', 'install', 'uninstall', '--destdir=' + tmpdir]
 
 def add_symlink(tar, fname, abspath, basedir):
     '''handle symlinks to directories that may move during packaging'''
@@ -136,12 +164,14 @@ def dist(appname='', version=''):
 
     if not isinstance(appname, str) or not appname:
         # this copes with a mismatch in the calling arguments for dist()
-        appname = Utils.g_module.APPNAME
-        version = Utils.g_module.VERSION
+        appname = Context.g_module.APPNAME
+        version = Context.g_module.VERSION
     if not version:
-        version = Utils.g_module.VERSION
+        version = Context.g_module.VERSION
 
-    srcdir = os.path.normpath(os.path.join(os.path.dirname(Utils.g_module.root_path), Utils.g_module.srcdir))
+    srcdir = os.path.normpath(
+                os.path.join(os.path.dirname(Context.g_module.root_path),
+                    Context.g_module.top))
 
     if not dist_dirs:
         Logs.error('You must use samba_dist.DIST_DIRS() to set which directories to package')
@@ -218,6 +248,9 @@ def dist(appname='', version=''):
     else:
         Logs.info('Created %s' % dist_name)
 
+    # TODO use the ctx object instead
+    global dist_archive
+    dist_archive = dist_name
     return dist_name
 
 

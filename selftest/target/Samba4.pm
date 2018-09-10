@@ -259,7 +259,7 @@ sub wait_for_start($$)
 		my $cmd = "NSS_WRAPPER_PASSWD=$testenv_vars->{NSS_WRAPPER_PASSWD} ";
 		$cmd .= "NSS_WRAPPER_GROUP=$testenv_vars->{NSS_WRAPPER_GROUP} ";
 		$cmd .= "SELFTEST_WINBINDD_SOCKET_DIR=$testenv_vars->{SELFTEST_WINBINDD_SOCKET_DIR} ";
-		$cmd .= "$wbinfo -p";
+		$cmd .= "$wbinfo -P";
 		$ret = system($cmd);
 
 		if ($ret != 0) {
@@ -343,7 +343,7 @@ sub setup_namespaces($$:$$)
 
 	my $samba_tool =  Samba::bindir_path($self, "samba-tool");
 
-	my $cmd_env = "";
+	my $cmd_env = "NSS_WRAPPER_HOSTS='$localenv->{NSS_WRAPPER_HOSTS}' ";
 	$cmd_env .= "SOCKET_WRAPPER_DEFAULT_IFACE=\"$localenv->{SOCKET_WRAPPER_DEFAULT_IFACE}\" ";
 	if (defined($localenv->{RESOLV_WRAPPER_CONF})) {
 		$cmd_env .= "RESOLV_WRAPPER_CONF=\"$localenv->{RESOLV_WRAPPER_CONF}\" ";
@@ -382,7 +382,7 @@ sub setup_trust($$$$$)
 
 	my $samba_tool =  Samba::bindir_path($self, "samba-tool");
 	# setup the trust
-	my $cmd_env = "";
+	my $cmd_env = "NSS_WRAPPER_HOSTS='$localenv->{NSS_WRAPPER_HOSTS}' ";
 	$cmd_env .= "SOCKET_WRAPPER_DEFAULT_IFACE=\"$localenv->{SOCKET_WRAPPER_DEFAULT_IFACE}\" ";
 	if (defined($localenv->{RESOLV_WRAPPER_CONF})) {
 		$cmd_env .= "RESOLV_WRAPPER_CONF=\"$localenv->{RESOLV_WRAPPER_CONF}\" ";
@@ -747,6 +747,7 @@ nogroup:x:65534:nobody
 		DOMAIN => $ctx->{domain},
 		USERNAME => $ctx->{username},
 		REALM => $ctx->{realm},
+		DNSNAME => $ctx->{dnsname},
 		SAMSID => $ctx->{samsid},
 		PASSWORD => $ctx->{password},
 		LDAPDIR => $ctx->{ldapdir},
@@ -863,6 +864,28 @@ changetype: modify
 replace: userPrincipalName
 userPrincipalName: testdenied_upn\@$ctx->{realm}.upn
 -	    
+";
+	close(LDIF);
+
+	$samba_tool_cmd = "";
+	$samba_tool_cmd .= "KRB5_CONFIG=\"$ret->{KRB5_CONFIG}\" ";
+	$samba_tool_cmd .= "KRB5CCNAME=\"$ret->{KRB5_CCACHE}\" ";
+	$samba_tool_cmd .= Samba::bindir_path($self, "samba-tool")
+	    . " user create --configfile=$ctx->{smb_conf} testupnspn $ctx->{password}";
+	unless (system($samba_tool_cmd) == 0) {
+		warn("Unable to add testupnspn user: \n$samba_tool_cmd\n");
+		return undef;
+	}
+
+	my $user_dn = "cn=testupnspn,cn=users,$base_dn";
+	open(LDIF, "|$ldbmodify -H $ctx->{privatedir}/sam.ldb");
+	print LDIF "dn: $user_dn
+changetype: modify
+replace: userPrincipalName
+userPrincipalName: http/testupnspn.$ctx->{dnsname}\@$ctx->{realm}
+replace: servicePrincipalName
+servicePrincipalName: http/testupnspn.$ctx->{dnsname}
+-
 ";
 	close(LDIF);
 
@@ -1112,7 +1135,7 @@ rpc_server:tcpip = no
 	}
 
 	my $samba_tool =  Samba::bindir_path($self, "samba-tool");
-	my $cmd = "";
+	my $cmd = "NSS_WRAPPER_HOSTS='$ret->{NSS_WRAPPER_HOSTS}' ";
 	$cmd .= "SOCKET_WRAPPER_DEFAULT_IFACE=\"$ret->{SOCKET_WRAPPER_DEFAULT_IFACE}\" ";
 	if (defined($ret->{RESOLV_WRAPPER_CONF})) {
 		$cmd .= "RESOLV_WRAPPER_CONF=\"$ret->{RESOLV_WRAPPER_CONF}\" ";
@@ -1191,7 +1214,7 @@ sub provision_rpc_proxy($$$)
 	my $samba_tool =  Samba::bindir_path($self, "samba-tool");
 
 	# The joind runs in the context of the rpc_proxy/member for now
-	my $cmd = "";
+	my $cmd = "NSS_WRAPPER_HOSTS='$ret->{NSS_WRAPPER_HOSTS}' ";
 	$cmd .= "SOCKET_WRAPPER_DEFAULT_IFACE=\"$ret->{SOCKET_WRAPPER_DEFAULT_IFACE}\" ";
 	if (defined($ret->{RESOLV_WRAPPER_CONF})) {
 		$cmd .= "RESOLV_WRAPPER_CONF=\"$ret->{RESOLV_WRAPPER_CONF}\" ";
@@ -1294,7 +1317,7 @@ sub provision_promoted_dc($$$)
 	}
 
 	my $samba_tool =  Samba::bindir_path($self, "samba-tool");
-	my $cmd = "";
+	my $cmd = "NSS_WRAPPER_HOSTS='$ret->{NSS_WRAPPER_HOSTS}' ";
 	$cmd .= "SOCKET_WRAPPER_DEFAULT_IFACE=\"$ret->{SOCKET_WRAPPER_DEFAULT_IFACE}\" ";
 	if (defined($ret->{RESOLV_WRAPPER_CONF})) {
 		$cmd .= "RESOLV_WRAPPER_CONF=\"$ret->{RESOLV_WRAPPER_CONF}\" ";
@@ -1313,8 +1336,13 @@ sub provision_promoted_dc($$$)
 	}
 
 	my $samba_tool =  Samba::bindir_path($self, "samba-tool");
-	my $cmd = "";
+	my $cmd = "NSS_WRAPPER_HOSTS='$ret->{NSS_WRAPPER_HOSTS}' ";
 	$cmd .= "SOCKET_WRAPPER_DEFAULT_IFACE=\"$ret->{SOCKET_WRAPPER_DEFAULT_IFACE}\" ";
+	if (defined($ret->{RESOLV_WRAPPER_CONF})) {
+		$cmd .= "RESOLV_WRAPPER_CONF=\"$ret->{RESOLV_WRAPPER_CONF}\" ";
+	} else {
+		$cmd .= "RESOLV_WRAPPER_HOSTS=\"$ret->{RESOLV_WRAPPER_HOSTS}\" ";
+	}
 	$cmd .= "KRB5_CONFIG=\"$ret->{KRB5_CONFIG}\" ";
 	$cmd .= "KRB5CCNAME=\"$ret->{KRB5_CCACHE}\" ";
 	$cmd .= "$samba_tool domain dcpromo $ret->{CONFIGURATION} $dcvars->{REALM} DC --realm=$dcvars->{REALM}";
@@ -1391,7 +1419,7 @@ sub provision_vampire_dc($$$)
 	}
 
 	my $samba_tool =  Samba::bindir_path($self, "samba-tool");
-	my $cmd = "";
+	my $cmd = "NSS_WRAPPER_HOSTS='$ret->{NSS_WRAPPER_HOSTS}' ";
 	$cmd .= "SOCKET_WRAPPER_DEFAULT_IFACE=\"$ret->{SOCKET_WRAPPER_DEFAULT_IFACE}\" ";
 	if (defined($ret->{RESOLV_WRAPPER_CONF})) {
 		$cmd .= "RESOLV_WRAPPER_CONF=\"$ret->{RESOLV_WRAPPER_CONF}\" ";
@@ -1473,7 +1501,7 @@ sub provision_subdom_dc($$$)
 	Samba::mk_mitkdc_conf($ctx, abs_path(Samba::bindir_path($self, "shared")));
 
 	my $samba_tool =  Samba::bindir_path($self, "samba-tool");
-	my $cmd = "";
+	my $cmd = "NSS_WRAPPER_HOSTS='$ret->{NSS_WRAPPER_HOSTS}' ";
 	$cmd .= "SOCKET_WRAPPER_DEFAULT_IFACE=\"$ret->{SOCKET_WRAPPER_DEFAULT_IFACE}\" ";
 	if (defined($ret->{RESOLV_WRAPPER_CONF})) {
 		$cmd .= "RESOLV_WRAPPER_CONF=\"$ret->{RESOLV_WRAPPER_CONF}\" ";
@@ -1756,7 +1784,7 @@ sub provision_rodc($$$)
 	}
 
 	my $samba_tool =  Samba::bindir_path($self, "samba-tool");
-	my $cmd = "";
+	my $cmd = "NSS_WRAPPER_HOSTS='$ret->{NSS_WRAPPER_HOSTS}' ";
 	$cmd .= "SOCKET_WRAPPER_DEFAULT_IFACE=\"$ret->{SOCKET_WRAPPER_DEFAULT_IFACE}\" ";
 	if (defined($ret->{RESOLV_WRAPPER_CONF})) {
 		$cmd .= "RESOLV_WRAPPER_CONF=\"$ret->{RESOLV_WRAPPER_CONF}\" ";
@@ -2320,7 +2348,7 @@ sub setup_generic_vampire_dc
 		# as 'vampired' dc may add data in its local replica
 		# we need to synchronize data between DCs
 		my $base_dn = "DC=".join(",DC=", split(/\./, $dc_vars->{REALM}));
-		my $cmd = "";
+		my $cmd = "NSS_WRAPPER_HOSTS='$env->{NSS_WRAPPER_HOSTS}' ";
 		$cmd .= "SOCKET_WRAPPER_DEFAULT_IFACE=\"$env->{SOCKET_WRAPPER_DEFAULT_IFACE}\" ";
 		if (defined($env->{RESOLV_WRAPPER_CONF})) {
 			$cmd .= "RESOLV_WRAPPER_CONF=\"$env->{RESOLV_WRAPPER_CONF}\" ";
@@ -2347,7 +2375,7 @@ sub setup_generic_vampire_dc
 
 		# Pull in a full set of changes from the main DC
 		my $base_dn = "DC=".join(",DC=", split(/\./, $dc_vars->{REALM}));
-		$cmd = "";
+		$cmd = "NSS_WRAPPER_HOSTS='$env->{NSS_WRAPPER_HOSTS}' ";
 		$cmd .= "SOCKET_WRAPPER_DEFAULT_IFACE=\"$env->{SOCKET_WRAPPER_DEFAULT_IFACE}\" ";
 		if (defined($env->{RESOLV_WRAPPER_CONF})) {
 			$cmd .= "RESOLV_WRAPPER_CONF=\"$env->{RESOLV_WRAPPER_CONF}\" ";
@@ -2390,7 +2418,7 @@ sub setup_promoted_dc
 		# force source and replicated DC to update repsTo/repsFrom
 		# for vampired partitions
 		my $samba_tool =  Samba::bindir_path($self, "samba-tool");
-		my $cmd = "";
+		my $cmd = "NSS_WRAPPER_HOSTS='$env->{NSS_WRAPPER_HOSTS}' ";
 		# as 'vampired' dc may add data in its local replica
 		# we need to synchronize data between DCs
 		my $base_dn = "DC=".join(",DC=", split(/\./, $dc_vars->{REALM}));
@@ -2431,7 +2459,7 @@ sub setup_subdom_dc
 		# force replicated DC to update repsTo/repsFrom
 		# for primary domain partitions
 		my $samba_tool =  Samba::bindir_path($self, "samba-tool");
-		my $cmd = "";
+		my $cmd = "NSS_WRAPPER_HOSTS='$env->{NSS_WRAPPER_HOSTS}' ";
 		# as 'subdomain' dc may add data in its local replica
 		# we need to synchronize data between DCs
 		my $base_dn = "DC=".join(",DC=", split(/\./, $env->{REALM}));
@@ -2477,7 +2505,8 @@ sub setup_rodc
 	my $cmd = "";
 
 	my $base_dn = "DC=".join(",DC=", split(/\./, $dc_vars->{REALM}));
-	$cmd = "SOCKET_WRAPPER_DEFAULT_IFACE=\"$env->{SOCKET_WRAPPER_DEFAULT_IFACE}\"";
+	$cmd .= "NSS_WRAPPER_HOSTS='$env->{NSS_WRAPPER_HOSTS}' ";
+	$cmd .= "SOCKET_WRAPPER_DEFAULT_IFACE=\"$env->{SOCKET_WRAPPER_DEFAULT_IFACE}\"";
 	$cmd .= " KRB5_CONFIG=\"$env->{KRB5_CONFIG}\"";
 	$cmd .= "KRB5CCNAME=\"$env->{KRB5_CCACHE}\" ";
 	$cmd .= " $samba_tool drs replicate $env->{SERVER} $env->{DC_SERVER}";
@@ -2635,7 +2664,7 @@ sub create_backup
 	my ($self, $env, $dcvars, $backupdir, $backup_cmd) = @_;
 
 	# get all the env variables we pass in with the samba-tool command
-	my $cmd_env = "";
+	my $cmd_env = "NSS_WRAPPER_HOSTS='$env->{NSS_WRAPPER_HOSTS}' ";
 	$cmd_env .= "SOCKET_WRAPPER_DEFAULT_IFACE=\"$env->{SOCKET_WRAPPER_DEFAULT_IFACE}\" ";
 	if (defined($env->{RESOLV_WRAPPER_CONF})) {
 		$cmd_env .= "RESOLV_WRAPPER_CONF=\"$env->{RESOLV_WRAPPER_CONF}\" ";

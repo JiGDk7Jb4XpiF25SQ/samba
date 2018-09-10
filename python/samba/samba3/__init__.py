@@ -29,6 +29,7 @@ import tdb
 import samba.samba3.passdb
 from samba.samba3 import param as s3param
 
+
 def fetch_uint32(db, key):
     try:
         data = db[key]
@@ -133,6 +134,7 @@ IDMAP_USER_PREFIX = b"UID "
 
 # idmap version determines auto-conversion
 IDMAP_VERSION_V2 = 2
+
 
 class IdmapDatabase(DbDatabase):
     """Samba 3 ID map database reader."""
@@ -324,7 +326,7 @@ class WinsDatabase(object):
         f = open(file, 'r')
         assert f.readline().rstrip("\n") == "VERSION 1 0"
         for l in f.readlines():
-            if l[0] == "#": # skip comments
+            if l[0] == "#":  # skip comments
                 continue
             entries = shellsplit(l.rstrip("\n"))
             name = entries[0]
@@ -333,9 +335,9 @@ class WinsDatabase(object):
             ips = []
             while "." in entries[i]:
                 ips.append(entries[i])
-                i+=1
+                i += 1
             nb_flags = int(entries[i][:-1], 16)
-            assert not name in self.entries, "Name %s exists twice" % name
+            assert name not in self.entries, "Name %s exists twice" % name
             self.entries[name] = (ttl, ips, nb_flags)
         f.close()
 
@@ -352,7 +354,7 @@ class WinsDatabase(object):
         """Return the entries in this WINS database."""
         return self.entries.items()
 
-    def close(self): # for consistency
+    def close(self):  # for consistency
         pass
 
 

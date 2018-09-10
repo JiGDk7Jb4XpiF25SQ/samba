@@ -888,10 +888,10 @@ uint32_t get_int_param( const char* param );
 char* get_string_param( const char* param );
 
 /* The following definitions come from lib/server_contexts.c  */
-struct tevent_context *server_event_context(void);
-void server_event_context_free(void);
-struct messaging_context *server_messaging_context(void);
-void server_messaging_context_free(void);
+struct tevent_context *global_event_context(void);
+void global_event_context_free(void);
+struct messaging_context *global_messaging_context(void);
+void global_messaging_context_free(void);
 
 /* The following definitions come from lib/sessionid_tdb.c  */
 struct sessionid;

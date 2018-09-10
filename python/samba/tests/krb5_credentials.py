@@ -39,6 +39,7 @@ KDC
 
 MACHINE_NAME = "krb5credstest"
 
+
 class PyKrb5CredentialsTests(TestCase):
 
     def setUp(self):
@@ -58,7 +59,6 @@ class PyKrb5CredentialsTests(TestCase):
                          lp=self.lp)
 
         self.create_machine_account()
-
 
     def tearDown(self):
         super(PyKrb5CredentialsTests, self).tearDown()

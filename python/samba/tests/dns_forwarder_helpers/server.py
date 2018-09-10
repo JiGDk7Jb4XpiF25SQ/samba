@@ -29,11 +29,13 @@ import re
 
 VERBOSE = False
 
+
 def debug(msg):
     if VERBOSE:
         sys.stdout.flush()
         print("\033[00;36m%s\033[00m" % msg)
         sys.stdout.flush()
+
 
 timeout = 0
 
@@ -85,10 +87,12 @@ class DnsHandler(SocketServer.BaseRequestHandler):
         t = Timer(timeout, self.really_handle, [data, socket])
         t.start()
 
+
 def main():
     global SERVER_ID
     host, port, SERVER_ID = sys.argv[1:]
     server = SocketServer.UDPServer((host, int(port)), DnsHandler)
     server.serve_forever()
+
 
 main()

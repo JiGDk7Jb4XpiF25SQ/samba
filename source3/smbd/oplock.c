@@ -59,13 +59,10 @@ NTSTATUS set_file_oplock(files_struct *fsp)
 	bool use_kernel = lp_kernel_oplocks(SNUM(fsp->conn)) &&
 			(koplocks != NULL);
 
-	if (fsp->oplock_type == LEVEL_II_OPLOCK) {
-		if (use_kernel &&
-		    !(koplocks->flags & KOPLOCKS_LEVEL2_SUPPORTED)) {
-			DEBUG(10, ("Refusing level2 oplock, kernel oplocks "
-				   "don't support them\n"));
-			return NT_STATUS_NOT_SUPPORTED;
-		}
+	if (fsp->oplock_type == LEVEL_II_OPLOCK && use_kernel) {
+		DEBUG(10, ("Refusing level2 oplock, kernel oplocks "
+			   "don't support them\n"));
+		return NT_STATUS_NOT_SUPPORTED;
 	}
 
 	if ((fsp->oplock_type != NO_OPLOCK) &&
@@ -403,11 +400,7 @@ bool fsp_lease_update(struct share_mode_lock *lck,
 	struct share_mode_lease *l = NULL;
 
 	idx = find_share_mode_lease(d, client_guid, &lease->lease.lease_key);
-	if (idx != -1) {
-		l = &d->leases[idx];
-	}
-
-	if (l == NULL) {
+	if (idx == -1) {
 		DEBUG(1, ("%s: Could not find lease entry\n", __func__));
 		TALLOC_FREE(lease->timeout);
 		lease->lease.lease_state = SMB2_LEASE_NONE;
@@ -415,6 +408,8 @@ bool fsp_lease_update(struct share_mode_lock *lck,
 		lease->lease.lease_flags = 0;
 		return false;
 	}
+
+	l = &d->leases[idx];
 
 	DEBUG(10,("%s: refresh lease state\n", __func__));
 
@@ -747,20 +742,6 @@ static void oplock_timeout_handler(struct tevent_context *ctx,
 
 static void add_oplock_timeout_handler(files_struct *fsp)
 {
-	struct smbd_server_connection *sconn = fsp->conn->sconn;
-	struct kernel_oplocks *koplocks = sconn->oplocks.kernel_ops;
-	bool use_kernel = lp_kernel_oplocks(SNUM(fsp->conn)) &&
-			(koplocks != NULL);
-
-	/*
-	 * If kernel oplocks already notifies smbds when an oplock break times
-	 * out, just return.
-	 */
-	if (use_kernel &&
-	    (koplocks->flags & KOPLOCKS_TIMEOUT_NOTIFICATION)) {
-		return;
-	}
-
 	if (fsp->oplock_timeout != NULL) {
 		DEBUG(0, ("Logic problem -- have an oplock event hanging "
 			  "around\n"));
@@ -877,7 +858,7 @@ static void process_oplock_break_message(struct messaging_context *msg_ctx,
 
 	use_kernel = lp_kernel_oplocks(SNUM(fsp->conn)) &&
 			(koplocks != NULL);
-	if (use_kernel && !(koplocks->flags & KOPLOCKS_LEVEL2_SUPPORTED)) {
+	if (use_kernel) {
 		DEBUG(10, ("Kernel oplocks don't allow level2\n"));
 		break_to &= ~SMB2_LEASE_READ;
 	}
@@ -1069,6 +1050,23 @@ static void process_kernel_oplock_break(struct messaging_context *msg_ctx,
 	add_oplock_timeout_handler(fsp);
 }
 
+static bool file_has_read_oplocks(struct files_struct *fsp)
+{
+	struct byte_range_lock *brl;
+	uint32_t num_read_oplocks = 0;
+
+	brl = brl_get_locks_readonly(fsp);
+	if (brl == NULL) {
+		return false;
+	}
+
+	num_read_oplocks = brl_num_read_oplocks(brl);
+
+	DBG_DEBUG("num_read_oplocks = %"PRIu32"\n", num_read_oplocks);
+
+	return (num_read_oplocks != 0);
+}
+
 struct break_to_none_state {
 	struct smbd_server_connection *sconn;
 	struct file_id id;
@@ -1091,8 +1089,7 @@ static void contend_level2_oplocks_begin_default(files_struct *fsp,
 	struct smbd_server_connection *sconn = fsp->conn->sconn;
 	struct tevent_immediate *im;
 	struct break_to_none_state *state;
-	struct byte_range_lock *brl;
-	uint32_t num_read_oplocks = 0;
+	bool has_read_oplocks;
 
 	/*
 	 * If this file is level II oplocked then we need
@@ -1109,14 +1106,8 @@ static void contend_level2_oplocks_begin_default(files_struct *fsp,
 		return;
 	}
 
-	brl = brl_get_locks_readonly(fsp);
-	if (brl != NULL) {
-		num_read_oplocks = brl_num_read_oplocks(brl);
-	}
-
-	DEBUG(10, ("num_read_oplocks = %"PRIu32"\n", num_read_oplocks));
-
-	if (num_read_oplocks == 0) {
+	has_read_oplocks = file_has_read_oplocks(fsp);
+	if (!has_read_oplocks) {
 		DEBUG(10, ("No read oplocks around\n"));
 		return;
 	}
@@ -1298,31 +1289,13 @@ done:
 void smbd_contend_level2_oplocks_begin(files_struct *fsp,
 				  enum level2_contention_type type)
 {
-	struct smbd_server_connection *sconn = fsp->conn->sconn;
-	struct kernel_oplocks *koplocks = sconn->oplocks.kernel_ops;
-	bool use_kernel = lp_kernel_oplocks(SNUM(fsp->conn)) &&
-			(koplocks != NULL);
-
-	if (use_kernel && koplocks->ops->contend_level2_oplocks_begin) {
-		koplocks->ops->contend_level2_oplocks_begin(fsp, type);
-		return;
-	}
-
 	contend_level2_oplocks_begin_default(fsp, type);
 }
 
 void smbd_contend_level2_oplocks_end(files_struct *fsp,
 				enum level2_contention_type type)
 {
-	struct smbd_server_connection *sconn = fsp->conn->sconn;
-	struct kernel_oplocks *koplocks = sconn->oplocks.kernel_ops;
-	bool use_kernel = lp_kernel_oplocks(SNUM(fsp->conn)) &&
-			(koplocks != NULL);
-
-	/* Only kernel oplocks implement this so far */
-	if (use_kernel && koplocks->ops->contend_level2_oplocks_end) {
-		koplocks->ops->contend_level2_oplocks_end(fsp, type);
-	}
+	return;
 }
 
 /****************************************************************************

@@ -25,6 +25,7 @@ from samba.dcerpc import misc, drsuapi
 from samba.drs_utils import drs_Replicate
 import sys
 
+
 class RODCException(Exception):
     def __init__(self, value):
         self.value = value
@@ -32,11 +33,14 @@ class RODCException(Exception):
     def __str__(self):
         return "%s: %s" % (self.__class__.__name__, self.value)
 
+
 class NamingError(RODCException):
     pass
 
+
 class ReplicationError(RODCException):
     pass
+
 
 class cmd_rodc_preload(Command):
     """Preload accounts for an RODC.  Multiple accounts may be requested."""
@@ -53,7 +57,7 @@ class cmd_rodc_preload(Command):
         Option("--server", help="DC to use", type=str),
         Option("--file", help="Read account list from a file, or - for stdin (one per line)", type=str),
         Option("--ignore-errors", help="When preloading multiple accounts, skip any failing accounts", action="store_true"),
-        ]
+    ]
 
     takes_args = ["account*"]
 
@@ -75,7 +79,6 @@ class cmd_rodc_preload(Command):
         if len(res) != 1:
             raise NamingError("Failed to find account '%s'" % account)
         return str(res[0]["dn"])
-
 
     def run(self, *accounts, **kwargs):
         sambaopts = kwargs.get("sambaopts")

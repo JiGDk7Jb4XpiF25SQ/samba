@@ -24,6 +24,7 @@ from samba.ndr import ndr_unpack, ndr_pack
 from samba.dcerpc import dnsp
 from samba.tests.samba_tool.base import SambaToolCmdTest
 
+
 class DnsCmdTestCase(SambaToolCmdTest):
     def setUp(self):
         super(DnsCmdTestCase, self).setUp()
@@ -44,7 +45,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
 
         good_dns = ["SAMDOM.EXAMPLE.COM",
                     "1.EXAMPLE.COM",
-                    "%sEXAMPLE.COM" % ("1."*100),
+                    "%sEXAMPLE.COM" % ("1." * 100),
                     "EXAMPLE",
                     "\n.COM",
                     "!@#$%^&*()_",
@@ -67,7 +68,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
         good_srv = ["SAMDOM.EXAMPLE.COM 65530 65530 65530"]
         bad_srv = ["SAMDOM.EXAMPLE.COM 0 65536 0",
                    "SAMDOM.EXAMPLE.COM 0 0 65536",
-                   "SAMDOM.EXAMPLE.COM 65536 0 0" ]
+                   "SAMDOM.EXAMPLE.COM 65536 0 0"]
 
         for bad_dn in bad_dns:
             bad_mx.append("%s 1" % bad_dn)
@@ -88,12 +89,12 @@ class DnsCmdTestCase(SambaToolCmdTest):
                         "::1",
                         "::",
                         "1:1:1:1:1:1:1:1"],
-                "PTR":good_dns,
-                "CNAME":good_dns,
-                "NS":good_dns,
-                "MX":good_mx,
-                "SRV":good_srv,
-                "TXT":["text", "", "@#!", "\n"]
+                "PTR": good_dns,
+                "CNAME": good_dns,
+                "NS": good_dns,
+                "MX": good_mx,
+                "SRV": good_srv,
+                "TXT": ["text", "", "@#!", "\n"]
         }
 
         self.bad_records = {
@@ -105,11 +106,11 @@ class DnsCmdTestCase(SambaToolCmdTest):
                         "1234:5678:9ABC:DEF0:1234:5678:9ABC:DEF0:1234",
                         "1234:5678:9ABC:DEF0:1234:5678:9ABC",
                         "1111::1111::1111"],
-                "PTR":bad_dns,
-                "CNAME":bad_dns,
-                "NS":bad_dns,
-                "MX":bad_mx,
-                "SRV":bad_srv
+                "PTR": bad_dns,
+                "CNAME": bad_dns,
+                "NS": bad_dns,
+                "MX": bad_mx,
+                "SRV": bad_srv
         }
 
     def tearDown(self):
@@ -171,7 +172,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
                               % (record_str, record_type_str))
 
         dn, record = self.get_record_from_db(self.zone, "testrecord")
-        record.rank = 0 # DNS_RANK_NONE
+        record.rank = 0  # DNS_RANK_NONE
         res = self.samdb.dns_replace_by_dn(dn, [record])
         if res is not None:
             self.fail("Unable to update dns record to have DNS_RANK_NONE.")
@@ -184,10 +185,10 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                           self.creds_string)
         try:
             self.assertCmdSuccess(result, out, err,
-                                  "Failed to query for a record" \
+                                  "Failed to query for a record"
                                   "which had DNS_RANK_NONE.")
             self.assertTrue("testrecord" in out and record_str in out,
-                            "Query for a record which had DNS_RANK_NONE" \
+                            "Query for a record which had DNS_RANK_NONE"
                             "succeeded but produced no resulting records.")
         except AssertionError as e:
             # Windows produces no resulting records
@@ -198,7 +199,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                           self.zone, "testrecord", record_type_str,
                                           record_str, self.creds_string)
         try:
-            self.assertCmdFail(result, "Successfully added duplicate record" \
+            self.assertCmdFail(result, "Successfully added duplicate record"
                                "of one which had DNS_RANK_NONE.")
         except AssertionError as e:
             errors.append(e)
@@ -208,7 +209,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                           self.zone, "testrecord", record_type_str,
                                           record_str, self.creds_string)
         try:
-            self.assertCmdSuccess(result, out, err, "Failed to delete record" \
+            self.assertCmdSuccess(result, out, err, "Failed to delete record"
                                   "which had DNS_RANK_NONE.")
         except AssertionError as e:
             errors.append(e)
@@ -218,7 +219,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                           self.zone, "testrecord",
                                           record_type_str, self.creds_string)
         try:
-            self.assertCmdFail(result, "Successfully queried for deleted record" \
+            self.assertCmdFail(result, "Successfully queried for deleted record"
                                "which had DNS_RANK_NONE.")
         except AssertionError as e:
             errors.append(e)
@@ -243,7 +244,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                                       self.zone, "testrecord",
                                                       dnstype, record,
                                                       self.creds_string)
-                    self.assertCmdSuccess(result, out, err, "Failed to add" \
+                    self.assertCmdSuccess(result, out, err, "Failed to add"
                                           "record %s with type %s."
                                           % (record, dnstype))
 
@@ -252,7 +253,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                                       self.zone, "testrecord",
                                                       dnstype,
                                                       self.creds_string)
-                    self.assertCmdSuccess(result, out, err, "Failed to query" \
+                    self.assertCmdSuccess(result, out, err, "Failed to query"
                                           "record %s with qualifier %s."
                                           % (record, dnstype))
 
@@ -261,7 +262,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                                       self.zone, "testrecord",
                                                       dnstype, record,
                                                       self.creds_string)
-                    self.assertCmdSuccess(result, out, err, "Failed to remove" \
+                    self.assertCmdSuccess(result, out, err, "Failed to remove"
                                           "record %s with type %s."
                                           % (record, dnstype))
                 except AssertionError as e:
@@ -271,7 +272,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
         if num_failures > 0:
             for msg in failure_msgs:
                 print(msg)
-            self.fail("Failed to accept valid commands. %d total failures." \
+            self.fail("Failed to accept valid commands. %d total failures."
                       "Errors above." % num_failures)
 
     def test_reject_invalid_commands(self):
@@ -291,7 +292,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                                       self.zone, "testrecord",
                                                       dnstype, record,
                                                       self.creds_string)
-                    self.assertCmdFail(result, "Successfully added invalid" \
+                    self.assertCmdFail(result, "Successfully added invalid"
                                        "record '%s' of type '%s'."
                                        % (record, dnstype))
                 except AssertionError as e:
@@ -304,8 +305,8 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                                       self.zone, "testrecord",
                                                       dnstype, record,
                                                       self.creds_string)
-                    self.assertCmdFail(result, "Successfully deleted invalid" \
-                                       "record '%s' of type '%s' which" \
+                    self.assertCmdFail(result, "Successfully deleted invalid"
+                                       "record '%s' of type '%s' which"
                                        "shouldn't exist." % (record, dnstype))
                 except AssertionError as e:
                     num_failures = num_failures + 1
@@ -324,7 +325,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                                       self.zone, "testrecord",
                                                       dnstype, good_record,
                                                       self.creds_string)
-                    self.assertCmdSuccess(result, out, err, "Failed to add " \
+                    self.assertCmdSuccess(result, out, err, "Failed to add "
                                           "record '%s' with type %s."
                                           % (record, dnstype))
 
@@ -334,8 +335,8 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                                       dnstype, good_record,
                                                       bad_record,
                                                       self.creds_string)
-                    self.assertCmdFail(result, "Successfully updated valid " \
-                                       "record '%s' of type '%s' to invalid " \
+                    self.assertCmdFail(result, "Successfully updated valid "
+                                       "record '%s' of type '%s' to invalid "
                                        "record '%s' of the same type."
                                        % (good_record, dnstype, bad_record))
 
@@ -344,7 +345,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                                       self.zone, "testrecord",
                                                       dnstype, good_record,
                                                       self.creds_string)
-                    self.assertCmdSuccess(result, out, err, "Could not delete " \
+                    self.assertCmdSuccess(result, out, err, "Could not delete "
                                           "valid record '%s' of type '%s'."
                                           % (good_record, dnstype))
                 except AssertionError as e:
@@ -355,7 +356,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
         if num_failures > 0:
             for msg in failure_msgs:
                 print(msg)
-            self.fail("Failed to reject invalid commands. %d total failures. " \
+            self.fail("Failed to reject invalid commands. %d total failures. "
                       "Errors above." % num_failures)
 
     def test_update_invalid_type(self):
@@ -369,7 +370,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                               self.zone, "testrecord",
                                               dnstype1, record1,
                                               self.creds_string)
-            self.assertCmdSuccess(result, out, err, "Failed to add " \
+            self.assertCmdSuccess(result, out, err, "Failed to add "
                                   "record %s with type %s."
                                   % (record1, dnstype1))
 
@@ -386,7 +387,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
                 try:
                     self.assertCmdFail(result)
                 except AssertionError:
-                    continue # Don't check this one, because record2 _is_ a valid entry of dnstype1.
+                    continue  # Don't check this one, because record2 _is_ a valid entry of dnstype1.
 
                 # Check both ways: Give the current type and try to update,
                 # and give the new type and try to update.
@@ -395,8 +396,8 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                                   self.zone, "testrecord",
                                                   dnstype1, record1,
                                                   record2, self.creds_string)
-                self.assertCmdFail(result, "Successfully updated record '%s' " \
-                                   "to '%s', even though the latter is of " \
+                self.assertCmdFail(result, "Successfully updated record '%s' "
+                                   "to '%s', even though the latter is of "
                                    "type '%s' where '%s' was expected."
                                    % (record1, record2, dnstype2, dnstype1))
 
@@ -405,11 +406,10 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                                   self.zone, "testrecord",
                                                   dnstype2, record1, record2,
                                                   self.creds_string)
-                self.assertCmdFail(result, "Successfully updated record " \
-                                   "'%s' to '%s', even though the former " \
+                self.assertCmdFail(result, "Successfully updated record "
+                                   "'%s' to '%s', even though the former "
                                    "is of type '%s' where '%s' was expected."
                                    % (record1, record2, dnstype1, dnstype2))
-
 
     def test_update_valid_type(self):
         for dnstype in self.good_records:
@@ -419,7 +419,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                                   self.zone, "testrecord",
                                                   dnstype, record,
                                                   self.creds_string)
-                self.assertCmdSuccess(result, out, err, "Failed to add " \
+                self.assertCmdSuccess(result, out, err, "Failed to add "
                                       "record %s with type %s."
                                       % (record, dnstype))
 
@@ -429,7 +429,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                                   self.zone, "testrecord",
                                                   dnstype, record, record,
                                                   self.creds_string)
-                self.assertCmdFail(result, "Successfully updated record " \
+                self.assertCmdFail(result, "Successfully updated record "
                                    "'%s' to be exactly the same." % record)
 
                 result, out, err = self.runsubcmd("dns", "delete",
@@ -437,7 +437,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                                   self.zone, "testrecord",
                                                   dnstype, record,
                                                   self.creds_string)
-                self.assertCmdSuccess(result, out, err, "Could not delete " \
+                self.assertCmdSuccess(result, out, err, "Could not delete "
                                       "valid record '%s' of type '%s'."
                                       % (record, dnstype))
 
@@ -447,7 +447,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                               self.zone, "testrecord",
                                               "SRV", record,
                                               self.creds_string)
-            self.assertCmdSuccess(result, out, err, "Failed to add " \
+            self.assertCmdSuccess(result, out, err, "Failed to add "
                                   "record %s with type 'SRV'." % record)
 
             split = record.split(' ')
@@ -459,7 +459,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                               self.zone, "testrecord",
                                               "SRV", record,
                                               new_record, self.creds_string)
-            self.assertCmdSuccess(result, out, err, "Failed to update record " \
+            self.assertCmdSuccess(result, out, err, "Failed to update record "
                                   "'%s' of type '%s' to '%s'."
                                   % (record, "SRV", new_record))
 
@@ -467,7 +467,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                               os.environ["SERVER"],
                                               self.zone, "testrecord",
                                               "SRV", self.creds_string)
-            self.assertCmdSuccess(result, out, err, "Failed to query for " \
+            self.assertCmdSuccess(result, out, err, "Failed to query for "
                                   "record '%s' of type '%s'."
                                   % (new_record, "SRV"))
 
@@ -476,7 +476,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                               self.zone, "testrecord",
                                               "SRV", new_record,
                                               self.creds_string)
-            self.assertCmdSuccess(result, out, err, "Could not delete " \
+            self.assertCmdSuccess(result, out, err, "Could not delete "
                                   "valid record '%s' of type '%s'."
                                   % (new_record, "SRV"))
 
@@ -484,7 +484,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
         # we can't enter the wrong current value for a given record.
         for dnstype in self.good_records:
             if len(self.good_records[dnstype]) < 3:
-                continue # Not enough records of this type to do this test
+                continue  # Not enough records of this type to do this test
 
             used_record = self.good_records[dnstype][0]
             unused_record = self.good_records[dnstype][1]
@@ -495,7 +495,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                               self.zone, "testrecord",
                                               dnstype, used_record,
                                               self.creds_string)
-            self.assertCmdSuccess(result, out, err, "Failed to add record %s " \
+            self.assertCmdSuccess(result, out, err, "Failed to add record %s "
                                   "with type %s." % (used_record, dnstype))
 
             result, out, err = self.runsubcmd("dns", "update",
@@ -504,8 +504,8 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                               dnstype, unused_record,
                                               new_record,
                                               self.creds_string)
-            self.assertCmdFail(result, "Successfully updated record '%s' " \
-                               "from '%s' to '%s', even though the given " \
+            self.assertCmdFail(result, "Successfully updated record '%s' "
+                               "from '%s' to '%s', even though the given "
                                "source record is incorrect."
                                % (used_record, unused_record, new_record))
 
@@ -515,10 +515,10 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                           self.zone, "testrecord",
                                           "SOA", "test",
                                           self.creds_string)
-        self.assertCmdFail(result, "Successfully added record of type SOA, " \
+        self.assertCmdFail(result, "Successfully added record of type SOA, "
                            "when this type should not be available.")
         self.assertTrue("type SOA is not supported" in err,
-                        "Invalid error message '%s' when attempting to " \
+                        "Invalid error message '%s' when attempting to "
                         "add record of type SOA." % err)
 
     def test_add_overlapping_different_type(self):
@@ -545,7 +545,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                                   self.zone, "testrecord",
                                                   dnstype1, record1,
                                                   self.creds_string)
-                self.assertCmdSuccess(result, out, err, "Failed to add record " \
+                self.assertCmdSuccess(result, out, err, "Failed to add record "
                                       "'%s' of type '%s'." % (record1, dnstype1))
 
                 result, out, err = self.runsubcmd("dns", "add",
@@ -553,8 +553,8 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                                   self.zone, "testrecord",
                                                   dnstype2, record2,
                                                   self.creds_string)
-                self.assertCmdSuccess(result, out, err, "Failed to add record " \
-                                      "'%s' of type '%s' when a record '%s' " \
+                self.assertCmdSuccess(result, out, err, "Failed to add record "
+                                      "'%s' of type '%s' when a record '%s' "
                                       "of type '%s' with the same name exists."
                                       % (record1, dnstype1, record2, dnstype2))
 
@@ -562,9 +562,9 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                                   os.environ["SERVER"],
                                                   self.zone, "testrecord",
                                                   dnstype1, self.creds_string)
-                self.assertCmdSuccess(result, out, err, "Failed to query for " \
-                                      "record '%s' of type '%s' when a new " \
-                                      "record '%s' of type '%s' with the same " \
+                self.assertCmdSuccess(result, out, err, "Failed to query for "
+                                      "record '%s' of type '%s' when a new "
+                                      "record '%s' of type '%s' with the same "
                                       "name was added."
                                       % (record1, dnstype1, record2, dnstype2))
 
@@ -572,9 +572,9 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                                   os.environ["SERVER"],
                                                   self.zone, "testrecord",
                                                   dnstype2, self.creds_string)
-                self.assertCmdSuccess(result, out, err, "Failed to query " \
-                                      "record '%s' of type '%s' which should " \
-                                      "have been added with the same name as " \
+                self.assertCmdSuccess(result, out, err, "Failed to query "
+                                      "record '%s' of type '%s' which should "
+                                      "have been added with the same name as "
                                       "record '%s' of type '%s'."
                                       % (record2, dnstype2, record1, dnstype1))
 
@@ -583,7 +583,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                                   self.zone, "testrecord",
                                                   dnstype1, record1,
                                                   self.creds_string)
-                self.assertCmdSuccess(result, out, err, "Failed to delete " \
+                self.assertCmdSuccess(result, out, err, "Failed to delete "
                                       "record '%s' of type '%s'."
                                       % (record1, dnstype1))
 
@@ -592,7 +592,7 @@ class DnsCmdTestCase(SambaToolCmdTest):
                                                   self.zone, "testrecord",
                                                   dnstype2, record2,
                                                   self.creds_string)
-                self.assertCmdSuccess(result, out, err, "Failed to delete " \
+                self.assertCmdSuccess(result, out, err, "Failed to delete "
                                       "record '%s' of type '%s'."
                                       % (record2, dnstype2))
 
@@ -823,8 +823,8 @@ class DnsCmdTestCase(SambaToolCmdTest):
         """
         num_failures = 0
         failure_msgs = []
-        records = [("*.",       "MISS",         "A", "1.1.1.1"),
-                   ("*.SAMDOM", "MISS.SAMDOM",  "A", "1.1.1.2")]
+        records = [("*.", "MISS", "A", "1.1.1.1"),
+                   ("*.SAMDOM", "MISS.SAMDOM", "A", "1.1.1.2")]
         for (name, miss, dnstype, record) in records:
             try:
                 result, out, err = self.runsubcmd("dns", "add",

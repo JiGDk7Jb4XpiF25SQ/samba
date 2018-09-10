@@ -48,7 +48,7 @@ def confirm(msg, forced=False, allow_all=False):
         '': False,
         'N': False,
         'NO': False,
-        }
+    }
 
     prompt = '[y/N]'
 
@@ -92,7 +92,7 @@ class dsdb_Dn(object):
                 raise RuntimeError("Invalid DN %s" % dnstring)
             prefix_len = 4 + len(colons[1]) + int(colons[1])
             self.prefix = dnstring[0:prefix_len]
-            self.binary = self.prefix[3+len(colons[1]):-1]
+            self.binary = self.prefix[3 + len(colons[1]):-1]
             self.dnstring = dnstring[prefix_len:]
         else:
             self.dnstring = dnstring

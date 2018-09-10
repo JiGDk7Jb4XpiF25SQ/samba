@@ -24,6 +24,7 @@ from samba import (
         dsdb
         )
 
+
 class GroupCmdTestCase(SambaToolCmdTest):
     """Tests for samba-tool group subcommands"""
     groups = []
@@ -32,7 +33,7 @@ class GroupCmdTestCase(SambaToolCmdTest):
     def setUp(self):
         super(GroupCmdTestCase, self).setUp()
         self.samdb = self.getSamDB("-H", "ldap://%s" % os.environ["DC_SERVER"],
-            "-U%s%%%s" % (os.environ["DC_USERNAME"], os.environ["DC_PASSWORD"]))
+                                   "-U%s%%%s" % (os.environ["DC_USERNAME"], os.environ["DC_PASSWORD"]))
         self.groups = []
         self.groups.append(self._randomGroup({"name": "testgroup1"}))
         self.groups.append(self._randomGroup({"name": "testgroup2"}))
@@ -61,7 +62,6 @@ class GroupCmdTestCase(SambaToolCmdTest):
             if self._find_group(group["name"]):
                 self.runsubcmd("group", "delete", group["name"])
 
-
     def test_newgroup(self):
         """This tests the "group add" and "group delete" commands"""
         # try to add all the groups again, this should fail
@@ -81,21 +81,20 @@ class GroupCmdTestCase(SambaToolCmdTest):
 
         # test adding groups
         for group in self.groups:
-            (result, out, err) =  self.runsubcmd("group", "add", group["name"],
-                                                 "--description=%s" % group["description"],
-                                                 "-H", "ldap://%s" % os.environ["DC_SERVER"],
-                                                 "-U%s%%%s" % (os.environ["DC_USERNAME"],
-                                                 os.environ["DC_PASSWORD"]))
+            (result, out, err) = self.runsubcmd("group", "add", group["name"],
+                                                "--description=%s" % group["description"],
+                                                "-H", "ldap://%s" % os.environ["DC_SERVER"],
+                                                "-U%s%%%s" % (os.environ["DC_USERNAME"],
+                                                              os.environ["DC_PASSWORD"]))
 
             self.assertCmdSuccess(result, out, err)
-            self.assertEquals(err,"","There shouldn't be any error message")
+            self.assertEquals(err, "", "There shouldn't be any error message")
             self.assertIn("Added group %s" % group["name"], out)
 
             found = self._find_group(group["name"])
 
             self.assertEquals("%s" % found.get("samaccountname"),
                               "%s" % group["name"])
-
 
     def test_list(self):
         (result, out, err) = self.runsubcmd("group", "list",
@@ -114,7 +113,7 @@ class GroupCmdTestCase(SambaToolCmdTest):
         self.assertTrue(len(grouplist) > 0, "no groups found in samdb")
 
         for groupobj in grouplist:
-            name = groupobj.get("samaccountname", idx=0)
+            name = str(groupobj.get("samaccountname", idx=0))
             found = self.assertMatch(out, name,
                                      "group '%s' not found" % name)
 
@@ -135,12 +134,12 @@ class GroupCmdTestCase(SambaToolCmdTest):
         self.assertTrue(len(grouplist) > 0, "no groups found in samdb")
 
         for groupobj in grouplist:
-            name = groupobj.get("samAccountName", idx=0)
+            name = str(groupobj.get("samAccountName", idx=0))
             found = self.assertMatch(out, name, "group '%s' not found" % name)
 
     def test_move(self):
         full_ou_dn = str(self.samdb.normalize_dn_in_domain("OU=movetest"))
-        (result, out, err) =  self.runsubcmd("ou", "create", full_ou_dn)
+        (result, out, err) = self.runsubcmd("ou", "create", full_ou_dn)
         self.assertCmdSuccess(result, out, err)
         self.assertEquals(err, "", "There shouldn't be any error message")
         self.assertIn('Created ou "%s"' % full_ou_dn, out)
@@ -153,7 +152,7 @@ class GroupCmdTestCase(SambaToolCmdTest):
                           (group["name"], full_ou_dn), out)
 
         # Should fail as groups objects are in OU
-        (result, out, err) =  self.runsubcmd("ou", "delete", full_ou_dn)
+        (result, out, err) = self.runsubcmd("ou", "delete", full_ou_dn)
         self.assertCmdFail(result)
         self.assertIn(("subtree_delete: Unable to delete a non-leaf node "
                        "(it has %d children)!") % len(self.groups), err)
@@ -177,7 +176,7 @@ class GroupCmdTestCase(SambaToolCmdTest):
                                             "-U%s%%%s" % (os.environ["DC_USERNAME"],
                                                           os.environ["DC_PASSWORD"]))
         self.assertCmdSuccess(result, out, err)
-        self.assertEquals(err,"","Shouldn't be any error messages")
+        self.assertEquals(err, "", "Shouldn't be any error messages")
         self.assertIn("dn: CN=Domain Users,CN=Users,DC=samba,DC=example,DC=com", out)
 
     def _randomGroup(self, base={}):
@@ -185,7 +184,7 @@ class GroupCmdTestCase(SambaToolCmdTest):
         group = {
             "name": self.randomName(),
             "description": self.randomName(count=100),
-            }
+        }
         group.update(base)
         return group
 
@@ -199,8 +198,8 @@ class GroupCmdTestCase(SambaToolCmdTest):
     def _find_group(self, name):
         search_filter = ("(&(sAMAccountName=%s)(objectCategory=%s,%s))" %
                          (ldb.binary_encode(name),
-                         "CN=Group,CN=Schema,CN=Configuration",
-                         self.samdb.domain_dn()))
+                          "CN=Group,CN=Schema,CN=Configuration",
+                          self.samdb.domain_dn()))
         grouplist = self.samdb.search(base=self.samdb.domain_dn(),
                                       scope=ldb.SCOPE_SUBTREE,
                                       expression=search_filter,

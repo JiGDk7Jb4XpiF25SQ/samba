@@ -32,14 +32,14 @@ f = open(config_h, 'r')
 try:
     lines = f.readlines()
     config_hash = dict((x[0], ' '.join(x[1:]))
-            for x in map(lambda line: line.strip().split(' ')[1:],
-                         filter(lambda line: (line[0:7] == '#define') and (len(line.split(' ')) > 2), lines)))
+                       for x in map(lambda line: line.strip().split(' ')[1:],
+                                    filter(lambda line: (line[0:7] == '#define') and (len(line.split(' ')) > 2), lines)))
 finally:
     f.close()
 
 have_man_pages_support = ("XSLTPROC_MANPAGES" in config_hash)
 with_pam = ("WITH_PAM" in config_hash)
-pam_wrapper_so_path=config_hash["LIBPAM_WRAPPER_SO_PATH"]
+pam_wrapper_so_path = config_hash["LIBPAM_WRAPPER_SO_PATH"]
 
 planpythontestsuite("none", "samba.tests.source", py3_compatible=True)
 if have_man_pages_support:
@@ -84,7 +84,7 @@ planpythontestsuite("none", "samba.tests.samba3sam")
 planpythontestsuite(
     "none", "wafsamba.tests.test_suite",
     extra_path=[os.path.join(samba4srcdir, "..", "buildtools"),
-                os.path.join(samba4srcdir, "..", "third_party", "waf", "wafadmin")])
+                os.path.join(samba4srcdir, "..", "third_party", "waf")])
 plantestsuite(
     "samba4.blackbox.demote-saveddb", "none",
     ["PYTHON=%s" % python, os.path.join(bbdir, "demote-saveddb.sh"),

@@ -223,7 +223,7 @@ int main(int argc, const char *argv[])
 
 	ret = ctdbd_config_load(ctdb, &conf);
 	if (ret != 0) {
-		fprintf(stderr, "Failed to setup config file handling\n");
+		/* ctdbd_config_load() logs the failure */
 		goto fail;
 	}
 
@@ -328,7 +328,7 @@ int main(int argc, const char *argv[])
 		ctdb->capabilities &= ~CTDB_CAP_RECMASTER;
 	}
 
-	ctdb->do_setsched = !ctdb_config.no_realtime;
+	ctdb->do_setsched = ctdb_config.realtime_scheduling;
 
 	/*
 	 * Miscellaneous setup

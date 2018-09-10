@@ -30,6 +30,7 @@ import ldb
 import samba
 import uuid
 
+
 class DsdbTests(TestCase):
 
     def setUp(self):
@@ -575,8 +576,8 @@ class DsdbTests(TestCase):
         msg = ldb.Message()
         msg.dn = kept_dn
         msg["manager"] = ldb.MessageElement("<SID=%s>" % removed_sid,
-                                           ldb.FLAG_MOD_ADD,
-                                           "manager")
+                                            ldb.FLAG_MOD_ADD,
+                                            "manager")
         try:
             self.samdb.modify(msg)
             self.fail("No exception should get LDB_ERR_CONSTRAINT_VIOLATION")
@@ -589,8 +590,8 @@ class DsdbTests(TestCase):
         msg = ldb.Message()
         msg.dn = kept_dn
         msg["manager"] = ldb.MessageElement("<GUID=%s>" % removed_guid,
-                                           ldb.FLAG_MOD_ADD,
-                                           "manager")
+                                            ldb.FLAG_MOD_ADD,
+                                            "manager")
         try:
             self.samdb.modify(msg)
             self.fail("No exception should get LDB_ERR_CONSTRAINT_VIOLATION")
@@ -726,6 +727,7 @@ class DsdbTests(TestCase):
                                 str(part_dn) + "," + str(domain_dn)),
                          self.samdb.normalize_dn_in_domain(part_dn))
 
+
 class DsdbFullScanTests(TestCase):
 
     def setUp(self):
@@ -734,7 +736,6 @@ class DsdbFullScanTests(TestCase):
         self.creds = Credentials()
         self.creds.guess(self.lp)
         self.session = system_session()
-
 
     def test_sam_ldb_open_no_full_scan(self):
         try:

@@ -26,6 +26,7 @@ import threading
 import sys
 import os
 
+
 class LibsmbTestCase(samba.tests.TestCase):
 
     class OpenClose(threading.Thread):
@@ -73,6 +74,7 @@ class LibsmbTestCase(samba.tests.TestCase):
             t.join()
             if t.exc:
                 raise t.exc[0](t.exc[1])
+
 
 if __name__ == "__main__":
     import unittest
