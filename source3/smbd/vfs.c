@@ -711,6 +711,37 @@ int vfs_fill_sparse(files_struct *fsp, off_t len)
 	return ret;
 }
 
+/*******************************************************************************
+ Set a fd into blocking/nonblocking mode through VFS
+*******************************************************************************/
+
+int vfs_set_blocking(files_struct *fsp, bool set)
+{
+	int val;
+#ifdef O_NONBLOCK
+#define FLAG_TO_SET O_NONBLOCK
+#else
+#ifdef SYSV
+#define FLAG_TO_SET O_NDELAY
+#else /* BSD */
+#define FLAG_TO_SET FNDELAY
+#endif
+#endif
+	val = SMB_VFS_FCNTL(fsp, F_GETFL, 0);
+	if (val == -1) {
+		return -1;
+	}
+
+	if (set) {
+		val &= ~FLAG_TO_SET;
+	} else {
+		val |= FLAG_TO_SET;
+	}
+
+	return SMB_VFS_FCNTL(fsp, F_SETFL, val);
+#undef FLAG_TO_SET
+}
+
 /****************************************************************************
  Transfer some data (n bytes) between two file_struct's.
 ****************************************************************************/
@@ -787,8 +818,7 @@ const char *vfs_readdirname(connection_struct *conn, void *p,
 int vfs_ChDir(connection_struct *conn, const struct smb_filename *smb_fname)
 {
 	int ret;
-	int saved_errno = 0;
-	struct smb_filename *old_cwd = conn->cwd_fname;
+	struct smb_filename *cwd = NULL;
 
 	if (!LastDir) {
 		LastDir = SMB_STRDUP("");
@@ -811,23 +841,23 @@ int vfs_ChDir(connection_struct *conn, const struct smb_filename *smb_fname)
 	}
 
 	/*
-	 * Always replace conn->cwd_fname. We
+	 * Always replace conn->cwd_fsp. We
 	 * don't know if it's been modified by
 	 * VFS modules in the stack.
 	 */
 
 	/* conn cache. */
-	conn->cwd_fname = vfs_GetWd(conn, conn);
-	if (conn->cwd_fname == NULL) {
+	cwd = vfs_GetWd(conn, conn);
+	if (cwd == NULL) {
 		/*
 		 * vfs_GetWd() failed.
 		 * We must be able to read cwd.
 		 * Return to original directory
 		 * and return -1.
 		 */
-		saved_errno = errno;
+		int saved_errno = errno;
 
-		if (old_cwd == NULL) {
+		if (conn->cwd_fsp->fsp_name == NULL) {
 			/*
 			 * Failed on the very first chdir()+getwd()
 			 * for this connection. We can't
@@ -837,11 +867,9 @@ int vfs_ChDir(connection_struct *conn, const struct smb_filename *smb_fname)
 			/* NOTREACHED */
 			return -1;
 		}
-		/* Restore original conn->cwd_fname. */
-		conn->cwd_fname = old_cwd;
 
 		/* Return to the previous $cwd. */
-		ret = SMB_VFS_CHDIR(conn, conn->cwd_fname);
+		ret = SMB_VFS_CHDIR(conn, conn->cwd_fsp->fsp_name);
 		if (ret != 0) {
 			smb_panic("conn->cwd getwd failed\n");
 			/* NOTREACHED */
@@ -857,12 +885,18 @@ int vfs_ChDir(connection_struct *conn, const struct smb_filename *smb_fname)
 	SAFE_FREE(LastDir);
 	LastDir = SMB_STRDUP(smb_fname->base_name);
 
-	DEBUG(4,("vfs_ChDir got %s\n", conn->cwd_fname->base_name));
+	/*
+	 * (Indirect) Callers of vfs_ChDir() may still hold references to the
+	 * old conn->cwd_fsp->fsp_name. Move it to talloc_tos(), that way
+	 * callers can use it for the lifetime of the SMB request.
+	 */
+	talloc_move(talloc_tos(), &conn->cwd_fsp->fsp_name);
 
-	TALLOC_FREE(old_cwd);
-	if (saved_errno != 0) {
-		errno = saved_errno;
-	}
+	conn->cwd_fsp->fsp_name = talloc_move(conn->cwd_fsp, &cwd);
+	conn->cwd_fsp->fh->fd = AT_FDCWD;
+
+	DBG_INFO("vfs_ChDir got %s\n", fsp_str_dbg(conn->cwd_fsp));
+
 	return ret;
 }
 
@@ -983,7 +1017,7 @@ struct smb_filename *vfs_GetWd(TALLOC_CTX *ctx, connection_struct *conn)
 
 /*******************************************************************
  Reduce a file name, removing .. elements and checking that
- it is below dir in the heirachy. This uses realpath.
+ it is below dir in the hierarchy. This uses realpath.
  This function must run as root, and will return names
  and valid stat structs that can be checked on open.
 ********************************************************************/
@@ -1172,7 +1206,7 @@ NTSTATUS check_reduced_name_with_privilege(connection_struct *conn,
 
 /*******************************************************************
  Reduce a file name, removing .. elements and checking that
- it is below dir in the heirachy. This uses realpath.
+ it is below dir in the hierarchy. This uses realpath.
 
  If cwd_name == NULL then fname is a client given path relative
  to the root path of the share.
@@ -1410,6 +1444,7 @@ int vfs_stat_smb_basename(struct connection_struct *conn,
 NTSTATUS vfs_stat_fsp(files_struct *fsp)
 {
 	int ret;
+	struct stat_ex saved_stat = fsp->fsp_name->st;
 
 	if(fsp->fh->fd == -1) {
 		if (fsp->posix_flags & FSP_POSIX_FLAGS_OPEN) {
@@ -1417,14 +1452,13 @@ NTSTATUS vfs_stat_fsp(files_struct *fsp)
 		} else {
 			ret = SMB_VFS_STAT(fsp->conn, fsp->fsp_name);
 		}
-		if (ret == -1) {
-			return map_nt_error_from_unix(errno);
-		}
 	} else {
-		if(SMB_VFS_FSTAT(fsp, &fsp->fsp_name->st) != 0) {
-			return map_nt_error_from_unix(errno);
-		}
+		ret = SMB_VFS_FSTAT(fsp, &fsp->fsp_name->st);
 	}
+	if (ret == -1) {
+		return map_nt_error_from_unix(errno);
+	}
+	update_stat_ex_from_saved_stat(&fsp->fsp_name->st, &saved_stat);
 	return NT_STATUS_OK;
 }
 
@@ -1454,878 +1488,6 @@ NTSTATUS vfs_streaminfo(connection_struct *conn,
 struct file_id vfs_file_id_from_sbuf(connection_struct *conn, const SMB_STRUCT_STAT *sbuf)
 {
 	return SMB_VFS_FILE_ID_CREATE(conn, sbuf);
-}
-
-/*
- * Design of the smb_vfs_ev_glue infrastructure:
- *
- * smb_vfs_ev_glue makes it possible to pass
- * down an tevent_context and pthreadpool_tevent
- * used for impersonation through the SMB_VFS stack.
- *
- * tevent_req based function take an tevent_context as
- * there 2nd argument, e.g.:
- *
- *   struct tevent_req *something_send(TALLOC_CTX *mem_ctx,
- *                                     struct tevent_context *ev,
- *                                     ...);
- *
- * For the SMB_VFS stack we'll use the following:
- *
- *   struct tevent_req *SMB_VFS_SOMETHING_SEND(TALLOC_CTX *mem_ctx,
- *                                             const struct smb_vfs_ev_glue *evg,
- *                                             ...);
- *
- * Typically the 'evg' is just passed through the stack down
- * to vfs_default.c. In order to do real work an
- * tevent_context and pthreadpool_tevent are required
- * to do call a 'somthing()' syscall in an async fashion.
- * Therefore it will the following to get the pointer
- * back out of evg:
- *
- *   ev = smb_vfs_ev_glue_ev_ctx(evg);
- *   tp = smb_vfs_ev_glue_tp_chdir_safe(evg);
- *
- * If some function in the stack is sure it needs to run as root
- * to get some information (after careful checks!), it used
- * to frame that work into become_root()/unbecome_root().
- * This can't work when using async functions!
- * Now it's possible to use something like this (simplified!):
- *
- *   ev = smb_vfs_ev_glue_ev_ctx(evg);
- *   root_evg = smb_vfs_ev_glue_get_root_glue(evg);
- *   subreq = SMB_VFS_SOMETHING_NEXT_SEND(state, root_evg, ...);
- *   if (tevent_req_nomem(subreq, req)) {
- *        return tevent_req_post(req, ev);
- *   }
- *   tevent_req_set_callback(subreq, module_something_done, req);
- *
- *   return req;
- *
- *   static void module_something_done(struct tevent_req *subreq)
- *   {
- *      ...
- *
- *      status = SMB_VFS_SOMETHING_NEXT_RECV(subreq, &state->aio_state);
- *      TALLOC_FREE(subreq);
- *
- *      tevent_req_done(req);
- *   }
- *
- * In the code above the something_send_fn() function of the next
- * module in the stack will be called as root.
- * The smb_vfs_call_something_*() glue code, which is the magic
- * behind the SMB_VFS_SOMETHING[_NEXT]_{SEND,RECV}() macros,
- * will look like this:
- *
- *   struct smb_vfs_call_something_state {
- *       ssize_t (*recv_fn)(struct tevent_req *req,
- *                          struct vfs_aio_state *aio_state,
- *                          ...);
- *       ssize_t retval;
- *       struct vfs_aio_state vfs_aio_state;
- *       ...
- *   };
- *
- *   static void smb_vfs_call_something_done(struct tevent_req *subreq);
- *
- *   struct tevent_req *smb_vfs_call_something_send(
- *                  TALLOC_CTX *mem_ctx,
- *                  const struct smb_vfs_ev_glue *evg,
- *                  struct vfs_handle_struct *handle,
- *                  ...)
- *   {
- *       struct tevent_req *req = NULL;
- *       struct smb_vfs_call_something_state *state = NULL;
- *       struct tevent_req *subreq = NULL;
- *       bool ok;
- *
- *       req = tevent_req_create(mem_ctx, &state,
- *                               struct smb_vfs_call_something_state);
- *       if (req == NULL) {
- *           return NULL;
- *       }
- *
- *       VFS_FIND(something_send);
- *       state->recv_fn = handle->fns->something_recv_fn;
- *
- *       ok = smb_vfs_ev_glue_push_use(evg, req);
- *       if (!ok) {
- *           tevent_req_error(req, EIO);
- *           return tevent_req_post(req, evg->return_ev);
- *       }
- *
- *       subreq = handle->fns->something_send_fn(mem_ctx,
- *                                               evg->next_glue,
- *                                               handle,
- *                                               ...);
- *       smb_vfs_ev_glue_pop_use(evg);
- *
- *       if (tevent_req_nomem(subreq, req)) {
- *           return tevent_req_post(req, evg->return_ev);
- *       }
- *       tevent_req_set_callback(subreq, smb_vfs_call_something_done, req);
- *
- *       return req;
- *   }
- *
- *   static void smb_vfs_call_something_done(struct tevent_req *subreq)
- *   {
- *       struct tevent_req *req =
- *           tevent_req_callback_data(subreq,
- *           struct tevent_req);
- *       struct smb_vfs_call_something_state *state =
- *           tevent_req_data(req,
- *           struct smb_vfs_call_something_state);
- *
- *       state->retval = state->recv_fn(subreq,
- *                                      &state->vfs_aio_state,
- *                                      ....);
- *       TALLOC_FREE(subreq);
- *
- *       if (state->retval == -1) {
- *           tevent_req_error(req, state->vfs_aio_state.error);
- *           return;
- *       }
- *       tevent_req_done(req);
- *   }
- *
- *   ssize_t smb_vfs_call_something_recv(struct tevent_req *req,
- *                                        struct vfs_aio_state *aio_state,
- *                                        ....)
- *   {
- *       struct smb_vfs_call_something_state *state =
- *           tevent_req_data(req,
- *           struct smb_vfs_call_something_state);
- *       ssize_t retval = state->retval;
- *
- *       if (tevent_req_is_unix_error(req, &aio_state->error)) {
- *           tevent_req_received(req);
- *           return -1;
- *       }
- *
- *       *aio_state = state->vfs_aio_state;
- *       ...
- *
- *       tevent_req_received(req);
- *       return retval;
- *   }
- *
- * The most important details are these:
- *
- * 1. smb_vfs_ev_glue_push_use(evg, req):
- *    - is a no-op if evg->run_ev and evg->return_ev are the same,
- *      it means that we're already at the correct impersonation
- *      and don't need any additional work to be done.
- *    - Otherwise it will call tevent_req_defer_callback(req, evg->return_ev)
- *      This means that tevent_req_error() and tevent_req_done()
- *      will just trigger an immediate event on evg->return_ev.
- *      Therefore the callers callback function will be called
- *      in the impersonation of evg->return_ev! This is important
- *      in order to get the impersonation correct on the way back
- *      through the stack.
- *    - It will call tevent_context_push_use(evg->run_ev),
- *      which will start the impersonation to run_ev.
- *      So the following code run in the correct context.
- * 2. handle->fns->something_send_fn(..., evg->next_glue, ...):
- *    - We're passing evg->next_glue to the next module.
- *    - Typically evg->next_glue points to evg again.
- *    - In case evg->run_ev and evg->return_ev are not the same,
- *      next_glue will have run_ev and return_ev pointing to evg->run_ev.
- *      So that the switch from evg->run_ev to evg->return_ev
- *      happens on the correct boundary.
- * 3. smb_vfs_ev_glue_pop_use(evg):
- *    - is a no-op if evg->run_ev and evg->return_ev are the same,
- *      it means that we're already at the correct impersonation
- *      and don't need any additional work to be done.
- *    - It will call tevent_context_pop_use(evg->run_ev),
- *      which will revert the impersonation done in
- *      smb_vfs_ev_glue_push_use().
- * 4. smb_vfs_call_something_send():
- *    - The is called in the environment of evg->return_ev.
- *    - So it needs to use tevent_req_post(req, evg->return_ev)
- * 5. smb_vfs_call_something_done():
- *    - The is called in the environment of evg->run_ev
- * 6. smb_vfs_call_something_recv():
- *    - The is called in the environment of evg->return_ev again.
- *
- *
- * Here are some more complex examples:
- *
- * Example 1: only user_evg without switch to root
- *
- * SMBD: already impersonated user_evg
- *  evg'1 = smb2_req->user_evg
- *  r'1 = SMB_VFS_*_SEND(evg'1); # smb_vfs_call_*_send()
- *  |
- *  | smb_vfs_ev_glue_push_use(evg'1, r'1);
- *  | |
- *  | | # no-op run_ev == return_ev
- *  | |
- *  | evg'2 = evg'1->next_glue;
- *  | r'2 = module1_*_send(evg'2);
- *  | |
- *  | | evg'3 = evg'2
- *  | | r'3 = SMB_VFS_*_NEXT_SEND(evg'3); # smb_vfs_call_*_send()
- *  | | |
- *  | | | smb_vfs_ev_glue_push_use(evg'3, r'3);
- *  | | | |
- *  | | | | # no-op run_ev == return_ev
- *  | | | |
- *  | | | evg'4 = evg'3->next_glue;
- *  | | | r'4 = module2_*_send(evg'4);
- *  | | | |
- *  | | | | evg'5 = evg'4
- *  | | | | r'5 = SMB_VFS_*_NEXT_SEND(evg'5); # smb_vfs_call_*_send()
- *  | | | | |
- *  | | | | | smb_vfs_ev_glue_push_use(evg'5, r'5);
- *  | | | | | |
- *  | | | | | | # no-op run_ev == return_ev
- *  | | | | | |
- *  | | | | | evg'6 = evg'5->next_glue;
- *  | | | | | r'6 = default_*_send(evg'6);
- *  | | | | | |
- *  | | | | | | ev'6 = smb_vfs_ev_glue_ev_ctx(evg'6)
- *  | | | | | | tp'6 = smb_vfs_ev_glue_tp_chdir_safe(evg'6)
- *  | | | | | | r'7 = pthreadpool_tevent_send(ev'6, tp'6);
- *  | | | | | | |
- *  | | | | | | | pthread_create...
- *  | | | | | | |
- *  | | | | | | tevent_req_set_callback(r'7, default_*_done, r'6);
- *  | | | | | |
- *  | | | | | smb_vfs_ev_glue_pop_use(evg'5);
- *  | | | | | |
- *  | | | | | | # no-op run_ev == return_ev
- *  | | | | | |
- *  | | | | | tevent_req_set_callback(r'6, smb_vfs_call_*_done, r'5);
- *  | | | | |
- *  | | | | tevent_req_set_callback(r'5, module2_*_done, r'4);
- *  | | | |
- *  | | | smb_vfs_ev_glue_pop_use(evg'3);
- *  | | | |
- *  | | | | # no-op run_ev == return_ev
- *  | | | |
- *  | | | tevent_req_set_callback(r'4, smb_vfs_call_*_done, r'3);
- *  | | |
- *  | | tevent_req_set_callback(r'3, module1_*_done, r'2);
- *  | |
- *  | smb_vfs_ev_glue_pop_use(evg'1);
- *  | |
- *  | | # no-op run_ev == return_ev
- *  | |
- *  | tevent_req_set_callback(r'2, smb_vfs_call_*_done, r'1);
- *  |
- *  tevent_req_set_callback(r'1, smbd_*_done, smb2_req);
- *
- *  Worker thread finished, just one event handler processes
- *  everything as there's no impersonation change.
- *
- *  tevent_common_invoke_immediate_handler:
- *  |
- *  | before_immediate_handler(ev'6);
- *  | |
- *  | | change_to_user()
- *  | |
- *  | pthreadpool_tevent_job_done(r'7);
- *  | |
- *  | | default_*_done(r'7);
- *  | | |
- *  | | | pthreadpool_tevent_recv(r'7);
- *  | | | TALLOC_FREE(r'7);
- *  | | | tevent_req_done('r6);
- *  | | | |
- *  | | | | smb_vfs_call_*_done(r'6);
- *  | | | | |
- *  | | | | | default_*_recv(r'6);
- *  | | | | | TALLOC_FREE(r'6)
- *  | | | | | tevent_req_done(r'5);
- *  | | | | | |
- *  | | | | | | module2_*_done(r'5):
- *  | | | | | | |
- *  | | | | | | | SMB_VFS_*_recv(r'5); # smb_vfs_call_*_recv()
- *  | | | | | | | TALLOC_FREE(r'5)
- *  | | | | | | | tevent_req_done(r'4);
- *  | | | | | | | |
- *  | | | | | | | | smb_vfs_call_*_done(r'4);
- *  | | | | | | | | |
- *  | | | | | | | | | module2_*_recv(r'4);
- *  | | | | | | | | | TALLOC_FREE(r'4)
- *  | | | | | | | | | tevent_req_done(r'3);
- *  | | | | | | | | | |
- *  | | | | | | | | | | module1_*_done(r'3):
- *  | | | | | | | | | | |
- *  | | | | | | | | | | | SMB_VFS_*_recv(r'3); # smb_vfs_call_*_recv()
- *  | | | | | | | | | | | TALLOC_FREE(r'3)
- *  | | | | | | | | | | | tevent_req_done(r'2);
- *  | | | | | | | | | | | |
- *  | | | | | | | | | | | | smb_vfs_*_done(r'2);
- *  | | | | | | | | | | | | |
- *  | | | | | | | | | | | | | module1_*_recv(r'2);
- *  | | | | | | | | | | | | | TALLOC_FREE(r'2)
- *  | | | | | | | | | | | | | tevent_req_done(r'1);
- *  | | | | | | | | | | | | | |
- *  | | | | | | | | | | | | | | smbd_*_done(r'1);
- *  | | | | | | | | | | | | | | |
- *  | | | | | | | | | | | | | | | SMB_VFS_*_recv(r'1); # smb_vfs_call_*_recv()
- *  | | | | | | | | | | | | | | | TALLOC_FREE(r'1)
- *  | | | | | | | | | | | | | | | smbd_response_to_client()
- *  | | | | | | | | | | | | | | | return
- *  | | | | | | | | | | | | | | |
- *  | | | | | | | | | | | | | | return
- *  | | | | | | | | | | | | | |
- *  | | | | | | | | | | | | | return
- *  | | | | | | | | | | | | |
- *  | | | | | | | | | | | | return
- *  | | | | | | | | | | | |
- *  | | | | | | | | | | | return
- *  | | | | | | | | | | |
- *  | | | | | | | | | | return
- *  | | | | | | | | | |
- *  | | | | | | | | | return
- *  | | | | | | | | |
- *  | | | | | | | | return
- *  | | | | | | | |
- *  | | | | | | | return
- *  | | | | | | |
- *  | | | | | | return
- *  | | | | | |
- *  | | | | | return
- *  | | | | |
- *  | | | | return
- *  | | | |
- *  | | | return
- *  | | |
- *  | | return
- *  | |
- *  | after_immediate_handler(ev'6);
- *  | |
- *  | | # lazy no change_to_user()
- *  | |
- *  | return
- *
- *
- * Example 2: start with user_evg and let module1 switch to root
- *
- * SMBD: already impersonated user_evg
- *  evg'1 = smb2_req->user_evg
- *  r'1 = SMB_VFS_*_SEND(evg'1); # smb_vfs_call_*_send()
- *  |
- *  | smb_vfs_ev_glue_push_use(evg'1, r'1);
- *  | |
- *  | | # no-op run_ev == return_ev
- *  | |
- *  | evg'2 = evg'1->next_glue;
- *  | r'2 = module1_*_send(evg'2);
- *  | |
- *  | | evg'3 = smb_vfs_ev_glue_get_root_glue(evg'2)
- *  | | r'3 = SMB_VFS_*_NEXT_SEND(evg'3); # smb_vfs_call_*_send()
- *  | | |
- *  | | | smb_vfs_ev_glue_push_use(evg'3, r'3);
- *  | | | |
- *  | | | | tevent_req_defer_callback(r'3, evg'3->return_ev);
- *  | | | | tevent_context_push_use(evg'3->run_ev)
- *  | | | | |
- *  | | | | | become_root()
- *  | | | | |
- *  | | | |
- *  | | | evg'4 = evg'3->next_glue;
- *  | | | r'4 = module2_*_send(evg'4);
- *  | | | |
- *  | | | | evg'5 = smb_vfs_ev_glue_get_root_glue(evg'4)
- *  | | | | r'5 = SMB_VFS_*_NEXT_SEND(evg'5); # smb_vfs_call_*_send()
- *  | | | | |
- *  | | | | | smb_vfs_ev_glue_push_use(evg'5, r'5);
- *  | | | | | |
- *  | | | | | | # no-op run_ev == return_ev, already root
- *  | | | | | |
- *  | | | | | evg'6 = evg'5->next_glue;
- *  | | | | | r'6 = default_*_send(evg'6);
- *  | | | | | |
- *  | | | | | | ev'6 = smb_vfs_ev_glue_ev_ctx(evg'6)
- *  | | | | | | tp'6 = smb_vfs_ev_glue_tp_chdir_safe(evg'6)
- *  | | | | | | r'7 = pthreadpool_tevent_send(ev'6, tp'6);
- *  | | | | | | |
- *  | | | | | | | pthread_create...
- *  | | | | | | |
- *  | | | | | | tevent_req_set_callback(r'7, default_*_done, r'6);
- *  | | | | | |
- *  | | | | | smb_vfs_ev_glue_pop_use(evg'5);
- *  | | | | | |
- *  | | | | | | # no-op run_ev == return_ev, still stay as root
- *  | | | | | |
- *  | | | | | tevent_req_set_callback(r'6, smb_vfs_*_done, r'5);
- *  | | | | |
- *  | | | | tevent_req_set_callback(r'5, module2_*_done, r'4);
- *  | | | |
- *  | | | smb_vfs_ev_glue_pop_use(evg'3);
- *  | | | |
- *  | | | | tevent_context_pop_use(evg'3->run_ev)
- *  | | | | |
- *  | | | | | unbecome_root()
- *  | | | |
- *  | | | tevent_req_set_callback(r'4, smb_vfs_*_done, r'3);
- *  | | |
- *  | | tevent_req_set_callback(r'3, module1_*_done, r'2);
- *  | |
- *  | smb_vfs_ev_glue_pop_use(evg'1);
- *  | |
- *  | | # no-op run_ev == return_ev
- *  | |
- *  | tevent_req_set_callback(r'2, smb_vfs_*_done, r'1);
- *  |
- *  tevent_req_set_callback(r'1, smbd_*_done, smb2_req);
- *
- *  Worker thread finished, just one event handler processes
- *  everything as there's no impersonation change.
- *
- *  tevent_common_invoke_immediate_handler:
- *  |
- *  | before_immediate_handler(ev'6);
- *  | |
- *  | | become_root()
- *  | |
- *  | pthreadpool_tevent_job_done(r'7);
- *  | |
- *  | | default_*_done(r'7);
- *  | | |
- *  | | | pthreadpool_tevent_recv(r'7);
- *  | | | TALLOC_FREE(r'7);
- *  | | | tevent_req_done('r6);
- *  | | | |
- *  | | | | smb_vfs_*_done(r'6);
- *  | | | | |
- *  | | | | | default_*_recv(r'6);
- *  | | | | | TALLOC_FREE(r'6)
- *  | | | | | tevent_req_done(r'5);
- *  | | | | | |
- *  | | | | | | module2_*_done(r'5):
- *  | | | | | | |
- *  | | | | | | | SMB_VFS_*_recv(r'5);
- *  | | | | | | | TALLOC_FREE(r'5)
- *  | | | | | | | tevent_req_done(r'4);
- *  | | | | | | | |
- *  | | | | | | | | smb_vfs_*_done(r'4);
- *  | | | | | | | | |
- *  | | | | | | | | | module2_*_recv(r'4);
- *  | | | | | | | | | TALLOC_FREE(r'4)
- *  | | | | | | | | | tevent_req_done(r'3);
- *  | | | | | | | | | | return
- *  | | | | | | | | | |
- *  | | | | | | | | | return
- *  | | | | | | | | |
- *  | | | | | | | | return
- *  | | | | | | | |
- *  | | | | | | | return
- *  | | | | | | |
- *  | | | | | | return
- *  | | | | | |
- *  | | | | | return
- *  | | | | |
- *  | | | | return
- *  | | | |
- *  | | | return
- *  | | |
- *  | | return
- *  | |
- *  | |
- *  | after_immediate_handler(ev'6);
- *  | |
- *  | | unbecome_root()
- *  | |
- *  | return
- *  |
- *  tevent_common_invoke_immediate_handler:
- *  |
- *  | before_immediate_handler(ev'6);
- *  | |
- *  | | change_to_user()
- *  | |
- *  | tevent_req_trigger();
- *  | ...
- *  | _tevent_req_notify_callback(r'3)
- *  | |
- *  | | module1_*_done(r'3):
- *  | | |
- *  | | | SMB_VFS_*_recv(r'3);
- *  | | | TALLOC_FREE(r'3)
- *  | | | tevent_req_done(r'2);
- *  | | | |
- *  | | | | smb_vfs_*_done(r'2);
- *  | | | | |
- *  | | | | | module1_*_recv(r'2);
- *  | | | | | TALLOC_FREE(r'2)
- *  | | | | | tevent_req_done(r'1);
- *  | | | | | |
- *  | | | | | | smbd_*_done(r'1);
- *  | | | | | | |
- *  | | | | | | | SMB_VFS_*_recv(r'1);
- *  | | | | | | | TALLOC_FREE(r'1)
- *  | | | | | | | smbd_response_to_client()
- *  | | | | | | | return
- *  | | | | | | |
- *  | | | | | | return
- *  | | | | | |
- *  | | | | | return
- *  | | | | |
- *  | | | | return
- *  | | | |
- *  | | | return
- *  | | |
- *  | | return
- *  | |
- *  | after_immediate_handler(ev'6);
- *  | |
- *  | | # lazy no change_to_user()
- *  | |
- *  | return
- *
- */
-struct smb_vfs_ev_glue {
-	/*
-	 * The event context that should be used
-	 * to report the result back.
-	 *
-	 * The is basically the callers context.
-	 */
-	struct tevent_context *return_ev;
-
-	/*
-	 * The event context and threadpool wrappers
-	 * the current context should use.
-	 *
-	 * tp_fd_safe only allows fd based functions
-	 * which don't require impersonation, this
-	 * is basically the raw threadpool.
-	 *
-	 * tp_path_safe allows path based functions
-	 * to be called under the correct impersonation.
-	 * But chdir/fchdir is not allowed!
-	 * Typically calls like openat() or other *at()
-	 * syscalls.
-	 *
-	 * tp_chdir_safe is like path_safe, but also
-	 * allows chdir/fchdir to be called, the job
-	 * can safely return with a changed directory,
-	 * the threadpool wrapper takes care of
-	 * a cleanup if required.
-	 * This is needed if *at() syscalls need
-	 * to be simulated by fchdir();$syscall(),
-	 * e.g. getxattr().
-	 *
-	 * The distinction between these threadpool
-	 * is required because of OS limitations
-	 * (as of 2018):
-	 * - only Linux supports per thread
-	 *   credentials (seteuid....)
-	 * - only Linux supports a per thread
-	 *   current working directory,
-	 *   using unshare(CLONE_FS). But
-	 *   in some constrained container
-	 *   environments even that is not available
-	 *   on Linux.
-	 *
-	 * tp_fd_safe is typically the raw threadpool
-	 * without a wrapper.
-	 *
-	 * On Linux tp_path_safe and tp_chdir_safe
-	 * are typically the same (if unshare(CLONE_FS) is available)
-	 * they're implemented as wrappers of the raw threadpool.
-	 *
-	 * On other OSes tp_path_safe is a wrapper
-	 * arround a sync threadpool (without real threads, just blocking
-	 * the main thread), but hidden behind the pthreadpool_tevent
-	 * api in order to make the restriction transparent.
-	 *
-	 * On other OSes tp_chdir_safe is a wrapper
-	 * arround a sync threadpool (without real threads, just blocking
-	 * the main thread), but hidden behind the pthreadpool_tevent
-	 * api in order to make the restriction transparent.
-	 * It just remembers/restores the current working directory,
-	 * typically using open(".", O_RDONLY | O_DIRECTORY) and fchdir().
-	 */
-	struct tevent_context *run_ev;
-	struct pthreadpool_tevent *run_tp_fd_safe;
-	struct pthreadpool_tevent *run_tp_path_safe;
-	struct pthreadpool_tevent *run_tp_chdir_safe;
-
-	/*
-	 * The glue that should be passed down
-	 * to sub request in the stack.
-	 *
-	 * Typically this points to itself.
-	 *
-	 * But smb_vfs_ev_glue_create_switch() allows
-	 * to create context that can switch
-	 * between two user glues.
-	 */
-	const struct smb_vfs_ev_glue *next_glue;
-
-	/*
-	 * If some code path wants to run
-	 * some constraint code as root,
-	 * basically an async version of become_root()
-	 * and unbecome_root().
-	 *
-	 * The caller can call smb_vfs_ev_glue_get_root_glue()
-	 * to get a root glue that can be passed
-	 * to the SMB_VFS_*_SEND() function that
-	 * should run as root.
-	 *
-	 * Note that the callback (registered with
-	 * tevent_req_set_callback()) won't run as
-	 * root anymore!
-	 */
-	const struct smb_vfs_ev_glue *root_glue;
-};
-
-static struct smb_vfs_ev_glue *smb_vfs_ev_glue_create_internal(
-	TALLOC_CTX *mem_ctx,
-	struct tevent_context *return_ev,
-	struct tevent_context *run_ev,
-	struct pthreadpool_tevent *run_tp_fd_safe,
-	struct pthreadpool_tevent *run_tp_path_safe,
-	struct pthreadpool_tevent *run_tp_chdir_safe)
-{
-	struct smb_vfs_ev_glue *evg = NULL;
-
-	evg = talloc_zero(mem_ctx, struct smb_vfs_ev_glue);
-	if (evg == NULL) {
-		return NULL;
-	}
-	*evg = (struct smb_vfs_ev_glue) {
-		.return_ev = return_ev,
-		.run_ev = run_ev,
-		.run_tp_fd_safe = run_tp_fd_safe,
-		.run_tp_path_safe = run_tp_path_safe,
-		.run_tp_chdir_safe = run_tp_chdir_safe,
-		.next_glue = evg,
-	};
-
-	return evg;
-}
-
-struct tevent_context *smb_vfs_ev_glue_ev_ctx(const struct smb_vfs_ev_glue *evg)
-{
-	return evg->run_ev;
-}
-
-struct pthreadpool_tevent *smb_vfs_ev_glue_tp_fd_safe(const struct smb_vfs_ev_glue *evg)
-{
-	return evg->run_tp_fd_safe;
-}
-
-struct pthreadpool_tevent *smb_vfs_ev_glue_tp_path_safe(const struct smb_vfs_ev_glue *evg)
-{
-	return evg->run_tp_path_safe;
-}
-
-struct pthreadpool_tevent *smb_vfs_ev_glue_tp_chdir_safe(const struct smb_vfs_ev_glue *evg)
-{
-	return evg->run_tp_chdir_safe;
-}
-
-const struct smb_vfs_ev_glue *smb_vfs_ev_glue_get_root_glue(const struct smb_vfs_ev_glue *evg)
-{
-	return evg->root_glue;
-}
-
-struct smb_vfs_ev_glue *smb_vfs_ev_glue_create(TALLOC_CTX *mem_ctx,
-				struct tevent_context *user_ev,
-				struct pthreadpool_tevent *user_tp_fd_safe,
-				struct pthreadpool_tevent *user_tp_path_safe,
-				struct pthreadpool_tevent *user_tp_chdir_safe,
-				struct tevent_context *root_ev,
-				struct pthreadpool_tevent *root_tp_fd_safe,
-				struct pthreadpool_tevent *root_tp_path_safe,
-				struct pthreadpool_tevent *root_tp_chdir_safe)
-{
-	struct smb_vfs_ev_glue *evg_uu = NULL;
-	struct smb_vfs_ev_glue *evg_ru = NULL;
-	struct smb_vfs_ev_glue *evg_rr = NULL;
-
-	/*
-	 * The top level glue (directly returned from this function).
-	 *
-	 * It uses user_ev and user_tp_* only.
-	 */
-	evg_uu = smb_vfs_ev_glue_create_internal(mem_ctx,
-						 user_ev, /* return_ev */
-						 user_ev, /* run_ev */
-						 user_tp_fd_safe,
-						 user_tp_path_safe,
-						 user_tp_chdir_safe);
-	if (evg_uu == NULL) {
-		return NULL;
-	}
-
-	/*
-	 * The first root glue (returned by smb_vfs_ev_glue_get_root_glue()).
-	 *
-	 * It uses root_ev and root_tp, but user_ev as return ev,
-	 * which means that the caller's callback (registered with
-	 * tevent_req_set_callback()) will run as user_ev.
-	 */
-	evg_ru = smb_vfs_ev_glue_create_internal(evg_uu,
-						 user_ev, /* return_ev */
-						 root_ev, /* run_ev */
-						 root_tp_fd_safe,
-						 root_tp_path_safe,
-						 root_tp_chdir_safe);
-	if (evg_ru == NULL) {
-		TALLOC_FREE(evg_uu);
-		return NULL;
-	}
-
-	/*
-	 * The second root glue (returned by smb_vfs_ev_glue_get_root_glue() on
-	 * root glue itself. This means code can always call
-	 * smb_vfs_ev_glue_get_root_glue() and don't have to care if the
-	 * passed glue is already a root glue.
-	 *
-	 * This will then recursively point to its own root_glue pointer.
-	 *
-	 * It only uses root_ev and root_tp.
-	 */
-	evg_rr = smb_vfs_ev_glue_create_internal(evg_ru,
-						 root_ev, /* return_ev */
-						 root_ev, /* run_ev */
-						 root_tp_fd_safe,
-						 root_tp_path_safe,
-						 root_tp_chdir_safe);
-	if (evg_rr == NULL) {
-		TALLOC_FREE(evg_uu);
-		return NULL;
-	}
-
-	/*
-	 * We now setup the glue hierachie.
-	 *
-	 * Search for "Design of the smb_vfs_ev_glue infrastructure" above
-	 * for a detailed description how the chain works.
-	 *
-	 * "Example 2: start with user_evg and let module1 switch to root"
-	 * explains it for the root_glue chaining.
-	 */
-	evg_rr->root_glue = evg_rr;
-	evg_ru->root_glue = evg_rr;
-	evg_uu->root_glue = evg_ru;
-
-	/*
-	 * As evg_ru is a boundary with
-	 * run_ev != return_ev, we need to
-	 * alter its next_glue.
-	 */
-	evg_ru->next_glue = evg_rr;
-
-	return evg_uu;
-}
-
-/*
- * This can be used to create a temporary glue
- * if you need to switch between two user contexts
- *
- * It's the caller's duty to make sure both
- * glues stay alive for the lifetime of the
- * created switch.
- */
-struct smb_vfs_ev_glue *smb_vfs_ev_glue_create_switch(
-			TALLOC_CTX *mem_ctx,
-			const struct smb_vfs_ev_glue *return_evg,
-			const struct smb_vfs_ev_glue *run_evg)
-{
-	const struct smb_vfs_ev_glue *run_root = run_evg->root_glue;
-	struct smb_vfs_ev_glue *evg_u = NULL;
-	struct smb_vfs_ev_glue *evg_r = NULL;
-
-	/*
-	 * Here we basically need to dup run_evg (and run_evg->root_glue)
-	 * and replace their return_ev with return_evg->return_ev.
-	 *
-	 * We need to put the new evgs in front of the chain...
-	 */
-	evg_u = smb_vfs_ev_glue_create_internal(mem_ctx,
-						return_evg->return_ev,
-						run_evg->run_ev,
-						run_evg->run_tp_fd_safe,
-						run_evg->run_tp_path_safe,
-						run_evg->run_tp_chdir_safe);
-	if (evg_u == NULL) {
-		return NULL;
-	}
-
-	evg_r = smb_vfs_ev_glue_create_internal(evg_u,
-						return_evg->return_ev,
-						run_root->run_ev,
-						run_root->run_tp_fd_safe,
-						run_root->run_tp_path_safe,
-						run_root->run_tp_chdir_safe);
-	if (evg_r == NULL) {
-		return NULL;
-	}
-
-	/*
-	 * evg_r is a boundary with run_ev != return_ev.
-	 * As run_root is also a boundary, we need to
-	 * use run_root->next_glue in order to get
-	 * a glue that stays as root.
-	 *
-	 * The same applies to the chaining of root
-	 * glues.
-	 */
-	evg_r->next_glue = run_root->next_glue;
-	evg_r->root_glue = run_root->root_glue;
-
-	/*
-	 * evg_r is a boundary with run_ev != return_ev.
-	 * But run_evg is typically not a boundary,
-	 * we use it directly as next_glue.
-	 *
-	 * And the root_glue is the one we constructed above.
-	 */
-	evg_u->next_glue = run_evg;
-	evg_u->root_glue = evg_r;
-
-	return evg_u;
-}
-
-static bool smb_vfs_ev_glue_push_use(const struct smb_vfs_ev_glue *evg,
-				     struct tevent_req *req)
-{
-	if (evg->run_ev == evg->return_ev) {
-		/*
-		 * We're already in the correct
-		 * impersonation environment.
-		 */
-		return true;
-	}
-
-	/*
-	 * Make sure that our callers callback function
-	 * will be called in the return_ev environment.
-	 */
-	tevent_req_defer_callback(req, evg->return_ev);
-
-	/*
-	 * let the event context wrapper do
-	 * the required impersonation.
-	 */
-	return tevent_context_push_use(evg->run_ev);
-}
-
-static void smb_vfs_ev_glue_pop_use(const struct smb_vfs_ev_glue *evg)
-{
-	if (evg->run_ev == evg->return_ev) {
-		/*
-		 * smb_vfs_ev_glue_push_use() didn't
-		 * change the impersonation environment.
-		 */
-		return;
-	}
-
-	/*
-	 * undo the impersonation
-	 */
-	tevent_context_pop_use(evg->run_ev);
 }
 
 int smb_vfs_call_connect(struct vfs_handle_struct *handle,
@@ -2449,19 +1611,16 @@ void smb_vfs_call_rewind_dir(struct vfs_handle_struct *handle,
 	handle->fns->rewind_dir_fn(handle, dirp);
 }
 
-int smb_vfs_call_mkdir(struct vfs_handle_struct *handle,
+int smb_vfs_call_mkdirat(struct vfs_handle_struct *handle,
+			struct files_struct *dirfsp,
 			const struct smb_filename *smb_fname,
 			mode_t mode)
 {
-	VFS_FIND(mkdir);
-	return handle->fns->mkdir_fn(handle, smb_fname, mode);
-}
-
-int smb_vfs_call_rmdir(struct vfs_handle_struct *handle,
-			const struct smb_filename *smb_fname)
-{
-	VFS_FIND(rmdir);
-	return handle->fns->rmdir_fn(handle, smb_fname);
+	VFS_FIND(mkdirat);
+	return handle->fns->mkdirat_fn(handle,
+			dirfsp,
+			smb_fname,
+			mode);
 }
 
 int smb_vfs_call_closedir(struct vfs_handle_struct *handle,
@@ -2489,7 +1648,7 @@ NTSTATUS smb_vfs_call_create_file(struct vfs_handle_struct *handle,
 				  uint32_t create_options,
 				  uint32_t file_attributes,
 				  uint32_t oplock_request,
-				  struct smb2_lease *lease,
+				  const struct smb2_lease *lease,
 				  uint64_t allocation_size,
 				  uint32_t private_flags,
 				  struct security_descriptor *sd,
@@ -2692,12 +1851,18 @@ ssize_t smb_vfs_call_recvfile(struct vfs_handle_struct *handle, int fromfd,
 	return handle->fns->recvfile_fn(handle, fromfd, tofsp, offset, count);
 }
 
-int smb_vfs_call_rename(struct vfs_handle_struct *handle,
+int smb_vfs_call_renameat(struct vfs_handle_struct *handle,
+			files_struct *srcfsp,
 			const struct smb_filename *smb_fname_src,
+			files_struct *dstfsp,
 			const struct smb_filename *smb_fname_dst)
 {
-	VFS_FIND(rename);
-	return handle->fns->rename_fn(handle, smb_fname_src, smb_fname_dst);
+	VFS_FIND(renameat);
+	return handle->fns->renameat_fn(handle,
+				srcfsp,
+				smb_fname_src,
+				dstfsp,
+				smb_fname_dst);
 }
 
 struct smb_vfs_call_fsync_state {
@@ -2833,11 +1998,16 @@ uint64_t smb_vfs_call_get_alloc_size(struct vfs_handle_struct *handle,
 	return handle->fns->get_alloc_size_fn(handle, fsp, sbuf);
 }
 
-int smb_vfs_call_unlink(struct vfs_handle_struct *handle,
-			const struct smb_filename *smb_fname)
+int smb_vfs_call_unlinkat(struct vfs_handle_struct *handle,
+			struct files_struct *dirfsp,
+			const struct smb_filename *smb_fname,
+			int flags)
 {
-	VFS_FIND(unlink);
-	return handle->fns->unlink_fn(handle, smb_fname);
+	VFS_FIND(unlinkat);
+	return handle->fns->unlinkat_fn(handle,
+			dirfsp,
+			smb_fname,
+			flags);
 }
 
 int smb_vfs_call_chmod(struct vfs_handle_struct *handle,
@@ -2855,15 +2025,6 @@ int smb_vfs_call_fchmod(struct vfs_handle_struct *handle,
 	return handle->fns->fchmod_fn(handle, fsp, mode);
 }
 
-int smb_vfs_call_chown(struct vfs_handle_struct *handle,
-			const struct smb_filename *smb_fname,
-			uid_t uid,
-			gid_t gid)
-{
-	VFS_FIND(chown);
-	return handle->fns->chown_fn(handle, smb_fname, uid, gid);
-}
-
 int smb_vfs_call_fchown(struct vfs_handle_struct *handle,
 			struct files_struct *fsp, uid_t uid, gid_t gid)
 {
@@ -2878,127 +2039,6 @@ int smb_vfs_call_lchown(struct vfs_handle_struct *handle,
 {
 	VFS_FIND(lchown);
 	return handle->fns->lchown_fn(handle, smb_fname, uid, gid);
-}
-
-NTSTATUS vfs_chown_fsp(files_struct *fsp, uid_t uid, gid_t gid)
-{
-	int ret;
-	bool as_root = false;
-	NTSTATUS status;
-
-	if (fsp->fh->fd != -1) {
-		/* Try fchown. */
-		ret = SMB_VFS_FCHOWN(fsp, uid, gid);
-		if (ret == 0) {
-			return NT_STATUS_OK;
-		}
-		if (ret == -1 && errno != ENOSYS) {
-			return map_nt_error_from_unix(errno);
-		}
-	}
-
-	as_root = (geteuid() == 0);
-
-	if (as_root) {
-		/*
-		 * We are being asked to chown as root. Make
-		 * sure we chdir() into the path to pin it,
-		 * and always act using lchown to ensure we
-		 * don't deref any symbolic links.
-		 */
-		char *parent_dir = NULL;
-		const char *final_component = NULL;
-		struct smb_filename *local_smb_fname = NULL;
-		struct smb_filename parent_dir_fname = {0};
-		struct smb_filename *saved_dir_fname = NULL;
-
-		saved_dir_fname = vfs_GetWd(talloc_tos(),fsp->conn);
-		if (!saved_dir_fname) {
-			status = map_nt_error_from_unix(errno);
-			DEBUG(0,("vfs_chown_fsp: failed to get "
-				"current working directory. Error was %s\n",
-				strerror(errno)));
-			return status;
-		}
-
-		if (!parent_dirname(talloc_tos(),
-				fsp->fsp_name->base_name,
-				&parent_dir,
-				&final_component)) {
-			return NT_STATUS_NO_MEMORY;
-		}
-
-		parent_dir_fname = (struct smb_filename) {
-			.base_name = parent_dir,
-			.flags = fsp->fsp_name->flags
-		};
-
-		/* cd into the parent dir to pin it. */
-		ret = vfs_ChDir(fsp->conn, &parent_dir_fname);
-		if (ret == -1) {
-			return map_nt_error_from_unix(errno);
-		}
-
-		local_smb_fname = synthetic_smb_fname(talloc_tos(),
-					final_component,
-					NULL,
-					NULL,
-					fsp->fsp_name->flags);
-		if (local_smb_fname == NULL) {
-			status = NT_STATUS_NO_MEMORY;
-			goto out;
-		}
-
-		/* Must use lstat here. */
-		ret = SMB_VFS_LSTAT(fsp->conn, local_smb_fname);
-		if (ret == -1) {
-			status = map_nt_error_from_unix(errno);
-			goto out;
-		}
-
-		/* Ensure it matches the fsp stat. */
-		if (!check_same_stat(&local_smb_fname->st,
-				&fsp->fsp_name->st)) {
-                        status = NT_STATUS_ACCESS_DENIED;
-			goto out;
-                }
-
-		ret = SMB_VFS_LCHOWN(fsp->conn,
-			local_smb_fname,
-			uid, gid);
-
-		if (ret == 0) {
-			status = NT_STATUS_OK;
-		} else {
-			status = map_nt_error_from_unix(errno);
-		}
-
-  out:
-
-		vfs_ChDir(fsp->conn, saved_dir_fname);
-		TALLOC_FREE(local_smb_fname);
-		TALLOC_FREE(saved_dir_fname);
-		TALLOC_FREE(parent_dir);
-
-		return status;
-	}
-
-	if (fsp->posix_flags & FSP_POSIX_FLAGS_OPEN) {
-		ret = SMB_VFS_LCHOWN(fsp->conn,
-			fsp->fsp_name,
-			uid, gid);
-	} else {
-		ret = SMB_VFS_CHOWN(fsp->conn,
-			fsp->fsp_name,
-			uid, gid);
-	}
-
-	if (ret == 0) {
-		status = NT_STATUS_OK;
-	} else {
-		status = map_nt_error_from_unix(errno);
-	}
-	return status;
 }
 
 int smb_vfs_call_chdir(struct vfs_handle_struct *handle,
@@ -3049,6 +2089,21 @@ int smb_vfs_call_kernel_flock(struct vfs_handle_struct *handle,
 					 access_mask);
 }
 
+int smb_vfs_call_fcntl(struct vfs_handle_struct *handle,
+		       struct files_struct *fsp, int cmd, ...)
+{
+	int result;
+	va_list cmd_arg;
+
+	VFS_FIND(fcntl);
+
+	va_start(cmd_arg, cmd);
+	result = handle->fns->fcntl_fn(handle, fsp, cmd, cmd_arg);
+	va_end(cmd_arg);
+
+	return result;
+}
+
 int smb_vfs_call_linux_setlease(struct vfs_handle_struct *handle,
 				struct files_struct *fsp, int leasetype)
 {
@@ -3056,38 +2111,60 @@ int smb_vfs_call_linux_setlease(struct vfs_handle_struct *handle,
 	return handle->fns->linux_setlease_fn(handle, fsp, leasetype);
 }
 
-int smb_vfs_call_symlink(struct vfs_handle_struct *handle,
+int smb_vfs_call_symlinkat(struct vfs_handle_struct *handle,
 			const char *link_target,
+			struct files_struct *dirfsp,
 			const struct smb_filename *new_smb_fname)
 {
-	VFS_FIND(symlink);
-	return handle->fns->symlink_fn(handle, link_target, new_smb_fname);
+	VFS_FIND(symlinkat);
+	return handle->fns->symlinkat_fn(handle,
+				link_target,
+				dirfsp,
+				new_smb_fname);
 }
 
-int smb_vfs_call_readlink(struct vfs_handle_struct *handle,
+int smb_vfs_call_readlinkat(struct vfs_handle_struct *handle,
+			files_struct *dirfsp,
 			const struct smb_filename *smb_fname,
 			char *buf,
 			size_t bufsiz)
 {
-	VFS_FIND(readlink);
-	return handle->fns->readlink_fn(handle, smb_fname, buf, bufsiz);
+	VFS_FIND(readlinkat);
+	return handle->fns->readlinkat_fn(handle,
+				dirfsp,
+				smb_fname,
+				buf,
+				bufsiz);
 }
 
-int smb_vfs_call_link(struct vfs_handle_struct *handle,
+int smb_vfs_call_linkat(struct vfs_handle_struct *handle,
+			struct files_struct *srcfsp,
 			const struct smb_filename *old_smb_fname,
-			const struct smb_filename *new_smb_fname)
+			struct files_struct *dstfsp,
+			const struct smb_filename *new_smb_fname,
+			int flags)
 {
-	VFS_FIND(link);
-	return handle->fns->link_fn(handle, old_smb_fname, new_smb_fname);
+	VFS_FIND(linkat);
+	return handle->fns->linkat_fn(handle,
+				srcfsp,
+				old_smb_fname,
+				dstfsp,
+				new_smb_fname,
+				flags);
 }
 
-int smb_vfs_call_mknod(struct vfs_handle_struct *handle,
+int smb_vfs_call_mknodat(struct vfs_handle_struct *handle,
+			struct files_struct *dirfsp,
 			const struct smb_filename *smb_fname,
 			mode_t mode,
 			SMB_DEV_T dev)
 {
-	VFS_FIND(mknod);
-	return handle->fns->mknod_fn(handle, smb_fname, mode, dev);
+	VFS_FIND(mknodat);
+	return handle->fns->mknodat_fn(handle,
+				dirfsp,
+				smb_fname,
+				mode,
+				dev);
 }
 
 struct smb_filename *smb_vfs_call_realpath(struct vfs_handle_struct *handle,
@@ -3111,6 +2188,13 @@ struct file_id smb_vfs_call_file_id_create(struct vfs_handle_struct *handle,
 {
 	VFS_FIND(file_id_create);
 	return handle->fns->file_id_create_fn(handle, sbuf);
+}
+
+uint64_t smb_vfs_call_fs_file_id(struct vfs_handle_struct *handle,
+				 const SMB_STRUCT_STAT *sbuf)
+{
+	VFS_FIND(fs_file_id);
+	return handle->fns->fs_file_id_fn(handle, sbuf);
 }
 
 NTSTATUS smb_vfs_call_streaminfo(struct vfs_handle_struct *handle,
@@ -3258,6 +2342,7 @@ NTSTATUS smb_vfs_call_offload_write_recv(struct vfs_handle_struct *handle,
 }
 
 struct smb_vfs_call_get_dos_attributes_state {
+	files_struct *dir_fsp;
 	NTSTATUS (*recv_fn)(struct tevent_req *req,
 			    struct vfs_aio_state *aio_state,
 			    uint32_t *dosmode);
@@ -3269,7 +2354,7 @@ static void smb_vfs_call_get_dos_attributes_done(struct tevent_req *subreq);
 
 struct tevent_req *smb_vfs_call_get_dos_attributes_send(
 			TALLOC_CTX *mem_ctx,
-			const struct smb_vfs_ev_glue *evg,
+			struct tevent_context *ev,
 			struct vfs_handle_struct *handle,
 			files_struct *dir_fsp,
 			struct smb_filename *smb_fname)
@@ -3277,7 +2362,6 @@ struct tevent_req *smb_vfs_call_get_dos_attributes_send(
 	struct tevent_req *req = NULL;
 	struct smb_vfs_call_get_dos_attributes_state *state = NULL;
 	struct tevent_req *subreq = NULL;
-	bool ok;
 
 	req = tevent_req_create(mem_ctx, &state,
 				struct smb_vfs_call_get_dos_attributes_state);
@@ -3286,24 +2370,22 @@ struct tevent_req *smb_vfs_call_get_dos_attributes_send(
 	}
 
 	VFS_FIND(get_dos_attributes_send);
-	state->recv_fn = handle->fns->get_dos_attributes_recv_fn;
 
-	ok = smb_vfs_ev_glue_push_use(evg, req);
-	if (!ok) {
-		tevent_req_error(req, EIO);
-		return tevent_req_post(req, evg->return_ev);
-	}
+	*state = (struct smb_vfs_call_get_dos_attributes_state) {
+		.dir_fsp = dir_fsp,
+		.recv_fn = handle->fns->get_dos_attributes_recv_fn,
+	};
 
 	subreq = handle->fns->get_dos_attributes_send_fn(mem_ctx,
-							 evg->next_glue,
+							 ev,
 							 handle,
 							 dir_fsp,
 							 smb_fname);
-	smb_vfs_ev_glue_pop_use(evg);
-
 	if (tevent_req_nomem(subreq, req)) {
-		return tevent_req_post(req, evg->return_ev);
+		return tevent_req_post(req, ev);
 	}
+	tevent_req_defer_callback(req, ev);
+
 	tevent_req_set_callback(subreq,
 				smb_vfs_call_get_dos_attributes_done,
 				req);
@@ -3320,6 +2402,13 @@ static void smb_vfs_call_get_dos_attributes_done(struct tevent_req *subreq)
 		tevent_req_data(req,
 		struct smb_vfs_call_get_dos_attributes_state);
 	NTSTATUS status;
+	bool ok;
+
+	/*
+	 * Make sure we run as the user again
+	 */
+	ok = change_to_user_and_service_by_fsp(state->dir_fsp);
+	SMB_ASSERT(ok);
 
 	status = state->recv_fn(subreq,
 				&state->aio_state,
@@ -3530,6 +2619,7 @@ ssize_t smb_vfs_call_getxattr(struct vfs_handle_struct *handle,
 
 
 struct smb_vfs_call_getxattrat_state {
+	files_struct *dir_fsp;
 	ssize_t (*recv_fn)(struct tevent_req *req,
 			   struct vfs_aio_state *aio_state,
 			   TALLOC_CTX *mem_ctx,
@@ -3543,7 +2633,7 @@ static void smb_vfs_call_getxattrat_done(struct tevent_req *subreq);
 
 struct tevent_req *smb_vfs_call_getxattrat_send(
 			TALLOC_CTX *mem_ctx,
-			const struct smb_vfs_ev_glue *evg,
+			struct tevent_context *ev,
 			struct vfs_handle_struct *handle,
 			files_struct *dir_fsp,
 			const struct smb_filename *smb_fname,
@@ -3553,7 +2643,6 @@ struct tevent_req *smb_vfs_call_getxattrat_send(
 	struct tevent_req *req = NULL;
 	struct smb_vfs_call_getxattrat_state *state = NULL;
 	struct tevent_req *subreq = NULL;
-	bool ok;
 
 	req = tevent_req_create(mem_ctx, &state,
 				struct smb_vfs_call_getxattrat_state);
@@ -3562,26 +2651,24 @@ struct tevent_req *smb_vfs_call_getxattrat_send(
 	}
 
 	VFS_FIND(getxattrat_send);
-	state->recv_fn = handle->fns->getxattrat_recv_fn;
 
-	ok = smb_vfs_ev_glue_push_use(evg, req);
-	if (!ok) {
-		tevent_req_error(req, EIO);
-		return tevent_req_post(req, evg->return_ev);
-	}
+	*state = (struct smb_vfs_call_getxattrat_state) {
+		.dir_fsp = dir_fsp,
+		.recv_fn = handle->fns->getxattrat_recv_fn,
+	};
 
 	subreq = handle->fns->getxattrat_send_fn(mem_ctx,
-						 evg->next_glue,
+						 ev,
 						 handle,
 						 dir_fsp,
 						 smb_fname,
 						 xattr_name,
 						 alloc_hint);
-	smb_vfs_ev_glue_pop_use(evg);
-
 	if (tevent_req_nomem(subreq, req)) {
-		return tevent_req_post(req, evg->return_ev);
+		return tevent_req_post(req, ev);
 	}
+	tevent_req_defer_callback(req, ev);
+
 	tevent_req_set_callback(subreq, smb_vfs_call_getxattrat_done, req);
 	return req;
 }
@@ -3592,6 +2679,13 @@ static void smb_vfs_call_getxattrat_done(struct tevent_req *subreq)
 		subreq, struct tevent_req);
 	struct smb_vfs_call_getxattrat_state *state = tevent_req_data(
 		req, struct smb_vfs_call_getxattrat_state);
+	bool ok;
+
+	/*
+	 * Make sure we run as the user again
+	 */
+	ok = change_to_user_and_service_by_fsp(state->dir_fsp);
+	SMB_ASSERT(ok);
 
 	state->retval = state->recv_fn(subreq,
 				       &state->aio_state,

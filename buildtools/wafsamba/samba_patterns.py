@@ -101,6 +101,8 @@ def write_build_options_header(fp):
     fp.write("       output(screen,\"   LOGFILEBASE: %s\\n\", get_dyn_LOGFILEBASE());\n")
     fp.write("       output(screen,\"   LMHOSTSFILE: %s\\n\",get_dyn_LMHOSTSFILE());\n")
     fp.write("       output(screen,\"   LIBDIR: %s\\n\",get_dyn_LIBDIR());\n")
+    fp.write("       output(screen,\"   DATADIR: %s\\n\",get_dyn_DATADIR());\n")
+    fp.write("       output(screen,\"   SAMBA_DATADIR: %s\\n\",get_dyn_SAMBA_DATADIR());\n")
     fp.write("       output(screen,\"   MODULESDIR: %s\\n\",get_dyn_MODULESDIR());\n")
     fp.write("       output(screen,\"   SHLIBEXT: %s\\n\",get_dyn_SHLIBEXT());\n")
     fp.write("       output(screen,\"   LOCKDIR: %s\\n\",get_dyn_LOCKDIR());\n")
@@ -155,7 +157,7 @@ def write_build_options(task):
     keys_header_other = []
     keys_misc = []
     if sys.hexversion>0x300000f:
-        trans_table = bytes.maketrans('.-()', '____')
+        trans_table = bytes.maketrans(b'.-()', b'____')
     else:
         import string
         trans_table = string.maketrans('.-()', '____')

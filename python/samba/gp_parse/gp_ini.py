@@ -21,9 +21,9 @@ import codecs
 import collections
 import re
 
-from ConfigParser import ConfigParser
 from xml.etree.ElementTree import Element, SubElement
-from StringIO import StringIO
+from samba.compat import ConfigParser
+from samba.compat import StringIO
 
 from samba.gp_parse import GPParser, ENTITY_USER_ID
 
@@ -70,7 +70,7 @@ class GPIniParser(GPParser):
         return section_name
 
     def write_xml(self, filename):
-        with file(filename, 'w') as f:
+        with open(filename, 'wb') as f:
             root = Element('IniFile')
 
             for sec_ini in self.ini_conf.sections():
@@ -104,6 +104,17 @@ class GPIniParser(GPParser):
 
 class GPTIniParser(GPIniParser):
     encoding = 'utf-8'
+
+    def parse(self, contents):
+        try:
+            super(GPTIniParser, self).parse(contents)
+        except UnicodeDecodeError:
+            # Required dict_type in Python 2.7
+            self.ini_conf = ConfigParser(dict_type=collections.OrderedDict)
+            self.ini_conf.optionxform = str
+
+            # Fallback to Latin-1 which RSAT appears to use
+            self.ini_conf.readfp(StringIO(contents.decode('iso-8859-1')))
 
 
 class GPScriptsIniParser(GPIniParser):
@@ -199,7 +210,7 @@ class GPFDeploy1IniParser(GPIniParser):
     def custom_entities(self, root, global_entities):
         entities = []
         fdeploy_sids = root.findall('.//Section[@fdeploy_SID]')
-        fdeploy_sids.sort()
+        fdeploy_sids.sort(key = lambda x: x.tag)
 
         for sid in fdeploy_sids:
             old_attrib = sid.attrib['fdeploy_SID']

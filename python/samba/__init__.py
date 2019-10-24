@@ -280,7 +280,7 @@ def read_and_sub_file(file_name, subst_vars):
     :param file_name: File to be read (typically from setup directory)
      param subst_vars: Optional variables to subsitute in the file.
     """
-    data = open(file_name, 'r').read()
+    data = open(file_name, 'r', encoding="utf-8").read()
     if subst_vars is not None:
         data = substitute_var(data, subst_vars)
         check_all_substituted(data)
@@ -376,7 +376,7 @@ def string_to_byte_array(string):
     blob = [0] * len(string)
 
     for i in range(len(string)):
-        blob[i] = ord(string[i])
+        blob[i] = string[i] if isinstance(string[i], int) else ord(string[i])
 
     return blob
 

@@ -20,7 +20,7 @@
 
 from samba.ntacls import setntacl, getntacl, checkset_backend
 from samba.dcerpc import security, smb_acl, idmap
-from samba.tests import TestCaseInTempDir
+from samba.tests.smbd_base import SmbdBaseTests
 from samba import provision
 import os
 from samba.samba3 import smbd, passdb
@@ -32,7 +32,7 @@ DOM_SID = "S-1-5-21-2212615479-2695158682-2101375467"
 ACL = "O:S-1-5-21-2212615479-2695158682-2101375467-512G:S-1-5-21-2212615479-2695158682-2101375467-513D:(A;OICI;0x001f01ff;;;S-1-5-21-2212615479-2695158682-2101375467-512)"
 
 
-class PosixAclMappingTests(TestCaseInTempDir):
+class PosixAclMappingTests(SmbdBaseTests):
 
     def setUp(self):
         super(PosixAclMappingTests, self).setUp()
@@ -54,15 +54,15 @@ class PosixAclMappingTests(TestCaseInTempDir):
         Get session_info for setntacl.
 
         This test case always return None, to run tests without session_info
-        like before. To be overrided in derived class.
+        like before. To be overridden in derived class.
         """
         return None
 
     def print_posix_acl(self, posix_acl):
         aclstr = ""
         for entry in posix_acl.acl:
-            aclstr += "a_type: %d\n" % entry.a_type
-            aclstr += "a_perm: %o\n" % entry.a_perm
+            aclstr += "a_type: %d\n" % entry.a_type +\
+                      "a_perm: %o\n" % entry.a_perm
             if entry.a_type == smb_acl.SMB_ACL_USER:
                 aclstr += "uid: %d\n" % entry.info.uid
             if entry.a_type == smb_acl.SMB_ACL_GROUP:
@@ -823,7 +823,7 @@ class SessionedPosixAclMappingTests(PosixAclMappingTests):
             # fake it with admin session as domsid is not in local db
             return auth.admin_session(self.lp, str(domsid))
 
-        dn = '<SID={}-{}>'.format(domsid, security.DOMAIN_RID_ADMINISTRATOR)
+        dn = '<SID={0}-{1}>'.format(domsid, security.DOMAIN_RID_ADMINISTRATOR)
         flags = (auth.AUTH_SESSION_INFO_DEFAULT_GROUPS |
                  auth.AUTH_SESSION_INFO_AUTHENTICATED |
                  auth.AUTH_SESSION_INFO_SIMPLE_PRIVILEGES)
@@ -844,7 +844,7 @@ class UnixSessionedPosixAclMappingTests(PosixAclMappingTests):
             # fake it with admin session as domsid is not in local db
             return auth.admin_session(self.lp, str(domsid))
 
-        dn = '<SID={}-{}>'.format(domsid, security.DOMAIN_RID_ADMINISTRATOR)
+        dn = '<SID={0}-{1}>'.format(domsid, security.DOMAIN_RID_ADMINISTRATOR)
         flags = (auth.AUTH_SESSION_INFO_DEFAULT_GROUPS |
                  auth.AUTH_SESSION_INFO_AUTHENTICATED |
                  auth.AUTH_SESSION_INFO_SIMPLE_PRIVILEGES)

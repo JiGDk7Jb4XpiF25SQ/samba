@@ -7,7 +7,7 @@ import fnmatch
 
 from waflib import Options, Utils, Logs, Task, Build, Errors
 from waflib.TaskGen import feature, before, after
-import samba_utils
+from wafsamba import samba_utils
 
 # these type maps cope with platform specific names for common types
 # please add new type mappings into the list below
@@ -16,7 +16,7 @@ abi_type_maps = {
     'struct __va_list_tag *' : 'va_list'
     }
 
-version_key = lambda x: map(int, x.split("."))
+version_key = lambda x: list(map(int, x.split(".")))
 
 def normalise_signature(sig):
     '''normalise a signature from gdb'''
@@ -72,9 +72,7 @@ def parse_sigs(sigs, abi_match):
 
 def save_sigs(sig_file, parsed_sigs):
     '''save ABI signatures to a file'''
-    sigs = ''
-    for s in sorted(parsed_sigs.keys()):
-        sigs += '%s: %s\n' % (s, parsed_sigs[s])
+    sigs = "".join('%s: %s\n' % (s, parsed_sigs[s]) for s in sorted(parsed_sigs.keys()))
     return samba_utils.save_file(sig_file, sigs, create_dir=True)
 
 
@@ -85,7 +83,7 @@ def abi_check_task(self):
     libpath = self.inputs[0].abspath(self.env)
     libname = os.path.basename(libpath)
 
-    sigs = Utils.cmd_output([abi_gen, libpath])
+    sigs = samba_utils.get_string(Utils.cmd_output([abi_gen, libpath]))
     parsed_sigs = parse_sigs(sigs, self.ABI_MATCH)
 
     sig_file = self.ABI_FILE
@@ -190,8 +188,8 @@ def abi_write_vscript(f, libname, current_version, versions, symmap, abi_match):
         f.write("}%s;\n\n" % last_key)
         last_key = " %s" % symver
     f.write("%s {\n" % current_version)
-    local_abi = filter(lambda x: x[0] == '!', abi_match)
-    global_abi = filter(lambda x: x[0] != '!', abi_match)
+    local_abi = list(filter(lambda x: x[0] == '!', abi_match))
+    global_abi = list(filter(lambda x: x[0] != '!', abi_match))
     f.write("\tglobal:\n")
     if len(global_abi) > 0:
         for x in global_abi:

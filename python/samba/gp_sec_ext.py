@@ -17,6 +17,13 @@
 
 import os.path
 from samba.gpclass import gp_ext_setter, gp_inf_ext
+from samba.auth import system_session
+from samba.compat import get_string
+try:
+    from ldb import LdbError
+    from samba.samdb import SamDB
+except ImportError:
+    pass
 
 
 class inf_to_kdc_tdb(gp_ext_setter):
@@ -31,8 +38,8 @@ class inf_to_kdc_tdb(gp_ext_setter):
         self.logger.info('%s was changed from %s to %s' % (self.attribute,
                                                            old_val, val))
         if val is not None:
-            self.gp_db.gpostore.store(self.attribute, val)
-            self.gp_db.store(str(self), self.attribute, old_val)
+            self.gp_db.gpostore.store(self.attribute, get_string(val))
+            self.gp_db.store(str(self), self.attribute, get_string(old_val) if old_val else None)
         else:
             self.gp_db.gpostore.delete(self.attribute)
             self.gp_db.delete(str(self), self.attribute)
@@ -54,6 +61,16 @@ class inf_to_ldb(gp_ext_setter):
     to a GUID), hashmaps it to the Samba parameter, which then uses an ldb
     object to update the parameter to Samba4. Not registry oriented whatsoever.
     '''
+
+    def __init__(self, logger, gp_db, lp, creds, key, value):
+        super(inf_to_ldb, self).__init__(logger, gp_db, lp, creds, key, value)
+        try:
+            self.ldb = SamDB(self.lp.samdb_url(),
+                             session_info=system_session(),
+                             credentials=self.creds,
+                             lp=self.lp)
+        except (NameError, LdbError):
+            raise Exception('Failed to load SamDB for assigning Group Policy')
 
     def ch_minPwdAge(self, val):
         old_val = self.ldb.get_minPwdAge()
@@ -119,16 +136,6 @@ class gp_sec_ext(gp_inf_ext):
     def __str__(self):
         return "Security GPO extension"
 
-    def list(self, rootpath):
-        return os.path.join(rootpath,
-                            "MACHINE/Microsoft/Windows NT/SecEdit/GptTmpl.inf")
-
-    def listmachpol(self, rootpath):
-        return os.path.join(rootpath, "Machine/Registry.pol")
-
-    def listuserpol(self, rootpath):
-        return os.path.join(rootpath, "User/Registry.pol")
-
     def apply_map(self):
         return {"System Access": {"MinimumPasswordAge": ("minPwdAge",
                                                          inf_to_ldb),
@@ -153,4 +160,47 @@ class gp_sec_ext(gp_inf_ext):
                                     ),
                                     }
                 }
+
+    def process_group_policy(self, deleted_gpo_list, changed_gpo_list):
+        if self.lp.get('server role') != 'active directory domain controller':
+            return
+        inf_file = 'MACHINE/Microsoft/Windows NT/SecEdit/GptTmpl.inf'
+        apply_map = self.apply_map()
+        for gpo in deleted_gpo_list:
+            self.gp_db.set_guid(gpo[0])
+            for section in gpo[1].keys():
+                current_section = apply_map.get(section)
+                if not current_section:
+                    continue
+                for key, value in gpo[1][section].items():
+                    setter = None
+                    for _, tup in current_section.items():
+                        if tup[0] == key:
+                            setter = tup[1]
+                    if setter:
+                        value = value.encode('ascii', 'ignore') \
+                             if value else value
+                        setter(self.logger, self.gp_db, self.lp, self.creds,
+                               key, value).delete()
+                        self.gp_db.delete(section, key)
+                        self.gp_db.commit()
+
+        for gpo in changed_gpo_list:
+            if gpo.file_sys_path:
+                self.gp_db.set_guid(gpo.name)
+                path = os.path.join(gpo.file_sys_path, inf_file)
+                inf_conf = self.parse(path)
+                if not inf_conf:
+                    continue
+                for section in inf_conf.sections():
+                    current_section = apply_map.get(section)
+                    if not current_section:
+                        continue
+                    for key, value in inf_conf.items(section):
+                        if current_section.get(key):
+                            (att, setter) = current_section.get(key)
+                            value = value.encode('ascii', 'ignore')
+                            setter(self.logger, self.gp_db, self.lp,
+                                   self.creds, att, value).update_samba()
+                            self.gp_db.commit()
 

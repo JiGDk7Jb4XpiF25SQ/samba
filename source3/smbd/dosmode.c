@@ -19,6 +19,7 @@
 */
 
 #include "includes.h"
+#include "globals.h"
 #include "system/filesys.h"
 #include "librpc/gen_ndr/ndr_xattr.h"
 #include "librpc/gen_ndr/ioctl.h"
@@ -324,6 +325,50 @@ NTSTATUS parse_dos_attribute_blob(struct smb_filename *smb_fname,
 						      create_time)));
 		}
 		break;
+	case 4:
+	{
+		struct xattr_DosInfo4 *info = &dosattrib.info.info4;
+
+		dosattr = info->attrib;
+
+		if ((info->valid_flags & XATTR_DOSINFO_CREATE_TIME) &&
+		    !null_nttime(info->create_time))
+		{
+			struct timespec creat_time;
+
+			creat_time = nt_time_to_unix_timespec(info->create_time);
+			update_stat_ex_create_time(&smb_fname->st, creat_time);
+
+			DBG_DEBUG("file [%s] creation time [%s]\n",
+				smb_fname_str_dbg(smb_fname),
+				nt_time_string(talloc_tos(), info->create_time));
+		}
+
+		if (info->valid_flags & XATTR_DOSINFO_ITIME) {
+			struct timespec itime;
+			uint64_t file_id;
+
+			itime = nt_time_to_unix_timespec(info->itime);
+			if (smb_fname->st.st_ex_iflags &
+			    ST_EX_IFLAG_CALCULATED_ITIME)
+			{
+				update_stat_ex_itime(&smb_fname->st, itime);
+			}
+
+			file_id = make_file_id_from_itime(&smb_fname->st);
+			if (smb_fname->st.st_ex_iflags &
+			    ST_EX_IFLAG_CALCULATED_FILE_ID)
+			{
+				update_stat_ex_file_id(&smb_fname->st, file_id);
+			}
+
+			DBG_DEBUG("file [%s] itime [%s] fileid [%"PRIx64"]\n",
+				smb_fname_str_dbg(smb_fname),
+				nt_time_string(talloc_tos(), info->itime),
+				file_id);
+		}
+		break;
+	}
 	default:
 		DBG_WARNING("Badly formed DOSATTRIB on file %s - %s\n",
 			    smb_fname_str_dbg(smb_fname), blob.data);
@@ -443,12 +488,18 @@ NTSTATUS set_ea_dos_attribute(connection_struct *conn,
 	ZERO_STRUCT(dosattrib);
 	ZERO_STRUCT(blob);
 
-	dosattrib.version = 3;
-	dosattrib.info.info3.valid_flags = XATTR_DOSINFO_ATTRIB|
+	dosattrib.version = 4;
+	dosattrib.info.info4.valid_flags = XATTR_DOSINFO_ATTRIB |
 					XATTR_DOSINFO_CREATE_TIME;
-	dosattrib.info.info3.attrib = dosmode;
-	dosattrib.info.info3.create_time = unix_timespec_to_nt_time(
+	dosattrib.info.info4.attrib = dosmode;
+	dosattrib.info.info4.create_time = unix_timespec_to_nt_time(
 				smb_fname->st.st_ex_btime);
+
+	if (!(smb_fname->st.st_ex_iflags & ST_EX_IFLAG_CALCULATED_ITIME)) {
+		dosattrib.info.info4.valid_flags |= XATTR_DOSINFO_ITIME;
+		dosattrib.info.info4.itime = unix_timespec_to_nt_time(
+			smb_fname->st.st_ex_itime);
+	}
 
 	DEBUG(10,("set_ea_dos_attributes: set attribute 0x%x, btime = %s on file %s\n",
 		(unsigned int)dosmode,
@@ -685,14 +736,9 @@ static uint32_t dos_mode_post(uint32_t dosmode,
 	 * BUG: https://bugzilla.samba.org/show_bug.cgi?id=13380
 	 */
 
-	if (is_ntfs_stream_smb_fname(smb_fname)) {
+	if (is_named_stream(smb_fname)) {
 		/* is_ntfs_stream_smb_fname() returns false for a POSIX path. */
-		if (!is_ntfs_default_stream_smb_fname(smb_fname)) {
-			/*
-			 * Non-default stream name, not a posix path.
-			 */
-			dosmode &= ~(FILE_ATTRIBUTE_DIRECTORY);
-		}
+		dosmode &= ~(FILE_ATTRIBUTE_DIRECTORY);
 	}
 
 	if (conn->fs_capabilities & FILE_FILE_COMPRESSION) {
@@ -760,11 +806,10 @@ struct dos_mode_at_state {
 static void dos_mode_at_vfs_get_dosmode_done(struct tevent_req *subreq);
 
 struct tevent_req *dos_mode_at_send(TALLOC_CTX *mem_ctx,
-				    struct smb_vfs_ev_glue *evg,
+				    struct tevent_context *ev,
 				    files_struct *dir_fsp,
 				    struct smb_filename *smb_fname)
 {
-	struct tevent_context *ev = smb_vfs_ev_glue_ev_ctx(evg);
 	struct tevent_req *req = NULL;
 	struct dos_mode_at_state *state = NULL;
 	struct tevent_req *subreq = NULL;
@@ -788,7 +833,7 @@ struct tevent_req *dos_mode_at_send(TALLOC_CTX *mem_ctx,
 	}
 
 	subreq = SMB_VFS_GET_DOS_ATTRIBUTES_SEND(state,
-						 evg,
+						 ev,
 						 dir_fsp,
 						 smb_fname);
 	if (tevent_req_nomem(subreq, req)) {
@@ -811,6 +856,13 @@ static void dos_mode_at_vfs_get_dosmode_done(struct tevent_req *subreq)
 	struct smb_filename *smb_path = NULL;
 	struct vfs_aio_state aio_state;
 	NTSTATUS status;
+	bool ok;
+
+	/*
+	 * Make sure we run as the user again
+	 */
+	ok = change_to_user_and_service_by_fsp(state->dir_fsp);
+	SMB_ASSERT(ok);
 
 	status = SMB_VFS_GET_DOS_ATTRIBUTES_RECV(subreq,
 						 &aio_state,
@@ -860,8 +912,12 @@ static void dos_mode_at_vfs_get_dosmode_done(struct tevent_req *subreq)
 		return;
 	}
 
-	smb_path = synthetic_smb_fname(state, path, NULL, NULL, 0);
-	if (tevent_req_nomem(path, req)) {
+	smb_path = synthetic_smb_fname(state,
+				       path,
+				       NULL,
+				       &state->smb_fname->st,
+				       0);
+	if (tevent_req_nomem(smb_path, req)) {
 		return;
 	}
 

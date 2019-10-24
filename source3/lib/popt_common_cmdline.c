@@ -53,7 +53,7 @@ static bool popt_common_credentials_delay_post;
 
 void popt_common_credentials_set_ignore_missing_conf(void)
 {
-	popt_common_credentials_delay_post = true;
+	popt_common_credentials_ignore_missing_conf = true;
 }
 
 void popt_common_credentials_set_delay_post(void)
@@ -102,14 +102,7 @@ static void popt_common_credentials_callback(poptContext con,
 	}
 
 	if (reason == POPT_CALLBACK_REASON_POST) {
-		struct messaging_context *msg_ctx = NULL;
 		bool ok;
-
-		msg_ctx = cmdline_messaging_context(get_dyn_CONFIGFILE());
-		if (msg_ctx == NULL) {
-			fprintf(stderr, "Unable to initialize "
-				"messaging context\n");
-		}
 
 		ok = lp_load_client(get_dyn_CONFIGFILE());
 		if (!ok) {
@@ -198,6 +191,10 @@ void popt_burn_cmdline_password(int argc, char *argv[])
 
 	for (i = 0; i < argc; i++) {
 		p = argv[i];
+		if (p == NULL) {
+			return;
+		}
+
 		if (strncmp(p, "-U", 2) == 0) {
 			ulen = 2;
 			found = true;
@@ -207,17 +204,13 @@ void popt_burn_cmdline_password(int argc, char *argv[])
 		}
 
 		if (found) {
-			if (p == NULL) {
-				return;
-			}
-
 			if (strlen(p) == ulen) {
 				continue;
 			}
 
 			p = strchr_m(p, '%');
 			if (p != NULL) {
-				memset(p, '\0', strlen(p));
+				memset_s(p, strlen(p), '\0', strlen(p));
 			}
 			found = false;
 		}
@@ -225,25 +218,75 @@ void popt_burn_cmdline_password(int argc, char *argv[])
 }
 
 struct poptOption popt_common_credentials[] = {
-	{ NULL, 0, POPT_ARG_CALLBACK|POPT_CBFLAG_PRE|POPT_CBFLAG_POST,
-	  (void *)popt_common_credentials_callback, 0, NULL },
-	{ "user", 'U', POPT_ARG_STRING, NULL, 'U',
-	  "Set the network username", "USERNAME" },
-	{ "no-pass", 'N', POPT_ARG_NONE, NULL, 'N',
-	  "Don't ask for a password" },
-	{ "kerberos", 'k', POPT_ARG_NONE, NULL, 'k',
-	  "Use kerberos (active directory) authentication" },
-	{ "authentication-file", 'A', POPT_ARG_STRING, NULL, 'A',
-	  "Get the credentials from a file", "FILE" },
-	{ "signing", 'S', POPT_ARG_STRING, NULL, 'S',
-	  "Set the client signing state", "on|off|required" },
-	{"machine-pass", 'P', POPT_ARG_NONE, NULL, 'P',
-	 "Use stored machine account password" },
-	{"encrypt", 'e', POPT_ARG_NONE, NULL, 'e',
-	 "Encrypt SMB transport" },
-	{"use-ccache", 'C', POPT_ARG_NONE, NULL, 'C',
-	 "Use the winbind ccache for authentication" },
-	{"pw-nt-hash", '\0', POPT_ARG_NONE, NULL, 'H',
-	 "The supplied password is the NT hash" },
+	{
+		.argInfo    = POPT_ARG_CALLBACK|POPT_CBFLAG_PRE|POPT_CBFLAG_POST,
+		.arg        = (void *)popt_common_credentials_callback,
+	},
+	{
+		.longName   = "user",
+		.shortName  = 'U',
+		.argInfo    = POPT_ARG_STRING,
+		.val        = 'U',
+		.descrip    = "Set the network username",
+		.argDescrip = "USERNAME",
+	},
+	{
+		.longName   = "no-pass",
+		.shortName  = 'N',
+		.argInfo    = POPT_ARG_NONE,
+		.val        = 'N',
+		.descrip    = "Don't ask for a password",
+	},
+	{
+		.longName   = "kerberos",
+		.shortName  = 'k',
+		.argInfo    = POPT_ARG_NONE,
+		.val        = 'k',
+		.descrip    = "Use kerberos (active directory) authentication",
+	},
+	{
+		.longName   = "authentication-file",
+		.shortName  = 'A',
+		.argInfo    = POPT_ARG_STRING,
+		.val        = 'A',
+		.descrip    = "Get the credentials from a file",
+		.argDescrip = "FILE",
+	},
+	{
+		.longName   = "signing",
+		.shortName  = 'S',
+		.argInfo    = POPT_ARG_STRING,
+		.val        = 'S',
+		.descrip    = "Set the client signing state",
+		.argDescrip = "on|off|required",
+	},
+	{
+		.longName   = "machine-pass",
+		.shortName  = 'P',
+		.argInfo    = POPT_ARG_NONE,
+		.val        = 'P',
+		.descrip    = "Use stored machine account password",
+	},
+	{
+		.longName   = "encrypt",
+		.shortName  = 'e',
+		.argInfo    = POPT_ARG_NONE,
+		.val        = 'e',
+		.descrip    = "Encrypt SMB transport",
+	},
+	{
+		.longName   = "use-ccache",
+		.shortName  = 'C',
+		.argInfo    = POPT_ARG_NONE,
+		.val        = 'C',
+		.descrip    = "Use the winbind ccache for authentication",
+	},
+	{
+		.longName   = "pw-nt-hash",
+		.shortName  = '\0',
+		.argInfo    = POPT_ARG_NONE,
+		.val        = 'H',
+		.descrip    = "The supplied password is the NT hash",
+	},
 	POPT_TABLEEND
 };

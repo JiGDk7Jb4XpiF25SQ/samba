@@ -23,13 +23,12 @@ def DEFINE(conf, d, v, add_to_cflags=False, quote=False):
 
 def hlist_to_string(conf, headers=None):
     '''convert a headers list to a set of #include lines'''
-    hdrs=''
     hlist = conf.env.hlist
     if headers:
         hlist = hlist[:]
         hlist.extend(TO_LIST(headers))
-    for h in hlist:
-        hdrs += '#include <%s>\n' % h
+    hdrs = "\n".join('#include <%s>' % h for h in hlist)
+
     return hdrs
 
 
@@ -97,7 +96,7 @@ def CHECK_HEADER(conf, h, add_headers=False, lib=None):
     hdrs = hlist_to_string(conf, headers=h)
     if lib is None:
         lib = ""
-    ret = conf.check(fragment='%s\nint main(void) { return 0; }' % hdrs,
+    ret = conf.check(fragment='%s\nint main(void) { return 0; }\n' % hdrs,
                      type='nolink',
                      execute=0,
                      cflags=ccflags,
@@ -251,7 +250,10 @@ def CHECK_FUNC(conf, f, link=True, lib=None, headers=None):
 
     ret = False
 
-    conf.COMPOUND_START('Checking for %s' % f)
+    in_lib_str = ""
+    if lib:
+        in_lib_str = " in %s" % lib
+    conf.COMPOUND_START('Checking for %s%s' % (f, in_lib_str))
 
     if link is None or link:
         ret = CHECK_CODE(conf,
@@ -323,7 +325,7 @@ def CHECK_SIZEOF(conf, vars, headers=None, define=None, critical=True):
         ret = False
         if v_define is None:
             v_define = 'SIZEOF_%s' % v.upper().replace(' ', '_')
-        for size in list((1, 2, 4, 8, 16, 32)):
+        for size in list((1, 2, 4, 8, 16, 32, 64)):
             if CHECK_CODE(conf,
                       'static int test_array[1 - 2 * !(((long int)(sizeof(%s))) <= %d)];' % (v, size),
                       define=v_define,
@@ -397,13 +399,8 @@ def CHECK_CODE(conf, code, define,
     # Be strict when relying on a compiler check
     # Some compilers (e.g. xlc) ignore non-supported features as warnings
     if strict:
-        extra_cflags = None
-        if conf.env["CC_NAME"] == "gcc":
-            extra_cflags = "-Werror"
-        elif conf.env["CC_NAME"] == "xlc":
-            extra_cflags = "-qhalt=w"
-        if extra_cflags:
-            cflags.append(extra_cflags)
+        if 'WERROR_CFLAGS' in conf.env:
+            cflags.extend(conf.env['WERROR_CFLAGS'])
 
     if local_include:
         cflags.append('-I%s' % conf.path.abspath())
@@ -425,9 +422,9 @@ def CHECK_CODE(conf, code, define,
     cflags.extend(ccflags)
 
     if on_target:
-        exec_args = conf.SAMBA_CROSS_ARGS(msg=msg)
+        test_args = conf.SAMBA_CROSS_ARGS(msg=msg)
     else:
-        exec_args = []
+        test_args = []
 
     conf.COMPOUND_START(msg)
 
@@ -442,14 +439,12 @@ def CHECK_CODE(conf, code, define,
                      type=type,
                      msg=msg,
                      quote=quote,
-                     exec_args=exec_args,
+                     test_args=test_args,
                      define_ret=define_ret)
     except Exception:
-        # Even when exception happened, conf.check might have set the define
-        # already to int(ret). We want to undefine it in the case of 'always'.
-        # Otherwise, we'd get defines set to 0 when they should be undefined
-        # and it foils #ifdef check
         if always:
+            conf.DEFINE(define, 0)
+        else:
             conf.undefine(define)
         conf.COMPOUND_END(False)
         if mandatory:
@@ -705,7 +700,7 @@ def SAMBA_CONFIG_H(conf, path=None):
                                     mandatory=False,
                                     msg='Checking if compiler accepts %s' % (stack_protect_flag))
         if flag_supported:
-            conf.ADD_CFLAGS('-Wp,-D_FORTIFY_SOURCE=2 %s' % (stack_protect_flag))
+            conf.ADD_CFLAGS('%s' % (stack_protect_flag))
             break
 
     flag_supported = conf.check(fragment='''
@@ -735,6 +730,15 @@ def SAMBA_CONFIG_H(conf, path=None):
         conf.ADD_CFLAGS('-Wall', testflags=True)
         conf.ADD_CFLAGS('-Wshadow', testflags=True)
         conf.ADD_CFLAGS('-Wmissing-prototypes', testflags=True)
+        if CHECK_CODE(conf,
+                      'struct a { int b; }; struct c { struct a d; } e = { };',
+                      'CHECK_C99_INIT',
+                      link=False,
+                      cflags='-Wmissing-field-initializers -Werror=missing-field-initializers',
+                      msg="Checking C99 init of nested structs."):
+            conf.ADD_CFLAGS('-Wmissing-field-initializers', testflags=True)
+        conf.ADD_CFLAGS('-Wformat-overflow=2', testflags=True)
+        conf.ADD_CFLAGS('-Wformat-zero-length', testflags=True)
         conf.ADD_CFLAGS('-Wcast-align -Wcast-qual', testflags=True)
         conf.ADD_CFLAGS('-fno-common', testflags=True)
 
@@ -778,9 +782,9 @@ int main(void) {
                 conf.env['EXTRA_CFLAGS'] = []
             conf.env['EXTRA_CFLAGS'].extend(TO_LIST("-Werror=format"))
 
-    if Options.options.picky_developer:
-        conf.ADD_NAMED_CFLAGS('PICKY_CFLAGS', '-Werror -Wno-error=deprecated-declarations', testflags=True)
-        conf.ADD_NAMED_CFLAGS('PICKY_CFLAGS', '-Wno-error=tautological-compare', testflags=True)
+        if not Options.options.disable_warnings_as_errors:
+            conf.ADD_NAMED_CFLAGS('PICKY_CFLAGS', '-Werror -Wno-error=deprecated-declarations', testflags=True)
+            conf.ADD_NAMED_CFLAGS('PICKY_CFLAGS', '-Wno-error=tautological-compare', testflags=True)
 
     if Options.options.fatal_errors:
         conf.ADD_CFLAGS('-Wfatal-errors', testflags=True)
@@ -788,10 +792,20 @@ int main(void) {
     if Options.options.pedantic:
         conf.ADD_CFLAGS('-W', testflags=True)
 
+    if (Options.options.address_sanitizer or
+        Options.options.undefined_sanitizer):
+        conf.ADD_CFLAGS('-g -O1', testflags=True)
     if Options.options.address_sanitizer:
-        conf.ADD_CFLAGS('-fno-omit-frame-pointer -O1 -fsanitize=address', testflags=True)
+        conf.ADD_CFLAGS('-fno-omit-frame-pointer', testflags=True)
+        conf.ADD_CFLAGS('-fsanitize=address', testflags=True)
         conf.ADD_LDFLAGS('-fsanitize=address', testflags=True)
         conf.env['ADDRESS_SANITIZER'] = True
+    if Options.options.undefined_sanitizer:
+        conf.ADD_CFLAGS('-fsanitize=undefined', testflags=True)
+        conf.ADD_CFLAGS('-fsanitize=null', testflags=True)
+        conf.ADD_CFLAGS('-fsanitize=alignment', testflags=True)
+        conf.ADD_LDFLAGS('-fsanitize=undefined', testflags=True)
+        conf.env['UNDEFINED_SANITIZER'] = True
 
 
     # Let people pass an additional ADDITIONAL_{CFLAGS,LDFLAGS}
@@ -899,9 +913,6 @@ def CHECK_CC_ENV(conf):
     The build farm sometimes puts a space at the start"""
     if os.environ.get('CC'):
         conf.env.CC = TO_LIST(os.environ.get('CC'))
-        if len(conf.env.CC) == 1:
-            # make for nicer logs if just a single command
-            conf.env.CC = conf.env.CC[0]
 
 
 @conf
@@ -926,12 +937,16 @@ def SETUP_CONFIGURE_CACHE(conf, enable):
 
 @conf
 def SAMBA_CHECK_UNDEFINED_SYMBOL_FLAGS(conf):
-    # we don't want any libraries or modules to rely on runtime
-    # resolution of symbols
+    if Options.options.address_sanitizer or Options.options.enable_libfuzzer:
+        # Sanitizers can rely on symbols undefined at library link time and the
+        # symbols used for fuzzers are only defined by compiler wrappers.
+        return
+
     if not sys.platform.startswith("openbsd"):
+        # we don't want any libraries or modules to rely on runtime
+        # resolution of symbols
         conf.env.undefined_ldflags = conf.ADD_LDFLAGS('-Wl,-no-undefined', testflags=True)
 
-    if not sys.platform.startswith("openbsd") and conf.env.undefined_ignore_ldflags == []:
-        if conf.CHECK_LDFLAGS(['-undefined', 'dynamic_lookup']):
+        if (conf.env.undefined_ignore_ldflags == [] and
+            conf.CHECK_LDFLAGS(['-undefined', 'dynamic_lookup'])):
             conf.env.undefined_ignore_ldflags = ['-undefined', 'dynamic_lookup']
-

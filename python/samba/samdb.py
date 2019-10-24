@@ -33,6 +33,8 @@ from samba.ndr import ndr_unpack, ndr_pack
 from samba.dcerpc import drsblobs, misc
 from samba.common import normalise_int32
 from samba.compat import text_type
+from samba.compat import binary_type
+from samba.compat import get_bytes
 from samba.dcerpc import security
 
 __docformat__ = "restructuredText"
@@ -199,7 +201,7 @@ pwdLastSet: 0
         group_dn = "CN=%s,%s,%s" % (groupname, (groupou or "CN=Users"), self.domain_dn())
 
         # The new user record. Note the reliance on the SAMLDB module which
-        # fills in the default informations
+        # fills in the default information
         ldbmessage = {"dn": group_dn,
                       "sAMAccountName": groupname,
                       "objectClass": "group"}
@@ -302,14 +304,13 @@ changetype: modify
                 if len(targetmember) != 1:
                     raise Exception('Unable to find "%s". Operation cancelled.' % member)
                 targetmember_dn = targetmember[0].dn.extended_str(1)
-
-                if add_members_operation is True and (targetgroup[0].get('member') is None or str(targetmember_dn) not in targetgroup[0]['member']):
+                if add_members_operation is True and (targetgroup[0].get('member') is None or get_bytes(targetmember_dn) not in [str(x) for x in targetgroup[0]['member']]):
                     modified = True
                     addtargettogroup += """add: member
 member: %s
 """ % (str(targetmember_dn))
 
-                elif add_members_operation is False and (targetgroup[0].get('member') is not None and targetmember_dn in targetgroup[0]['member']):
+                elif add_members_operation is False and (targetgroup[0].get('member') is not None and get_bytes(targetmember_dn) in targetgroup[0]['member']):
                     modified = True
                     addtargettogroup += """delete: member
 member: %s
@@ -380,7 +381,7 @@ member: %s
             displayname += ' %s' % surname
 
         cn = username
-        if useusernameascn is None and displayname is not "":
+        if useusernameascn is None and displayname != "":
             cn = displayname
 
         user_dn = "CN=%s,%s,%s" % (cn, (userou or "CN=Users"), self.domain_dn())
@@ -388,7 +389,7 @@ member: %s
         dnsdomain = ldb.Dn(self, self.domain_dn()).canonical_str().replace("/", "")
         user_principal_name = "%s@%s" % (username, dnsdomain)
         # The new user record. Note the reliance on the SAMLDB module which
-        # fills in the default informations
+        # fills in the default information
         ldbmessage = {"dn": user_dn,
                       "sAMAccountName": username,
                       "userPrincipalName": user_principal_name,
@@ -405,7 +406,7 @@ member: %s
         if givenname is not None:
             ldbmessage["givenName"] = givenname
 
-        if displayname is not "":
+        if displayname != "":
             ldbmessage["displayName"] = displayname
             ldbmessage["name"] = displayname
 
@@ -495,6 +496,114 @@ member: %s
             raise
         else:
             self.transaction_commit()
+
+    def newcontact(self,
+                   fullcontactname=None,
+                   ou=None,
+                   surname=None,
+                   givenname=None,
+                   initials=None,
+                   displayname=None,
+                   jobtitle=None,
+                   department=None,
+                   company=None,
+                   description=None,
+                   mailaddress=None,
+                   internetaddress=None,
+                   telephonenumber=None,
+                   mobilenumber=None,
+                   physicaldeliveryoffice=None):
+        """Adds a new contact with additional parameters
+
+        :param fullcontactname: Optional full name of the new contact
+        :param ou: Object container for new contact
+        :param surname: Surname of the new contact
+        :param givenname: First name of the new contact
+        :param initials: Initials of the new contact
+        :param displayname: displayName of the new contact
+        :param jobtitle: Job title of the new contact
+        :param department: Department of the new contact
+        :param company: Company of the new contact
+        :param description: Description of the new contact
+        :param mailaddress: Email address of the new contact
+        :param internetaddress: Home page of the new contact
+        :param telephonenumber: Phone number of the new contact
+        :param mobilenumber: Primary mobile number of the new contact
+        :param physicaldeliveryoffice: Office location of the new contact
+        """
+
+        # Prepare the contact name like the RSAT, using the name parts.
+        cn = ""
+        if givenname is not None:
+            cn += givenname
+
+        if initials is not None:
+            cn += ' %s.' % initials
+
+        if surname is not None:
+            cn += ' %s' % surname
+
+        # Use the specified fullcontactname instead of the previously prepared
+        # contact name, if it is specified.
+        # This is similar to the "Full name" value of the RSAT.
+        if fullcontactname is not None:
+            cn = fullcontactname
+
+        if fullcontactname is None and cn == "":
+            raise Exception('No name for contact specified')
+
+        contactcontainer_dn = self.domain_dn()
+        if ou:
+            contactcontainer_dn = self.normalize_dn_in_domain(ou)
+
+        contact_dn = "CN=%s,%s" % (cn, contactcontainer_dn)
+
+        ldbmessage = {"dn": contact_dn,
+                      "objectClass": "contact",
+                      }
+
+        if surname is not None:
+            ldbmessage["sn"] = surname
+
+        if givenname is not None:
+            ldbmessage["givenName"] = givenname
+
+        if displayname is not None:
+            ldbmessage["displayName"] = displayname
+
+        if initials is not None:
+            ldbmessage["initials"] = '%s.' % initials
+
+        if jobtitle is not None:
+            ldbmessage["title"] = jobtitle
+
+        if department is not None:
+            ldbmessage["department"] = department
+
+        if company is not None:
+            ldbmessage["company"] = company
+
+        if description is not None:
+            ldbmessage["description"] = description
+
+        if mailaddress is not None:
+            ldbmessage["mail"] = mailaddress
+
+        if internetaddress is not None:
+            ldbmessage["wWWHomePage"] = internetaddress
+
+        if telephonenumber is not None:
+            ldbmessage["telephoneNumber"] = telephonenumber
+
+        if mobilenumber is not None:
+            ldbmessage["mobile"] = mobilenumber
+
+        if physicaldeliveryoffice is not None:
+            ldbmessage["physicalDeliveryOfficeName"] = physicaldeliveryoffice
+
+        self.add(ldbmessage)
+
+        return cn
 
     def newcomputer(self, computername, computerou=None, description=None,
                     prepare_oldjoin=False, ip_address_list=None,
@@ -676,7 +785,7 @@ accountExpires: %u
         return dsdb._samdb_get_domain_sid(self)
 
     domain_sid = property(get_domain_sid, set_domain_sid,
-                          "SID for the domain")
+                          doc="SID for the domain")
 
     def set_invocation_id(self, invocation_id):
         """Set the invocation id for this SamDB handle.
@@ -690,7 +799,7 @@ accountExpires: %u
         return dsdb._samdb_ntds_invocation_id(self)
 
     invocation_id = property(get_invocation_id, set_invocation_id,
-                             "Invocation ID GUID")
+                             doc="Invocation ID GUID")
 
     def get_oid_from_attid(self, attid):
         return dsdb._dsdb_get_oid_from_attid(self, attid)
@@ -920,7 +1029,8 @@ schemaUpdateNow: 1
         return dn
 
     def set_minPwdAge(self, value):
-        value = str(value).encode('utf8')
+        if not isinstance(value, binary_type):
+            value = str(value).encode('utf8')
         m = ldb.Message()
         m.dn = ldb.Dn(self, self.domain_dn())
         m["minPwdAge"] = ldb.MessageElement(value, ldb.FLAG_MOD_REPLACE, "minPwdAge")
@@ -936,7 +1046,8 @@ schemaUpdateNow: 1
             return int(res[0]["minPwdAge"][0])
 
     def set_maxPwdAge(self, value):
-        value = str(value).encode('utf8')
+        if not isinstance(value, binary_type):
+            value = str(value).encode('utf8')
         m = ldb.Message()
         m.dn = ldb.Dn(self, self.domain_dn())
         m["maxPwdAge"] = ldb.MessageElement(value, ldb.FLAG_MOD_REPLACE, "maxPwdAge")
@@ -952,7 +1063,8 @@ schemaUpdateNow: 1
             return int(res[0]["maxPwdAge"][0])
 
     def set_minPwdLength(self, value):
-        value = str(value).encode('utf8')
+        if not isinstance(value, binary_type):
+            value = str(value).encode('utf8')
         m = ldb.Message()
         m.dn = ldb.Dn(self, self.domain_dn())
         m["minPwdLength"] = ldb.MessageElement(value, ldb.FLAG_MOD_REPLACE, "minPwdLength")
@@ -968,7 +1080,8 @@ schemaUpdateNow: 1
             return int(res[0]["minPwdLength"][0])
 
     def set_pwdProperties(self, value):
-        value = str(value).encode('utf8')
+        if not isinstance(value, binary_type):
+            value = str(value).encode('utf8')
         m = ldb.Message()
         m.dn = ldb.Dn(self, self.domain_dn())
         m["pwdProperties"] = ldb.MessageElement(value, ldb.FLAG_MOD_REPLACE, "pwdProperties")

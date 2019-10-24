@@ -822,7 +822,7 @@ ctdb_defer_pinned_down_request(struct ctdb_context *ctdb, struct ctdb_db_context
 
 static void
 ctdb_update_db_stat_hot_keys(struct ctdb_db_context *ctdb_db, TDB_DATA key,
-			     int count)
+			     unsigned int count)
 {
 	int i, id;
 	char *keystr;
@@ -1044,7 +1044,7 @@ void ctdb_request_call(struct ctdb_context *ctdb, struct ctdb_req_header *hdr)
 		}
 	}
 	if ((c->flags & CTDB_WANT_READONLY) 
-	&&  (call->call_id == CTDB_FETCH_WITH_HEADER_FUNC)) {
+	&&  ((unsigned int)call->call_id == CTDB_FETCH_WITH_HEADER_FUNC)) {
 		TDB_DATA tdata;
 
 		tdata = tdb_fetch(ctdb_db->rottdb, call->key);
@@ -1092,7 +1092,7 @@ void ctdb_request_call(struct ctdb_context *ctdb, struct ctdb_req_header *hdr)
 	tmp_count = c->hopcount;
 	bucket = 0;
 	while (tmp_count) {
-		tmp_count >>= 2;
+		tmp_count >>= 1;
 		bucket++;
 	}
 	if (bucket >= MAX_COUNT_BUCKETS) {
@@ -1983,7 +1983,7 @@ static void ctdb_migration_count_handler(TDB_DATA key, uint64_t counter,
 {
 	struct ctdb_db_context *ctdb_db = talloc_get_type_abort(
 		private_data, struct ctdb_db_context);
-	int value;
+	unsigned int value;
 
 	value = (counter < INT_MAX ? counter : INT_MAX);
 	ctdb_update_db_stat_hot_keys(ctdb_db, key, value);

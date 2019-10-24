@@ -22,7 +22,6 @@ import ldb
 from samba.ndr import ndr_unpack
 from samba.dcerpc import security
 
-from getpass import getpass
 from samba.auth import system_session
 from samba.samdb import SamDB
 from samba.dsdb import (
@@ -35,6 +34,11 @@ from samba.dsdb import (
     GTYPE_DISTRIBUTION_GLOBAL_GROUP,
     GTYPE_DISTRIBUTION_UNIVERSAL_GROUP,
 )
+from collections import defaultdict
+from subprocess import check_call, CalledProcessError
+from samba.compat import get_bytes
+import os
+import tempfile
 
 security_group = dict({"Builtin": GTYPE_SECURITY_BUILTIN_LOCAL_GROUP,
                        "Domain": GTYPE_SECURITY_DOMAIN_LOCAL_GROUP,
@@ -324,37 +328,42 @@ class cmd_group_list(Command):
 
         samdb = SamDB(url=H, session_info=system_session(),
                       credentials=creds, lp=lp)
+        attrs=["samaccountname"]
 
+        if verbose:
+            attrs += ["grouptype", "member"]
         domain_dn = samdb.domain_dn()
         res = samdb.search(domain_dn, scope=ldb.SCOPE_SUBTREE,
                            expression=("(objectClass=group)"),
-                           attrs=["samaccountname", "grouptype"])
+                           attrs=attrs)
         if (len(res) == 0):
             return
 
         if verbose:
-            self.outf.write("Group Name                                  Group Type      Group Scope\n")
-            self.outf.write("-----------------------------------------------------------------------------\n")
+            self.outf.write("Group Name                                  Group Type      Group Scope  Members\n")
+            self.outf.write("--------------------------------------------------------------------------------\n")
 
             for msg in res:
                 self.outf.write("%-44s" % msg.get("samaccountname", idx=0))
                 hgtype = hex(int("%s" % msg["grouptype"]) & 0x00000000FFFFFFFF)
                 if (hgtype == hex(int(security_group.get("Builtin")))):
-                    self.outf.write("Security         Builtin\n")
+                    self.outf.write("Security         Builtin  ")
                 elif (hgtype == hex(int(security_group.get("Domain")))):
-                    self.outf.write("Security         Domain\n")
+                    self.outf.write("Security         Domain   ")
                 elif (hgtype == hex(int(security_group.get("Global")))):
-                    self.outf.write("Security         Global\n")
+                    self.outf.write("Security         Global   ")
                 elif (hgtype == hex(int(security_group.get("Universal")))):
-                    self.outf.write("Security         Universal\n")
+                    self.outf.write("Security         Universal")
                 elif (hgtype == hex(int(distribution_group.get("Global")))):
-                    self.outf.write("Distribution     Global\n")
+                    self.outf.write("Distribution     Global   ")
                 elif (hgtype == hex(int(distribution_group.get("Domain")))):
-                    self.outf.write("Distribution     Domain\n")
+                    self.outf.write("Distribution     Domain   ")
                 elif (hgtype == hex(int(distribution_group.get("Universal")))):
-                    self.outf.write("Distribution     Universal\n")
+                    self.outf.write("Distribution     Universal")
                 else:
-                    self.outf.write("\n")
+                    self.outf.write("                          ")
+                num_members = len(msg.get("member", default=[]))
+                self.outf.write("    %6u\n" % num_members)
         else:
             for msg in res:
                 self.outf.write("%s\n" % msg.get("samaccountname", idx=0))
@@ -439,7 +448,7 @@ class cmd_group_move(Command):
     server.
 
     Example1:
-    samba-tool group move Group1 'OU=OrgUnit,DC=samdom.DC=example,DC=com' \
+    samba-tool group move Group1 'OU=OrgUnit,DC=samdom.DC=example,DC=com' \\
         -H ldap://samba.samdom.example.com -U administrator
 
     Example1 shows how to move a group Group1 into the 'OrgUnit' organizational
@@ -517,11 +526,11 @@ The -H or --URL= option can be used to execute the command against a remote
 server.
 
 Example1:
-samba-tool group show Group1 -H ldap://samba.samdom.example.com \
--U administrator --password=passw1rd
+samba-tool group show Group1 -H ldap://samba.samdom.example.com \\
+    -U administrator --password=passw1rd
 
-Example1 shows how to display a group's attributes in the domain against a remote
-LDAP server.
+Example1 shows how to display a group's attributes in the domain against a
+remote LDAP server.
 
 The -H parameter is used to specify the remote target server.
 
@@ -584,15 +593,324 @@ Example3 shows how to display a users objectGUID and member attributes.
             self.outf.write(user_ldif)
 
 
+class cmd_group_stats(Command):
+    """Summary statistics about group memberships."""
+
+    synopsis = "%prog [options]"
+
+    takes_options = [
+        Option("-H", "--URL", help="LDB URL for database or target server", type=str,
+               metavar="URL", dest="H"),
+    ]
+
+    takes_optiongroups = {
+        "sambaopts": options.SambaOptions,
+        "credopts": options.CredentialsOptions,
+        "versionopts": options.VersionOptions,
+    }
+
+    def num_in_range(self, range_min, range_max, group_freqs):
+        total_count = 0
+        for members, count in group_freqs.items():
+            if range_min <= members and members <= range_max:
+                total_count += count
+
+        return total_count
+
+    def run(self, sambaopts=None, credopts=None, versionopts=None, H=None):
+        lp = sambaopts.get_loadparm()
+        creds = credopts.get_credentials(lp, fallback_machine=True)
+
+        samdb = SamDB(url=H, session_info=system_session(),
+                      credentials=creds, lp=lp)
+
+        domain_dn = samdb.domain_dn()
+        res = samdb.search(domain_dn, scope=ldb.SCOPE_SUBTREE,
+                           expression=("(objectClass=group)"),
+                           attrs=["samaccountname", "member"])
+
+        # first count up how many members each group has
+        group_assignments = {}
+        total_memberships = 0
+
+        for msg in res:
+            name = str(msg.get("samaccountname"))
+            num_members = len(msg.get("member", default=[]))
+            group_assignments[name] = num_members
+            total_memberships += num_members
+
+        num_groups = res.count
+        self.outf.write("Group membership statistics*\n")
+        self.outf.write("-------------------------------------------------\n")
+        self.outf.write("Total groups: {0}\n".format(num_groups))
+        self.outf.write("Total memberships: {0}\n".format(total_memberships))
+        average = total_memberships / float(num_groups)
+        self.outf.write("Average members per group: %.2f\n" % average)
+
+        # find the max and median memberships (note that some default groups
+        # always have zero members, so displaying the min is not very helpful)
+        group_names = list(group_assignments.keys())
+        group_members = list(group_assignments.values())
+        idx = group_members.index(max(group_members))
+        max_members = group_members[idx]
+        self.outf.write("Max members: {0} ({1})\n".format(max_members,
+                                                          group_names[idx]))
+        group_members.sort()
+        midpoint = num_groups // 2
+        median = group_members[midpoint]
+        if num_groups % 2 == 0:
+            median = (median + group_members[midpoint - 1]) / 2
+        self.outf.write("Median members per group: {0}\n\n".format(median))
+
+        # convert this to the frequency of group membership, i.e. how many
+        # groups have 5 members, how many have 6 members, etc
+        group_freqs = defaultdict(int)
+        for group, num_members in group_assignments.items():
+            group_freqs[num_members] += 1
+
+        # now squash this down even further, so that we just display the number
+        # of groups that fall into one of the following membership bands
+        bands = [(0, 1), (2, 4), (5, 9), (10, 14), (15, 19), (20, 24),
+                 (25, 29), (30, 39), (40, 49), (50, 59), (60, 69), (70, 79),
+                 (80, 89), (90, 99), (100, 149), (150, 199), (200, 249),
+                 (250, 299), (300, 399), (400, 499), (500, 999), (1000, 1999),
+                 (2000, 2999), (3000, 3999), (4000, 4999), (5000, 9999),
+                 (10000, max_members)]
+
+        self.outf.write("Members        Number of Groups\n")
+        self.outf.write("-------------------------------------------------\n")
+
+        for band in bands:
+            band_start = band[0]
+            band_end = band[1]
+            if band_start > max_members:
+                break
+
+            num_groups = self.num_in_range(band_start, band_end, group_freqs)
+
+            if num_groups != 0:
+                band_str = "{0}-{1}".format(band_start, band_end)
+                self.outf.write("%13s  %u\n" % (band_str, num_groups))
+
+        self.outf.write("\n* Note this does not include nested group memberships\n")
+
+
+class cmd_group_edit(Command):
+    """Modify Group AD object.
+
+    This command will allow editing of a group account in the Active Directory
+    domain. You will then be able to add or change attributes and their values.
+
+    The groupname specified on the command is the sAMAccountName.
+
+    The command may be run from the root userid or another authorized userid.
+
+    The -H or --URL= option can be used to execute the command against a remote
+    server.
+
+    Example1:
+    samba-tool group edit Group1 -H ldap://samba.samdom.example.com \\
+        -U administrator --password=passw1rd
+
+    Example1 shows how to edit a groups attributes in the domain against a
+    remote LDAP server.
+
+    The -H parameter is used to specify the remote target server.
+
+    Example2:
+    samba-tool group edit Group2
+
+    Example2 shows how to edit a groups attributes in the domain against a local
+    server.
+
+    Example3:
+    samba-tool group edit Group3 --editor=nano
+
+    Example3 shows how to edit a groups attributes in the domain against a local
+    server using the 'nano' editor.
+    """
+    synopsis = "%prog <groupname> [options]"
+
+    takes_options = [
+        Option("-H", "--URL", help="LDB URL for database or target server",
+               type=str, metavar="URL", dest="H"),
+        Option("--editor", help="Editor to use instead of the system default,"
+               " or 'vi' if no system default is set.", type=str),
+    ]
+
+    takes_args = ["groupname"]
+    takes_optiongroups = {
+        "sambaopts": options.SambaOptions,
+        "credopts": options.CredentialsOptions,
+        "versionopts": options.VersionOptions,
+    }
+
+    def run(self, groupname, credopts=None, sambaopts=None, versionopts=None,
+            H=None, editor=None):
+        from . import common
+
+        lp = sambaopts.get_loadparm()
+        creds = credopts.get_credentials(lp, fallback_machine=True)
+        samdb = SamDB(url=H, session_info=system_session(),
+                      credentials=creds, lp=lp)
+
+        filter = ("(&(sAMAccountName=%s)(objectClass=group))" % groupname)
+
+        domaindn = samdb.domain_dn()
+
+        try:
+            res = samdb.search(base=domaindn,
+                               expression=filter,
+                               scope=ldb.SCOPE_SUBTREE)
+            group_dn = res[0].dn
+        except IndexError:
+            raise CommandError('Unable to find group "%s"' % (groupname))
+
+        if len(res) != 1:
+            raise CommandError('Invalid number of results: for "%s": %d' %
+                               ((groupname), len(res)))
+
+        msg = res[0]
+        result_ldif = common.get_ldif_for_editor(samdb, msg)
+
+        if editor is None:
+            editor = os.environ.get('EDITOR')
+            if editor is None:
+                editor = 'vi'
+
+        with tempfile.NamedTemporaryFile(suffix=".tmp") as t_file:
+            t_file.write(get_bytes(result_ldif))
+            t_file.flush()
+            try:
+                check_call([editor, t_file.name])
+            except CalledProcessError as e:
+                raise CalledProcessError("ERROR: ", e)
+            with open(t_file.name) as edited_file:
+                edited_message = edited_file.read()
+
+        msgs_edited = samdb.parse_ldif(edited_message)
+        msg_edited = next(msgs_edited)[1]
+
+        res_msg_diff = samdb.msg_diff(msg, msg_edited)
+        if len(res_msg_diff) == 0:
+            self.outf.write("Nothing to do\n")
+            return
+
+        try:
+            samdb.modify(res_msg_diff)
+        except Exception as e:
+            raise CommandError("Failed to modify group '%s': " % groupname, e)
+
+        self.outf.write("Modified group '%s' successfully\n" % groupname)
+
+
+class cmd_group_add_unix_attrs(Command):
+    """Add RFC2307 attributes to a group.
+
+This command adds Unix attributes to a group account in the Active
+Directory domain.
+The groupname specified on the command is the sAMaccountName.
+
+Unix (RFC2307) attributes will be added to the group account.
+
+Add 'idmap_ldb:use rfc2307 = Yes' to smb.conf to use these attributes for
+UID/GID mapping.
+
+The command may be run from the root userid or another authorized userid.
+The -H or --URL= option can be used to execute the command against a
+remote server.
+
+Example1:
+samba-tool group addunixattrs Group1 10000
+
+Example1 shows how to add RFC2307 attributes to a domain enabled group
+account.
+
+The groups Unix ID will be set to '10000', provided this ID isn't already
+in use.
+
+"""
+    synopsis = "%prog <groupname> <gidnumber> [options]"
+
+    takes_options = [
+        Option("-H", "--URL", help="LDB URL for database or target server",
+               type=str, metavar="URL", dest="H"),
+    ]
+
+    takes_args = ["groupname", "gidnumber"]
+
+    takes_optiongroups = {
+        "sambaopts": options.SambaOptions,
+        "credopts": options.CredentialsOptions,
+        "versionopts": options.VersionOptions,
+        }
+
+    def run(self, groupname, gidnumber, credopts=None, sambaopts=None,
+            versionopts=None, H=None):
+
+        lp = sambaopts.get_loadparm()
+        creds = credopts.get_credentials(lp)
+
+        samdb = SamDB(url=H, session_info=system_session(),
+                      credentials=creds, lp=lp)
+
+        domaindn = samdb.domain_dn()
+
+        # Check group exists and doesn't have a gidNumber
+        filter = "(samaccountname={})".format(ldb.binary_encode(groupname))
+        res = samdb.search(domaindn,
+                           scope=ldb.SCOPE_SUBTREE,
+                           expression=filter)
+        if (len(res) == 0):
+            raise CommandError("Unable to find group '{}'".format(groupname))
+
+        group_dn = res[0].dn
+
+        if "gidNumber" in res[0]:
+            raise CommandError("Group {} is a Unix group.".format(groupname))
+
+        # Check if supplied gidnumber isn't already being used
+        filter = "(&(objectClass=group)(gidNumber={}))".format(gidnumber)
+        res = samdb.search(domaindn,
+                           scope=ldb.SCOPE_SUBTREE,
+                           expression=filter)
+        if (len(res) != 0):
+            raise CommandError('gidNumber {} already used.'.format(gidnumber))
+
+        if not lp.get("idmap_ldb:use rfc2307"):
+            self.outf.write("You are setting a Unix/RFC2307 GID. "
+                            "You may want to set 'idmap_ldb:use rfc2307 = Yes'"
+                            " in smb.conf to use the attributes for "
+                            "XID/SID-mapping.\n")
+
+        group_mod = """
+dn: {0}
+changetype: modify
+add: gidNumber
+gidNumber: {1}
+""".format(group_dn, gidnumber)
+
+        try:
+            samdb.modify_ldif(group_mod)
+        except ldb.LdbError as e:
+            raise CommandError("Failed to modify group '{0}': {1}"
+                               .format(groupname, e))
+
+        self.outf.write("Modified Group '{}' successfully\n".format(groupname))
+
+
 class cmd_group(SuperCommand):
     """Group management."""
 
     subcommands = {}
     subcommands["add"] = cmd_group_add()
     subcommands["delete"] = cmd_group_delete()
+    subcommands["edit"] = cmd_group_edit()
     subcommands["addmembers"] = cmd_group_add_members()
     subcommands["removemembers"] = cmd_group_remove_members()
     subcommands["list"] = cmd_group_list()
     subcommands["listmembers"] = cmd_group_list_members()
     subcommands["move"] = cmd_group_move()
     subcommands["show"] = cmd_group_show()
+    subcommands["stats"] = cmd_group_stats()
+    subcommands["addunixattrs"] = cmd_group_add_unix_attrs()

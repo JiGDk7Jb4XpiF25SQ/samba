@@ -367,7 +367,6 @@ static struct smb_passwd *getsmbfilepwent(struct smbpasswd_privates *smbpasswd_s
 	unsigned char *smbpwd = smbpasswd_state->smbpwd;
 	unsigned char *smbntpwd = smbpasswd_state->smbntpwd;
 	char linebuf[256];
-	int c;
 	unsigned char *p;
 	long uidval;
 	size_t linebuf_len;
@@ -402,8 +401,8 @@ static struct smb_passwd *getsmbfilepwent(struct smbpasswd_privates *smbpasswd_s
 		}
 
 		if (linebuf[linebuf_len - 1] != '\n') {
-			c = '\0';
 			while (!ferror(fp) && !feof(fp)) {
+				int c;
 				c = fgetc(fp);
 				if (c == '\n') {
 					break;
@@ -740,7 +739,6 @@ static bool mod_smbfilepwd_entry(struct smbpasswd_privates *smbpasswd_state, con
 #define LINEBUF_SIZE 255
 	char linebuf[LINEBUF_SIZE + 1];
 	char readbuf[1024];
-	int c;
 	char ascii_p16[FSTRING_LEN + 20];
 	fstring encode_bits;
 	unsigned char *p = NULL;
@@ -806,8 +804,8 @@ static bool mod_smbfilepwd_entry(struct smbpasswd_privates *smbpasswd_state, con
 		 */
 		linebuf_len = strlen(linebuf);
 		if (linebuf[linebuf_len - 1] != '\n') {
-			c = '\0';
 			while (!ferror(fp) && !feof(fp)) {
+				int c;
 				c = fgetc(fp);
 				if (c == '\n') {
 					break;
@@ -1332,11 +1330,12 @@ static NTSTATUS smbpasswd_getsampwsid(struct pdb_methods *my_methods, struct sam
 	NTSTATUS nt_status = NT_STATUS_UNSUCCESSFUL;
 	struct smbpasswd_privates *smbpasswd_state = (struct smbpasswd_privates*)my_methods->private_data;
 	struct smb_passwd *smb_pw;
+	struct dom_sid_buf buf;
 	FILE *fp = NULL;
 	uint32_t rid;
 
 	DEBUG(10, ("smbpasswd_getsampwrid: search by sid: %s\n",
-		   sid_string_dbg(sid)));
+		   dom_sid_str_buf(sid, &buf)));
 
 	if (!sid_peek_check_rid(get_global_sam_sid(), sid, &rid))
 		return NT_STATUS_UNSUCCESSFUL;
@@ -1382,9 +1381,11 @@ static NTSTATUS smbpasswd_getsampwsid(struct pdb_methods *my_methods, struct sam
 
 	/* build_sam_account might change the SID on us, if the name was for the guest account */
 	if (NT_STATUS_IS_OK(nt_status) && !dom_sid_equal(pdb_get_user_sid(sam_acct), sid)) {
+		struct dom_sid_buf buf1, buf2;
 		DEBUG(1, ("looking for user with sid %s instead returned %s "
-			  "for account %s!?!\n", sid_string_dbg(sid),
-			  sid_string_dbg(pdb_get_user_sid(sam_acct)),
+			  "for account %s!?!\n",
+			  dom_sid_str_buf(sid, &buf1),
+			  dom_sid_str_buf(pdb_get_user_sid(sam_acct), &buf2),
 			  pdb_get_username(sam_acct)));
 		return NT_STATUS_NO_SUCH_USER;
 	}

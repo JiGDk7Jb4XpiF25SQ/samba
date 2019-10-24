@@ -40,6 +40,8 @@
 #include "../librpc/gen_ndr/srv_svcctl.h"
 #include "../librpc/gen_ndr/srv_winreg.h"
 #include "../librpc/gen_ndr/srv_wkssvc.h"
+#include "../librpc/gen_ndr/srv_fsrvp.h"
+#include "../librpc/gen_ndr/srv_epmapper.h"
 #include "printing/notify.h"
 #include "printing.h"
 #include "serverid.h"
@@ -48,6 +50,7 @@
 #include "../lib/util/pidfile.h"
 #include "smbprofile.h"
 #include "libcli/auth/netlogon_creds_cli.h"
+#include "lib/gencache.h"
 
 static struct files_struct *log_writeable_file_fn(
 	struct files_struct *fsp, void *private_data)
@@ -90,7 +93,6 @@ static void exit_server_common(enum server_exit_reason how,
 {
 	struct smbXsrv_client *client = global_smbXsrv_client;
 	struct smbXsrv_connection *xconn = NULL;
-	struct smbXsrv_connection *xconn_next = NULL;
 	struct smbd_server_connection *sconn = NULL;
 	struct messaging_context *msg_ctx = global_messaging_context();
 
@@ -109,10 +111,7 @@ static void exit_server_common(enum server_exit_reason how,
 	/*
 	 * Here we typically have just one connection
 	 */
-	for (; xconn != NULL; xconn = xconn_next) {
-		xconn_next = xconn->next;
-		DLIST_REMOVE(client->connections, xconn);
-
+	for (; xconn != NULL; xconn = xconn->next) {
 		/*
 		 * This is typically the disconnect for the only
 		 * (or with multi-channel last) connection of the client
@@ -127,8 +126,6 @@ static void exit_server_common(enum server_exit_reason how,
 				break;
 			}
 		}
-
-		TALLOC_FREE(xconn);
 		DO_PROFILE_INC(disconnect);
 	}
 
@@ -171,6 +168,20 @@ static void exit_server_common(enum server_exit_reason how,
 
 	change_to_root_user();
 
+	if (client != NULL) {
+		struct smbXsrv_connection *xconn_next = NULL;
+
+		for (xconn = client->connections;
+		     xconn != NULL;
+		     xconn = xconn_next) {
+			xconn_next = xconn->next;
+			DLIST_REMOVE(client->connections, xconn);
+			TALLOC_FREE(xconn);
+		}
+	}
+
+	change_to_root_user();
+
 	/* 3 second timeout. */
 	print_notify_send_messages(msg_ctx, 3);
 
@@ -202,6 +213,10 @@ static void exit_server_common(enum server_exit_reason how,
 		rpc_netlogon_shutdown();
 		rpc_samr_shutdown();
 		rpc_lsarpc_shutdown();
+
+		rpc_FileServerVssAgent_shutdown();
+
+		rpc_epmapper_shutdown();
 	}
 
 	/*
@@ -236,7 +251,6 @@ static void exit_server_common(enum server_exit_reason how,
 		if (am_parent) {
 			pidfile_unlink(lp_pid_directory(), "smbd");
 		}
-		gencache_stabilize();
 	}
 
 	exit(0);

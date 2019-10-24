@@ -3,6 +3,7 @@
 import os, sys, re, shlex
 from waflib import Utils, Logs, Options, Errors, Context
 from waflib.Configure import conf
+from wafsamba import samba_utils
 
 real_Popen = None
 
@@ -119,9 +120,10 @@ class cross_Popen(Utils.subprocess.Popen):
             if use_answers:
                 p = real_Popen(newargs,
                                stdout=Utils.subprocess.PIPE,
-                               stderr=Utils.subprocess.PIPE)
+                               stderr=Utils.subprocess.PIPE,
+                               env=kw.get('env', {}))
                 ce_out, ce_err = p.communicate()
-                ans = (p.returncode, ce_out)
+                ans = (p.returncode, samba_utils.get_string(ce_out))
                 add_answer(ca_file, msg, ans)
             else:
                 args = newargs
@@ -138,7 +140,7 @@ class cross_Popen(Utils.subprocess.Popen):
 
 @conf
 def SAMBA_CROSS_ARGS(conf, msg=None):
-    '''get exec_args to pass when running cross compiled binaries'''
+    '''get test_args to pass when running cross compiled binaries'''
     if not conf.env.CROSS_COMPILE:
         return []
 
@@ -146,6 +148,8 @@ def SAMBA_CROSS_ARGS(conf, msg=None):
     if real_Popen is None:
         real_Popen  = Utils.subprocess.Popen
         Utils.subprocess.Popen = cross_Popen
+        Utils.run_process = Utils.run_regular_process
+        Utils.get_process = Utils.alloc_process_pool = Utils.nada
 
     ret = []
 

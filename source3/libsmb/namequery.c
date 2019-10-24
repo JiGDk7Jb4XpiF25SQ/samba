@@ -30,6 +30,7 @@
 #include "libsmb/unexpected.h"
 #include "../libcli/nbt/libnbt.h"
 #include "libads/kerberos_proto.h"
+#include "lib/gencache.h"
 
 /* nmbd.c sets this to True. */
 bool global_in_nmbd = False;
@@ -273,7 +274,7 @@ static struct node_status *parse_node_status(TALLOC_CTX *mem_ctx, char *p,
 
 	p++;
 	for (i=0;i< *num_names;i++) {
-		StrnCpy(ret[i].name,p,15);
+		strlcpy(ret[i].name,p,16);
 		trim_char(ret[i].name,'\0',' ');
 		ret[i].type = CVAL(p,15);
 		ret[i].flags = p[16];
@@ -930,7 +931,7 @@ bool name_status_find(const char *q_name,
 	struct sockaddr_storage ss;
 	struct node_status *addrs = NULL;
 	struct nmb_name nname;
-	int count, i;
+	int count = 0, i;
 	bool result = false;
 	NTSTATUS status;
 
@@ -2509,7 +2510,7 @@ static NTSTATUS resolve_ads(const char *name,
 			}
 		} else {
 			/* use all the IP addresses from the SRV response */
-			int j;
+			size_t j;
 			for (j = 0; j < dcs[i].num_ips; j++) {
 				(*return_iplist)[*return_count].port = dcs[i].port;
 				(*return_iplist)[*return_count].ss = dcs[i].ss_s[j];
@@ -2708,7 +2709,7 @@ NTSTATUS internal_resolve_name(const char *name,
 			}
 		} else if (strequal(tok, "wins")) {
 			/* don't resolve 1D via WINS */
-			struct sockaddr_storage *ss_list;
+			struct sockaddr_storage *ss_list = NULL;
 			if (name_type != 0x1D) {
 				status = resolve_wins(name, name_type,
 						      talloc_tos(),
@@ -2724,7 +2725,7 @@ NTSTATUS internal_resolve_name(const char *name,
 				}
 			}
 		} else if (strequal(tok, "bcast")) {
-			struct sockaddr_storage *ss_list;
+			struct sockaddr_storage *ss_list = NULL;
 			status = name_resolve_bcast(
 				name, name_type, talloc_tos(),
 				&ss_list, return_count);
@@ -2748,7 +2749,7 @@ NTSTATUS internal_resolve_name(const char *name,
 	SAFE_FREE(*return_iplist);
 	*return_count = 0;
 
-	return NT_STATUS_UNSUCCESSFUL;
+	return status;
 
   done:
 
@@ -2915,16 +2916,16 @@ NTSTATUS resolve_name_list(TALLOC_CTX *ctx,
 		}
 	}
 	if (num_entries == 0) {
-		SAFE_FREE(ss_list);
-		return NT_STATUS_BAD_NETWORK_NAME;
+		status = NT_STATUS_BAD_NETWORK_NAME;
+		goto done;
 	}
 
 	*return_ss_arr = talloc_array(ctx,
 				struct sockaddr_storage,
 				num_entries);
 	if (!(*return_ss_arr)) {
-		SAFE_FREE(ss_list);
-		return NT_STATUS_NO_MEMORY;
+		status = NT_STATUS_NO_MEMORY;
+		goto done;
 	}
 
 	for (i=0, num_entries = 0; i<count; i++) {
@@ -2936,9 +2937,9 @@ NTSTATUS resolve_name_list(TALLOC_CTX *ctx,
 
 	status = NT_STATUS_OK;
 	*p_num_entries = num_entries;
-
+done:
 	SAFE_FREE(ss_list);
-	return NT_STATUS_OK;
+	return status;
 }
 
 /********************************************************
@@ -3040,8 +3041,8 @@ static NTSTATUS get_dc_list(const char *domain,
 	char *port_str = NULL;
 	int port;
 	char *name;
-	int num_addresses = 0;
-	int  local_count, i, j;
+	size_t num_addresses = 0;
+	size_t local_count, i;
 	struct ip_service *return_iplist = NULL;
 	struct ip_service *auto_ip_list = NULL;
 	bool done_auto_lookup = false;
@@ -3170,6 +3171,7 @@ static NTSTATUS get_dc_list(const char *domain,
 		/* copy any addresses from the auto lookup */
 
 		if (strequal(name, "*")) {
+			int j;
 			for (j=0; j<auto_count; j++) {
 				char addr[INET6_ADDRSTRLEN];
 				print_sockaddr(addr,
@@ -3250,7 +3252,7 @@ static NTSTATUS get_dc_list(const char *domain,
 	}
 
 	if ( DEBUGLEVEL >= 4 ) {
-		DEBUG(4,("get_dc_list: returning %d ip addresses "
+		DEBUG(4,("get_dc_list: returning %zu ip addresses "
 				"in an %sordered list\n",
 				local_count,
 				*ordered ? "":"un"));

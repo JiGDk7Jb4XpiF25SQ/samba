@@ -60,7 +60,7 @@ from samba.provision.common import (
 )
 
 from samba.samdb import get_default_backend_store
-
+from samba.compat import get_string
 
 def get_domainguid(samdb, domaindn):
     res = samdb.search(base=domaindn, scope=ldb.SCOPE_BASE, attrs=["objectGUID"])
@@ -749,11 +749,6 @@ def create_zone_file(lp, logger, paths, targetdir, dnsdomain,
         hostip_host_line = ""
         gc_msdcs_ip_line = ""
 
-    # we need to freeze the zone while we update the contents
-    if targetdir is None:
-        rndc = ' '.join(lp.get("rndc command"))
-        os.system(rndc + " freeze " + lp.get("realm"))
-
     setup_file(setup_path("provision.zone"), paths.dns, {
             "HOSTNAME": hostname,
             "DNSDOMAIN": dnsdomain,
@@ -780,9 +775,6 @@ def create_zone_file(lp, logger, paths, targetdir, dnsdomain,
                 logger.error("Failed to chown %s to bind gid %u" % (
                     paths.dns, paths.bind_gid))
 
-    if targetdir is None:
-        os.system(rndc + " unfreeze " + lp.get("realm"))
-
 
 def create_samdb_copy(samdb, logger, paths, names, domainsid, domainguid):
     """Create a copy of samdb and give write permissions to named for dns partitions
@@ -798,12 +790,12 @@ def create_samdb_copy(samdb, logger, paths, names, domainsid, domainguid):
                        scope=ldb.SCOPE_BASE,
                        attrs=["partition", "backendStore"])
     for tmp in res[0]["partition"]:
-        (nc, fname) = tmp.split(':')
+        (nc, fname) = str(tmp).split(':')
         partfile[nc.upper()] = fname
 
     backend_store = get_default_backend_store()
     if "backendStore" in res[0]:
-        backend_store = res[0]["backendStore"][0]
+        backend_store = str(res[0]["backendStore"][0])
 
     # Create empty domain partition
 
@@ -954,6 +946,7 @@ def create_named_conf(paths, realm, dnsdomain, dns_backend, logger):
                                      stdout=subprocess.PIPE,
                                      stderr=subprocess.STDOUT,
                                      cwd='.').communicate()[0]
+        bind_info = get_string(bind_info)
         bind9_8 = '#'
         bind9_9 = '#'
         bind9_10 = '#'

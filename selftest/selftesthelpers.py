@@ -53,7 +53,6 @@ else:
     has_perl_test_more = False
 
 python = os.getenv("PYTHON", "python")
-extra_python = os.getenv("EXTRA_PYTHON", None)
 
 tap2subunit = python + " " + os.path.join(srcdir(), "selftest", "tap2subunit")
 
@@ -92,7 +91,7 @@ def add_prefix(prefix, env, support_list=False):
         listopt = "$LISTOPT "
     else:
         listopt = ""
-    return "%s/selftest/filter-subunit %s--fail-on-empty --prefix=\"%s.\" --suffix=\"(%s)\"" % (srcdir(), listopt, prefix, env)
+    return "%s %s/selftest/filter-subunit %s--fail-on-empty --prefix=\"%s.\" --suffix=\"(%s)\"" % (python, srcdir(), listopt, prefix, env)
 
 
 def plantestsuite_loadlist(name, env, cmdline):
@@ -136,18 +135,16 @@ def planperltestsuite(name, path):
         skiptestsuite(name, "Test::More not available")
 
 
-def planpythontestsuite(env, module, name=None, extra_path=[], py3_compatible=False):
+def planpythontestsuite(env, module, name=None, extra_path=None):
     if name is None:
         name = module
-    pypath = list(extra_path)
     args = [python, "-m", "samba.subunit.run", "$LISTOPT", "$LOADLIST", module]
-    if pypath:
-        args.insert(0, "PYTHONPATH=%s" % ":".join(["$PYTHONPATH"] + pypath))
-    plantestsuite_loadlist(name, env, args)
-    if py3_compatible and extra_python is not None:
-        # Plan one more test for Python 3 compatible module
-        args[0] = extra_python
-        plantestsuite_loadlist(name + ".python3", env, args)
+    if extra_path:
+        pypath = ["PYTHONPATH=$PYTHONPATH:%s" % ":".join(extra_path)]
+    else:
+        pypath = []
+
+    plantestsuite_loadlist(name, env, pypath + args)
 
 
 def get_env_torture_options():
@@ -165,7 +162,7 @@ bbdir = os.path.join(srcdir(), "testprogs/blackbox")
 configuration = "--configfile=$SMB_CONF_PATH"
 
 smbtorture4 = binpath("smbtorture")
-smbtorture4_testsuite_list = subprocess.Popen([smbtorture4, "--list-suites"], stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate("")[0].splitlines()
+smbtorture4_testsuite_list = subprocess.Popen([smbtorture4, "--list-suites"], stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate("")[0].decode('utf8').splitlines()
 
 smbtorture4_options = [
     configuration,
@@ -187,7 +184,7 @@ def plansmbtorture4testsuite(name, env, options, target, modname=None):
 
 
 def smbtorture4_testsuites(prefix):
-    return filter(lambda x: x.startswith(prefix), smbtorture4_testsuite_list)
+    return list(filter(lambda x: x.startswith(prefix), smbtorture4_testsuite_list))
 
 
 smbclient3 = binpath('smbclient')
@@ -203,3 +200,5 @@ smbcquotas = binpath('smbcquotas')
 smbget = binpath('smbget')
 rpcclient = binpath('rpcclient')
 smbcacls = binpath('smbcacls')
+smbcontrol = binpath('smbcontrol')
+smbstatus = binpath('smbstatus')

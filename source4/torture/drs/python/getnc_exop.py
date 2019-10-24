@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 #
 # Tests various schema replication scenarios
@@ -34,7 +34,6 @@ import drs_base
 from drs_base import AbstractLink
 
 import samba.tests
-import random
 from samba import werror, WERRORError
 
 import ldb
@@ -921,7 +920,7 @@ class DrsReplicaPrefixMapTestCase(drs_base.DrsBaseTestCase):
                            attrs=["prefixMap", "schemaInfo"])
 
         pfm = ndr_unpack(drsblobs.prefixMapBlob,
-                         str(res[0]['prefixMap']))
+                         res[0]['prefixMap'][0])
 
         schi = drsuapi.DsReplicaOIDMapping()
         schi.id_prefix = 0

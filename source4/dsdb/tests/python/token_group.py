@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # test tokengroups attribute against internal token calculation
 
@@ -149,7 +149,7 @@ class StaticTokenTest(samba.tests.TestCase):
 
         client_finished = False
         server_finished = False
-        server_to_client = ""
+        server_to_client = b""
 
         # Run the actual call loop.
         while client_finished == False and server_finished == False:
@@ -382,7 +382,7 @@ class DynamicTokenTest(samba.tests.TestCase):
 
         client_finished = False
         server_finished = False
-        server_to_client = ""
+        server_to_client = b""
 
         # Run the actual call loop.
         while client_finished == False and server_finished == False:
@@ -566,7 +566,7 @@ class DynamicTokenTest(samba.tests.TestCase):
         rids = samr_conn.GetGroupsForUser(user_handle)
         samr_dns = set()
         for rid in rids.rids:
-            self.assertEqual(rid.attributes, samr.SE_GROUP_MANDATORY | samr.SE_GROUP_ENABLED_BY_DEFAULT | samr.SE_GROUP_ENABLED)
+            self.assertEqual(rid.attributes, security.SE_GROUP_MANDATORY | security.SE_GROUP_ENABLED_BY_DEFAULT | security.SE_GROUP_ENABLED)
             sid = "%s-%d" % (domain_sid, rid.rid)
             res = self.admin_ldb.search(base="<SID=%s>" % sid, scope=ldb.SCOPE_BASE,
                                         attrs=[])

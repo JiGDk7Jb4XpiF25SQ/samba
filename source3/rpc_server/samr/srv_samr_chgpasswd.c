@@ -50,11 +50,14 @@
 #include "system/passwd.h"
 #include "system/filesys.h"
 #include "../libcli/auth/libcli_auth.h"
-#include "../lib/crypto/arcfour.h"
 #include "rpc_server/samr/srv_samr_util.h"
 #include "passdb.h"
 #include "auth.h"
 #include "lib/util/sys_rw.h"
+
+#include "lib/crypto/gnutls_helpers.h"
+#include <gnutls/gnutls.h>
+#include <gnutls/crypto.h>
 
 #ifndef ALLOW_CHANGE_PASSWORD
 #if (defined(HAVE_TERMIOS_H) && defined(HAVE_DUP2) && defined(HAVE_SETSID))
@@ -685,6 +688,10 @@ static NTSTATUS check_oem_password(const char *user,
 	bool lm_pass_set = (password_encrypted_with_lm_hash && old_lm_hash_encrypted);
 	enum ntlm_auth_level ntlm_auth_level = lp_ntlm_auth();
 
+	gnutls_cipher_hd_t cipher_hnd = NULL;
+	gnutls_datum_t enc_key;
+	int rc;
+
 	/* this call should be disabled without NTLM auth */
 	if (ntlm_auth_level == NTLM_AUTH_DISABLED) {
 		DBG_WARNING("NTLM password changes not"
@@ -752,7 +759,26 @@ static NTSTATUS check_oem_password(const char *user,
 	/*
 	 * Decrypt the password with the key
 	 */
-	arcfour_crypt( password_encrypted, encryption_key, 516);
+	enc_key = (gnutls_datum_t) {
+		.data = discard_const_p(unsigned char, encryption_key),
+		.size = 16,
+	};
+
+	rc = gnutls_cipher_init(&cipher_hnd,
+				GNUTLS_CIPHER_ARCFOUR_128,
+				&enc_key,
+				NULL);
+	if (rc < 0) {
+		return gnutls_error_to_ntstatus(rc, NT_STATUS_CRYPTO_SYSTEM_INVALID);
+	}
+
+	rc = gnutls_cipher_decrypt(cipher_hnd,
+				   password_encrypted,
+				   516);
+	gnutls_cipher_deinit(cipher_hnd);
+	if (rc < 0) {
+		return gnutls_error_to_ntstatus(rc, NT_STATUS_CRYPTO_SYSTEM_INVALID);
+	}
 
 	if (!decode_pw_buffer(talloc_tos(),
 				password_encrypted,
@@ -941,6 +967,7 @@ static bool check_passwd_history(struct samu *sampass, const char *plaintext)
 ************************************************************/
 
 NTSTATUS check_password_complexity(const char *username,
+				   const char *fullname,
 				   const char *password,
 				   enum samPwdChangeReason *samr_reject_reason)
 {
@@ -960,7 +987,23 @@ NTSTATUS check_password_complexity(const char *username,
 		return NT_STATUS_PASSWORD_RESTRICTION;
 	}
 
+	check_ret = setenv("SAMBA_CPS_ACCOUNT_NAME", username, 1);
+	if (check_ret != 0) {
+		return map_nt_error_from_unix_common(errno);
+	}
+	unsetenv("SAMBA_CPS_USER_PRINCIPAL_NAME");
+	if (fullname != NULL) {
+		check_ret = setenv("SAMBA_CPS_FULL_NAME", fullname, 1);
+	} else {
+		unsetenv("SAMBA_CPS_FULL_NAME");
+	}
+	if (check_ret != 0) {
+		return map_nt_error_from_unix_common(errno);
+	}
 	check_ret = smbrunsecret(cmd, password);
+	unsetenv("SAMBA_CPS_ACCOUNT_NAME");
+	unsetenv("SAMBA_CPS_USER_PRINCIPAL_NAME");
+	unsetenv("SAMBA_CPS_FULL_NAME");
 	DEBUG(5,("check_password_complexity: check password script (%s) "
 		 "returned [%d]\n", cmd, check_ret));
 	TALLOC_FREE(cmd);
@@ -995,6 +1038,7 @@ static NTSTATUS change_oem_password(struct samu *hnd, const char *rhost,
 	TALLOC_CTX *tosctx = talloc_tos();
 	struct passwd *pass = NULL;
 	const char *username = pdb_get_username(hnd);
+	const char *fullname = pdb_get_fullname(hnd);
 	time_t can_change_time = pdb_get_pass_can_change_time(hnd);
 	NTSTATUS status;
 
@@ -1062,7 +1106,10 @@ static NTSTATUS change_oem_password(struct samu *hnd, const char *rhost,
 		return NT_STATUS_ACCESS_DENIED;
 	}
 
-	status = check_password_complexity(username, new_passwd, samr_reject_reason);
+	status = check_password_complexity(username,
+					   fullname,
+					   new_passwd,
+					   samr_reject_reason);
 	if (!NT_STATUS_IS_OK(status)) {
 		TALLOC_FREE(pass);
 		return status;

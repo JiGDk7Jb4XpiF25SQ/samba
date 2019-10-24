@@ -24,13 +24,13 @@ from samba.samdb import SamDB
 from samba import gensec, Ldb, drs_utils, arcfour_encrypt, string_to_byte_array
 import ldb
 import samba
-import sys
 import uuid
 from samba.ndr import ndr_pack, ndr_unpack
 from samba.dcerpc import security, drsuapi, misc, nbt, lsa, drsblobs, dnsserver, dnsp
 from samba.dsdb import DS_DOMAIN_FUNCTION_2003
 from samba.credentials import Credentials, DONT_USE_KERBEROS
-from samba.provision import secretsdb_self_join, provision, provision_fill, FILL_DRS, FILL_SUBDOMAIN
+from samba.provision import (secretsdb_self_join, provision, provision_fill,
+                             FILL_DRS, FILL_SUBDOMAIN, DEFAULTSITE)
 from samba.provision.common import setup_path
 from samba.schema import Schema
 from samba import descriptor
@@ -40,15 +40,18 @@ from samba import read_and_sub_file
 from samba import werror
 from base64 import b64encode
 from samba import WERRORError, NTSTATUSError
-from samba.dnsserver import ARecord, AAAARecord, PTRRecord, CNameRecord, NSRecord, MXRecord, SOARecord, SRVRecord, TXTRecord
 from samba import sd_utils
+from samba.dnsserver import ARecord, AAAARecord, CNameRecord
 import logging
-import talloc
 import random
 import time
 import re
 import os
 import tempfile
+from collections import OrderedDict
+from samba.compat import text_type
+from samba.compat import get_string
+from samba.netcmd import CommandError
 
 
 class DCJoinException(Exception):
@@ -64,9 +67,9 @@ class DCJoinContext(object):
                  netbios_name=None, targetdir=None, domain=None,
                  machinepass=None, use_ntvfs=False, dns_backend=None,
                  promote_existing=False, plaintext_secrets=False,
-                 backend_store=None, forced_local_samdb=None):
-        if site is None:
-            site = "Default-First-Site-Name"
+                 backend_store=None,
+                 backend_store_size=None,
+                 forced_local_samdb=None):
 
         ctx.logger = logger
         ctx.creds = creds
@@ -76,6 +79,7 @@ class DCJoinContext(object):
         ctx.use_ntvfs = use_ntvfs
         ctx.plaintext_secrets = plaintext_secrets
         ctx.backend_store = backend_store
+        ctx.backend_store_size = backend_store_size
 
         ctx.promote_existing = promote_existing
         ctx.promote_from_dn = None
@@ -93,7 +97,13 @@ class DCJoinContext(object):
             ctx.samdb = forced_local_samdb
             ctx.server = ctx.samdb.url
         else:
-            if not ctx.server:
+            if ctx.server:
+                # work out the DC's site (if not already specified)
+                if site is None:
+                    ctx.site = ctx.find_dc_site(ctx.server)
+            else:
+                # work out the Primary DC for the domain (as well as an
+                # appropriate site for the new DC)
                 ctx.logger.info("Finding a writeable DC for domain '%s'" % domain)
                 ctx.server = ctx.find_dc(domain)
                 ctx.logger.info("Found DC %s" % ctx.server)
@@ -101,10 +111,13 @@ class DCJoinContext(object):
                               session_info=system_session(),
                               credentials=ctx.creds, lp=ctx.lp)
 
+        if ctx.site is None:
+            ctx.site = DEFAULTSITE
+
         try:
-            ctx.samdb.search(scope=ldb.SCOPE_ONELEVEL, attrs=["dn"])
-        except ldb.LdbError as e4:
-            (enum, estr) = e4.args
+            ctx.samdb.search(scope=ldb.SCOPE_BASE, attrs=[])
+        except ldb.LdbError as e:
+            (enum, estr) = e.args
             raise DCJoinException(estr)
 
         ctx.base_dn = str(ctx.samdb.get_default_basedn())
@@ -292,8 +305,9 @@ class DCJoinContext(object):
             objectAttr = lsa.ObjectAttribute()
             objectAttr.sec_qos = lsa.QosInfo()
 
-            pol_handle = lsaconn.OpenPolicy2(''.decode('utf-8'),
-                                             objectAttr, security.SEC_FLAG_MAXIMUM_ALLOWED)
+            pol_handle = lsaconn.OpenPolicy2('',
+                                             objectAttr,
+                                             security.SEC_FLAG_MAXIMUM_ALLOWED)
 
             name = lsa.String()
             name.string = ctx.realm
@@ -337,13 +351,21 @@ class DCJoinContext(object):
         try:
             ctx.cldap_ret = ctx.net.finddc(domain=domain, flags=nbt.NBT_SERVER_LDAP | nbt.NBT_SERVER_DS | nbt.NBT_SERVER_WRITABLE)
         except NTSTATUSError as error:
-            raise Exception("Failed to find a writeable DC for domain '%s': %s" %
-                            (domain, error[1]))
+            raise CommandError("Failed to find a writeable DC for domain '%s': %s" %
+                               (domain, error.args[1]))
         except Exception:
-            raise Exception("Failed to find a writeable DC for domain '%s'" % domain)
+            raise CommandError("Failed to find a writeable DC for domain '%s'" % domain)
         if ctx.cldap_ret.client_site is not None and ctx.cldap_ret.client_site != "":
             ctx.site = ctx.cldap_ret.client_site
         return ctx.cldap_ret.pdc_dns_name
+
+    def find_dc_site(ctx, server):
+        site = None
+        cldap_ret = ctx.net.finddc(address=server,
+                                   flags=nbt.NBT_SERVER_LDAP | nbt.NBT_SERVER_DS)
+        if cldap_ret.client_site is not None and cldap_ret.client_site != "":
+            site = cldap_ret.client_site
+        return site
 
     def get_behavior_version(ctx):
         res = ctx.samdb.search(base=ctx.base_dn, scope=ldb.SCOPE_BASE, attrs=["msDS-Behavior-Version"])
@@ -397,7 +419,7 @@ class DCJoinContext(object):
            so only used for RODC join'''
         res = ctx.samdb.search(base="", scope=ldb.SCOPE_BASE, attrs=["tokenGroups"])
         binsid = res[0]["tokenGroups"][0]
-        return ctx.samdb.schema_format_value("objectSID", binsid)
+        return get_string(ctx.samdb.schema_format_value("objectSID", binsid))
 
     def dn_exists(ctx, dn):
         '''check if a DN exists'''
@@ -483,6 +505,7 @@ class DCJoinContext(object):
                     v = [rec[a]]
                 else:
                     v = rec[a]
+                v = [x.encode('utf8') if isinstance(x, text_type) else x for x in v]
                 rattr = ctx.tmp_samdb.dsdb_DsReplicaAttribute(ctx.tmp_samdb, a, v)
                 attrs.append(rattr)
 
@@ -533,11 +556,14 @@ class DCJoinContext(object):
         '''return the ntdsdsa object to add'''
 
         print("Adding %s" % ctx.ntds_dn)
-        rec = {
-            "dn": ctx.ntds_dn,
-            "objectclass": "nTDSDSA",
-            "systemFlags": str(samba.dsdb.SYSTEM_FLAG_DISALLOW_MOVE_ON_DELETE),
-            "dMDLocation": ctx.schema_dn}
+
+        # When joining Windows, the order of certain attributes (mostly only
+        # msDS-HasMasterNCs and HasMasterNCs) seems to matter
+        rec = OrderedDict([
+            ("dn", ctx.ntds_dn),
+            ("objectclass", "nTDSDSA"),
+            ("systemFlags", str(samba.dsdb.SYSTEM_FLAG_DISALLOW_MOVE_ON_DELETE)),
+            ("dMDLocation", ctx.schema_dn)])
 
         nc_list = [ctx.base_dn, ctx.config_dn, ctx.schema_dn]
 
@@ -553,12 +579,17 @@ class DCJoinContext(object):
             rec["options"] = "37"
         else:
             rec["objectCategory"] = "CN=NTDS-DSA,%s" % ctx.schema_dn
+
+            # Note that Windows seems to have an undocumented requirement that
+            # the msDS-HasMasterNCs attribute occurs before HasMasterNCs
+            if ctx.behavior_version >= samba.dsdb.DS_DOMAIN_FUNCTION_2003:
+                rec["msDS-HasMasterNCs"] = ctx.full_nc_list
+
             rec["HasMasterNCs"]      = []
             for nc in nc_list:
                 if nc in ctx.full_nc_list:
                     rec["HasMasterNCs"].append(nc)
-            if ctx.behavior_version >= samba.dsdb.DS_DOMAIN_FUNCTION_2003:
-                rec["msDS-HasMasterNCs"] = ctx.full_nc_list
+
             rec["options"] = "1"
             rec["invocationId"] = ndr_pack(ctx.invocation_id)
 
@@ -718,7 +749,7 @@ class DCJoinContext(object):
                     pass
                 ctx.net.set_password(account_name=ctx.samname,
                                      domain_name=ctx.domain_name,
-                                     newpassword=ctx.acct_pass.encode('utf-8'))
+                                     newpassword=ctx.acct_pass)
 
             res = ctx.samdb.search(base=ctx.acct_dn, scope=ldb.SCOPE_BASE,
                                    attrs=["msDS-KeyVersionNumber",
@@ -854,8 +885,9 @@ class DCJoinContext(object):
                             sitename=ctx.site, lp=ctx.lp, ntdsguid=ctx.ntds_guid,
                             use_ntvfs=ctx.use_ntvfs, dns_backend=ctx.dns_backend,
                             plaintext_secrets=ctx.plaintext_secrets,
-                            backend_store=ctx.backend_store
-                            )
+                            backend_store=ctx.backend_store,
+                            backend_store_size=ctx.backend_store_size,
+                            batch_mode=True)
         print("Provision OK for domain DN %s" % presult.domaindn)
         ctx.local_samdb = presult.samdb
         ctx.lp          = presult.lp
@@ -870,8 +902,13 @@ class DCJoinContext(object):
 
         # we now operate exclusively on the local database, which
         # we need to reopen in order to get the newly created schema
+        # we set the transaction_index_cache_size to 200,000 to ensure it is
+        # not too small, if it's too small the performance of the join will
+        # be negatively impacted.
         print("Reconnecting to local samdb")
         ctx.samdb = SamDB(url=ctx.local_samdb.url,
+                         options=[
+                             "transaction_index_cache_size:200000"],
                           session_info=system_session(),
                           lp=ctx.local_samdb.lp,
                           global_schema=False)
@@ -929,7 +966,7 @@ class DCJoinContext(object):
                 repl_creds.guess(ctx.lp)
                 repl_creds.set_kerberos_state(DONT_USE_KERBEROS)
                 repl_creds.set_username(ctx.samname)
-                repl_creds.set_password(ctx.acct_pass.encode('utf-8'))
+                repl_creds.set_password(ctx.acct_pass)
             else:
                 repl_creds = ctx.creds
 
@@ -1001,6 +1038,28 @@ class DCJoinContext(object):
         else:
             ctx.local_samdb.transaction_commit()
 
+        # A large replication may have caused our LDB connection to the
+        # remote DC to timeout, so check the connection is still alive
+        ctx.refresh_ldb_connection()
+
+    def refresh_ldb_connection(ctx):
+        try:
+            # query the rootDSE to check the connection
+            ctx.samdb.search(scope=ldb.SCOPE_BASE, attrs=[])
+        except ldb.LdbError as e:
+            (enum, estr) = e.args
+
+            # if the connection was disconnected, then reconnect
+            if (enum == ldb.ERR_OPERATIONS_ERROR and
+                ('NT_STATUS_CONNECTION_DISCONNECTED' in estr or
+                 'NT_STATUS_CONNECTION_RESET' in estr)):
+                ctx.logger.warning("LDB connection disconnected. Reconnecting")
+                ctx.samdb = SamDB(url="ldap://%s" % ctx.server,
+                                  session_info=system_session(),
+                                  credentials=ctx.creds, lp=ctx.lp)
+            else:
+                raise DCJoinException(estr)
+
     def send_DsReplicaUpdateRefs(ctx, dn):
         r = drsuapi.DsReplicaUpdateRefsRequest1()
         r.naming_context = drsuapi.DsReplicaObjectIdentifier()
@@ -1043,7 +1102,6 @@ class DCJoinContext(object):
         """
 
         client_version = dnsserver.DNS_CLIENT_VERSION_LONGHORN
-        record_type = dnsp.DNS_TYPE_A
         select_flags = dnsserver.DNS_RPC_VIEW_AUTHORITY_DATA |\
             dnsserver.DNS_RPC_VIEW_NO_CHILDREN
 
@@ -1063,7 +1121,7 @@ class DCJoinContext(object):
 
         name_found = True
 
-        sd_helper = samba.sd_utils.SDUtils(ctx.samdb)
+        sd_helper = sd_utils.SDUtils(ctx.samdb)
 
         change_owner_sd = security.descriptor()
         change_owner_sd.owner_sid = ctx.new_dc_account_sid
@@ -1403,6 +1461,10 @@ class DCJoinContext(object):
                 print("Join failed - cleaning up")
             except IOError:
                 pass
+
+            # cleanup the failed join (checking we still have a live LDB
+            # connection to the remote DC first)
+            ctx.refresh_ldb_connection()
             ctx.cleanup_old_join()
             raise
 
@@ -1411,13 +1473,15 @@ def join_RODC(logger=None, server=None, creds=None, lp=None, site=None, netbios_
               targetdir=None, domain=None, domain_critical_only=False,
               machinepass=None, use_ntvfs=False, dns_backend=None,
               promote_existing=False, plaintext_secrets=False,
-              backend_store=None):
+              backend_store=None,
+              backend_store_size=None):
     """Join as a RODC."""
 
     ctx = DCJoinContext(logger, server, creds, lp, site, netbios_name,
                         targetdir, domain, machinepass, use_ntvfs, dns_backend,
                         promote_existing, plaintext_secrets,
-                        backend_store=backend_store)
+                        backend_store=backend_store,
+                        backend_store_size=backend_store_size)
 
     lp.set("workgroup", ctx.domain_name)
     logger.info("workgroup is %s" % ctx.domain_name)
@@ -1465,12 +1529,14 @@ def join_DC(logger=None, server=None, creds=None, lp=None, site=None, netbios_na
             targetdir=None, domain=None, domain_critical_only=False,
             machinepass=None, use_ntvfs=False, dns_backend=None,
             promote_existing=False, plaintext_secrets=False,
-            backend_store=None):
+            backend_store=None,
+            backend_store_size=None):
     """Join as a DC."""
     ctx = DCJoinContext(logger, server, creds, lp, site, netbios_name,
                         targetdir, domain, machinepass, use_ntvfs, dns_backend,
                         promote_existing, plaintext_secrets,
-                        backend_store=backend_store)
+                        backend_store=backend_store,
+                        backend_store_size=backend_store_size)
 
     lp.set("workgroup", ctx.domain_name)
     logger.info("workgroup is %s" % ctx.domain_name)
@@ -1495,11 +1561,14 @@ def join_DC(logger=None, server=None, creds=None, lp=None, site=None, netbios_na
 
 def join_clone(logger=None, server=None, creds=None, lp=None,
                targetdir=None, domain=None, include_secrets=False,
-               dns_backend="NONE"):
+               dns_backend="NONE", backend_store=None,
+               backend_store_size=None):
     """Creates a local clone of a remote DC."""
     ctx = DCCloneContext(logger, server, creds, lp, targetdir=targetdir,
                          domain=domain, dns_backend=dns_backend,
-                         include_secrets=include_secrets)
+                         include_secrets=include_secrets,
+                         backend_store=backend_store,
+                         backend_store_size=backend_store_size)
 
     lp.set("workgroup", ctx.domain_name)
     logger.info("workgroup is %s" % ctx.domain_name)
@@ -1516,12 +1585,13 @@ def join_subdomain(logger=None, server=None, creds=None, lp=None, site=None,
                    netbios_name=None, targetdir=None, parent_domain=None, dnsdomain=None,
                    netbios_domain=None, machinepass=None, adminpass=None, use_ntvfs=False,
                    dns_backend=None, plaintext_secrets=False,
-                   backend_store=None):
+                   backend_store=None, backend_store_size=None):
     """Join as a DC."""
     ctx = DCJoinContext(logger, server, creds, lp, site, netbios_name,
                         targetdir, parent_domain, machinepass, use_ntvfs,
                         dns_backend, plaintext_secrets,
-                        backend_store=backend_store)
+                        backend_store=backend_store,
+                        backend_store_size=backend_store_size)
     ctx.subdomain = True
     if adminpass is None:
         ctx.adminpass = samba.generate_random_password(12, 32)
@@ -1572,10 +1642,13 @@ class DCCloneContext(DCJoinContext):
 
     def __init__(ctx, logger=None, server=None, creds=None, lp=None,
                  targetdir=None, domain=None, dns_backend=None,
-                 include_secrets=False):
+                 include_secrets=False, backend_store=None,
+                 backend_store_size=None):
         super(DCCloneContext, ctx).__init__(logger, server, creds, lp,
                                             targetdir=targetdir, domain=domain,
-                                            dns_backend=dns_backend)
+                                            dns_backend=dns_backend,
+                                            backend_store=backend_store,
+                                            backend_store_size=backend_store_size)
 
         # As we don't want to create or delete these DNs, we set them to None
         ctx.server_dn = None
@@ -1625,12 +1698,13 @@ class DCCloneAndRenameContext(DCCloneContext):
 
     def __init__(ctx, new_base_dn, new_domain_name, new_realm, logger=None,
                  server=None, creds=None, lp=None, targetdir=None, domain=None,
-                 dns_backend=None, include_secrets=True):
+                 dns_backend=None, include_secrets=True, backend_store=None):
         super(DCCloneAndRenameContext, ctx).__init__(logger, server, creds, lp,
                                                      targetdir=targetdir,
                                                      domain=domain,
                                                      dns_backend=dns_backend,
-                                                     include_secrets=include_secrets)
+                                                     include_secrets=include_secrets,
+                                                     backend_store=backend_store)
         # store the new DN (etc) that we want the cloned DB to use
         ctx.new_base_dn = new_base_dn
         ctx.new_domain_name = new_domain_name
@@ -1697,7 +1771,8 @@ class DCCloneAndRenameContext(DCCloneContext):
                             configdn=ctx.rename_dn(ctx.config_dn),
                             domain=ctx.new_domain_name, domainsid=ctx.domsid,
                             serverrole="active directory domain controller",
-                            dns_backend=ctx.dns_backend)
+                            dns_backend=ctx.dns_backend,
+                            backend_store=ctx.backend_store)
 
         print("Provision OK for renamed domain DN %s" % presult.domaindn)
         ctx.local_samdb = presult.samdb

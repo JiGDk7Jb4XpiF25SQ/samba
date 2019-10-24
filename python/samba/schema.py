@@ -28,9 +28,9 @@ from samba.dcerpc import security
 from samba.ms_schema import read_ms_schema
 from samba.ndr import ndr_pack
 from samba.samdb import SamDB
+from samba.compat import get_string
 from samba import dsdb
 from ldb import SCOPE_SUBTREE, SCOPE_ONELEVEL
-import os
 
 
 def get_schema_descriptor(domain_sid, name_map={}):
@@ -111,8 +111,7 @@ class Schema(object):
             setup_path('ad-schema/%s' % Schema.base_schemas[base_schema][1]))
 
         if files is not None:
-            for file in files:
-                self.schema_data += open(file, 'rb').read()
+            self.schema_data = "".join(get_string(open(file, 'rb').read()) for file in files)
 
         self.schema_data = substitute_var(self.schema_data,
                                           {"SCHEMADN": schemadn})
@@ -134,8 +133,7 @@ class Schema(object):
             self.prefixmap_data = open(setup_path("prefixMap.txt"), 'rb').read()
 
         if additional_prefixmap is not None:
-            for map in additional_prefixmap:
-                self.prefixmap_data += "%s\n" % map
+            self.prefixmap_data += "".join("%s\n" % map for map in additional_prefixmap)
 
         self.prefixmap_data = b64encode(self.prefixmap_data).decode('utf8')
 
@@ -146,7 +144,7 @@ class Schema(object):
     @staticmethod
     def default_base_schema():
         """Returns the default base schema to use"""
-        return "2008_R2"
+        return "2012_R2"
 
     @staticmethod
     def get_version(base_schema):

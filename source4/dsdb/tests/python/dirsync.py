@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 # Unit tests for dirsync control
 # Copyright (C) Matthieu Patou <mat@matws.net> 2011
@@ -31,7 +31,7 @@ import base64
 from ldb import LdbError, SCOPE_BASE
 from ldb import Message, MessageElement, Dn
 from ldb import FLAG_MOD_ADD, FLAG_MOD_DELETE
-from samba.dcerpc import security, misc, drsblobs, security
+from samba.dcerpc import security, misc, drsblobs
 from samba.ndr import ndr_unpack, ndr_pack
 
 from samba.auth import system_session
@@ -315,14 +315,14 @@ class SimpleDirsyncTests(DirsyncBaseTests):
         delete_force(self.ldb_admin, ouname)
 
     def test_dirsync_with_controls(self):
-        """Check that dirsync return correct informations when dealing with the NC"""
+        """Check that dirsync return correct information when dealing with the NC"""
         res = self.ldb_admin.search(self.base_dn,
                                     expression="(distinguishedName=%s)" % str(self.base_dn),
                                     attrs=["name"],
                                     controls=["dirsync:1:0:10000", "extended_dn:1", "show_deleted:1"])
 
     def test_dirsync_basenc(self):
-        """Check that dirsync return correct informations when dealing with the NC"""
+        """Check that dirsync return correct information when dealing with the NC"""
         res = self.ldb_admin.search(self.base_dn,
                                     expression="(distinguishedName=%s)" % str(self.base_dn),
                                     attrs=["name"],
@@ -654,6 +654,37 @@ class ExtendedDirsyncTests(SimpleDirsyncTests):
 
         self.assertEqual(res[0].get("member;range=1-1"), None)
         self.assertEqual(len(res[0].get("member;range=0-0")), 2)
+
+    def test_dirsync_extended_dn(self):
+        """Check that dirsync works together with the extended_dn control"""
+        # Let's search for members
+        self.ldb_simple = self.get_ldb_connection(self.simple_user, self.user_pass)
+        res = self.ldb_simple.search(self.base_dn,
+                                     expression="(name=Administrators)",
+                                     controls=["dirsync:1:1:1"])
+
+        self.assertTrue(len(res[0].get("member")) > 0)
+        size = len(res[0].get("member"))
+
+        resEX1 = self.ldb_simple.search(self.base_dn,
+                                        expression="(name=Administrators)",
+                                        controls=["dirsync:1:1:1","extended_dn:1:1"])
+        self.assertTrue(len(resEX1[0].get("member")) > 0)
+        sizeEX1 = len(resEX1[0].get("member"))
+        self.assertEqual(sizeEX1, size)
+        self.assertIn(res[0]["member"][0], resEX1[0]["member"][0])
+        self.assertIn(b"<GUID=", resEX1[0]["member"][0])
+        self.assertIn(b">;<SID=S-1-5-21-", resEX1[0]["member"][0])
+
+        resEX0 = self.ldb_simple.search(self.base_dn,
+                                        expression="(name=Administrators)",
+                                        controls=["dirsync:1:1:1","extended_dn:1:0"])
+        self.assertTrue(len(resEX0[0].get("member")) > 0)
+        sizeEX0 = len(resEX0[0].get("member"))
+        self.assertEqual(sizeEX0, size)
+        self.assertIn(res[0]["member"][0], resEX0[0]["member"][0])
+        self.assertIn(b"<GUID=", resEX0[0]["member"][0])
+        self.assertIn(b">;<SID=010500000000000515", resEX0[0]["member"][0])
 
     def test_dirsync_deleted_items(self):
         """Check that dirsync returnd deleted objects too"""

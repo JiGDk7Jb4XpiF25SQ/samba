@@ -347,7 +347,7 @@ static int attr_handler2(struct oc_context *ac)
 		return ldb_operr(ldb);
 	}
 
-	/* We rely here on the preceeding "objectclass" LDB module which did
+	/* We rely here on the preceding "objectclass" LDB module which did
 	 * already fix up the objectclass list (inheritance, order...). */
 	oc_element = ldb_msg_find_element(ac->search_res->message,
 					  "objectClass");
@@ -613,6 +613,17 @@ static int oc_op_callback(struct ldb_request *req, struct ldb_reply *ares)
 
 	ret = ldb_request_add_control(search_req, LDB_CONTROL_SHOW_RECYCLED_OID,
 				      true, NULL);
+	if (ret != LDB_SUCCESS) {
+		return ldb_module_done(ac->req, NULL, NULL, ret);
+	}
+
+	/*
+	 * This ensures we see if there was a DN, that pointed at an
+	 * object that is now deleted, that we still consider the
+	 * schema check to have passed
+	 */
+	ret = ldb_request_add_control(search_req, LDB_CONTROL_REVEAL_INTERNALS,
+				      false, NULL);
 	if (ret != LDB_SUCCESS) {
 		return ldb_module_done(ac->req, NULL, NULL, ret);
 	}

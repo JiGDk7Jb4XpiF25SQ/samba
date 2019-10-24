@@ -44,6 +44,8 @@
 #include "system/threads.h"
 #include "lib/pthreadpool/pthreadpool_tevent.h"
 #include "util_event.h"
+#include "libcli/smb/smbXcli_base.h"
+#include "lib/util/time_basic.h"
 
 /* Internal message queue for deferred opens. */
 struct pending_message_list {
@@ -227,8 +229,15 @@ bool srv_send_smb(struct smbXsrv_connection *xconn, char *buffer,
 	smbd_lock_socket(xconn);
 
 	if (do_signing) {
+		NTSTATUS status;
+
 		/* Sign the outgoing packet if required. */
-		srv_calculate_sign_mac(xconn, buf_out, seqnum);
+		status = srv_calculate_sign_mac(xconn, buf_out, seqnum);
+		if (!NT_STATUS_IS_OK(status)) {
+			DBG_ERR("Failed to calculate signing mac: %s\n",
+				nt_errstr(status));
+			return false;
+		}
 	}
 
 	if (do_encrypt) {
@@ -928,16 +937,16 @@ bool get_deferred_open_message_state(struct smb_request *smbreq,
 ****************************************************************************/
 
 bool push_deferred_open_message_smb(struct smb_request *req,
-			       struct timeval request_time,
-			       struct timeval timeout,
-			       struct file_id id,
-			       struct deferred_open_record *open_rec)
+				    struct timeval timeout,
+				    struct file_id id,
+				    struct deferred_open_record *open_rec)
 {
+	struct timeval_buf tvbuf;
 	struct timeval end_time;
 
 	if (req->smb2req) {
 		return push_deferred_open_message_smb2(req->smb2req,
-						request_time,
+						req->request_time,
 						timeout,
 						id,
 						open_rec);
@@ -951,16 +960,14 @@ bool push_deferred_open_message_smb(struct smb_request *req,
 			"logic error unread_bytes != 0" );
 	}
 
-	end_time = timeval_sum(&request_time, &timeout);
+	end_time = timeval_sum(&req->request_time, &timeout);
 
-	DEBUG(10,("push_deferred_open_message_smb: pushing message "
-		"len %u mid %llu timeout time [%u.%06u]\n",
-		(unsigned int) smb_len(req->inbuf)+4,
-		(unsigned long long)req->mid,
-		(unsigned int)end_time.tv_sec,
-		(unsigned int)end_time.tv_usec));
+	DBG_DEBUG("pushing message len %u mid %"PRIu64" timeout time [%s]\n",
+		  (unsigned int) smb_len(req->inbuf)+4,
+		  req->mid,
+		  timeval_str_buf(&end_time, false, true, &tvbuf));
 
-	return push_queued_message(req, request_time, end_time, open_rec);
+	return push_queued_message(req, req->request_time, end_time, open_rec);
 }
 
 static void smbd_sig_term_handler(struct tevent_context *ev,
@@ -977,7 +984,7 @@ static void smbd_setup_sig_term_handler(struct smbd_server_connection *sconn)
 {
 	struct tevent_signal *se;
 
-	se = tevent_add_signal(sconn->root_ev_ctx,
+	se = tevent_add_signal(sconn->ev_ctx,
 			       sconn,
 			       SIGTERM, 0,
 			       smbd_sig_term_handler,
@@ -998,6 +1005,7 @@ static void smbd_sig_hup_handler(struct tevent_context *ev,
 		talloc_get_type_abort(private_data,
 		struct smbd_server_connection);
 
+	change_to_root_user();
 	DEBUG(1,("Reloading services after SIGHUP\n"));
 	reload_services(sconn, conn_snum_used, false);
 }
@@ -1006,7 +1014,7 @@ static void smbd_setup_sig_hup_handler(struct smbd_server_connection *sconn)
 {
 	struct tevent_signal *se;
 
-	se = tevent_add_signal(sconn->root_ev_ctx,
+	se = tevent_add_signal(sconn->ev_ctx,
 			       sconn,
 			       SIGHUP, 0,
 			       smbd_sig_hup_handler,
@@ -1505,8 +1513,6 @@ static connection_struct *switch_message(uint8_t type, struct smb_request *req)
 
 	errno = 0;
 
-	req->ev_ctx = NULL;
-
 	if (!xconn->smb1.negprot.done) {
 		switch (type) {
 			/*
@@ -1620,7 +1626,7 @@ static connection_struct *switch_message(uint8_t type, struct smb_request *req)
 		 * change_to_user() implies set_current_user_info()
 		 * and chdir_connect_service().
 		 */
-		if (!change_to_user(conn,session_tag)) {
+		if (!change_to_user_and_service(conn,session_tag)) {
 			DEBUG(0, ("Error: Could not change to user. Removing "
 				"deferred open, mid=%llu.\n",
 				(unsigned long long)req->mid));
@@ -1641,8 +1647,6 @@ static connection_struct *switch_message(uint8_t type, struct smb_request *req)
 			reply_nterror(req, NT_STATUS_ACCESS_DENIED);
 			return conn;
 		}
-
-		req->ev_ctx = conn->user_ev_ctx;
 	} else if (flags & AS_GUEST) {
 		/*
 		 * Does this protocol need to be run as guest? (Only archane
@@ -1652,13 +1656,9 @@ static connection_struct *switch_message(uint8_t type, struct smb_request *req)
 			reply_nterror(req, NT_STATUS_ACCESS_DENIED);
 			return conn;
 		}
-
-		req->ev_ctx = req->sconn->guest_ev_ctx;
 	} else {
 		/* This call needs to be run as root */
 		change_to_root_user();
-
-		req->ev_ctx = req->sconn->root_ev_ctx;
 	}
 
 	/* load service specific parameters */
@@ -1987,11 +1987,11 @@ static void process_smb(struct smbXsrv_connection *xconn,
 
 		/* special magic for immediate exit */
 		if ((nread == 9) &&
-		    (IVAL(inbuf, 4) == 0x74697865) &&
+		    (IVAL(inbuf, 4) == SMB_SUICIDE_PACKET) &&
 		    lp_parm_bool(-1, "smbd", "suicide mode", false)) {
 			uint8_t exitcode = CVAL(inbuf, 8);
-			DEBUG(1, ("Exiting immediately with code %d\n",
-				  (int)exitcode));
+			DBG_WARNING("SUICIDE: Exiting immediately with code %d\n",
+				    (int)exitcode);
 			exit(exitcode);
 		}
 
@@ -2103,7 +2103,7 @@ static bool find_andx_cmd_ofs(uint8_t *buf, size_t *pofs)
 
 	cmd = CVAL(buf, smb_com);
 
-	if (!is_andx_req(cmd)) {
+	if (!smb1cli_is_andx_req(cmd)) {
 		return false;
 	}
 
@@ -2111,7 +2111,7 @@ static bool find_andx_cmd_ofs(uint8_t *buf, size_t *pofs)
 
 	while (CVAL(buf, ofs) != 0xff) {
 
-		if (!is_andx_req(CVAL(buf, ofs))) {
+		if (!smb1cli_is_andx_req(CVAL(buf, ofs))) {
 			return false;
 		}
 
@@ -2268,7 +2268,7 @@ bool smb1_is_chain(const uint8_t *buf)
 	uint8_t cmd, wct, andx_cmd;
 
 	cmd = CVAL(buf, smb_com);
-	if (!is_andx_req(cmd)) {
+	if (!smb1cli_is_andx_req(cmd)) {
 		return false;
 	}
 	wct = CVAL(buf, smb_wct);
@@ -2304,7 +2304,7 @@ bool smb1_walk_chain(const uint8_t *buf,
 		return false;
 	}
 
-	if (!is_andx_req(cmd)) {
+	if (!smb1cli_is_andx_req(cmd)) {
 		return true;
 	}
 	if (wct < 2) {
@@ -2362,7 +2362,7 @@ bool smb1_walk_chain(const uint8_t *buf,
 
 		wct = CVAL(smb_buf, chain_offset);
 
-		if (is_andx_req(chain_cmd) && (wct < 2)) {
+		if (smb1cli_is_andx_req(chain_cmd) && (wct < 2)) {
 			return false;
 		}
 
@@ -2397,7 +2397,7 @@ bool smb1_walk_chain(const uint8_t *buf,
 			return false;
 		}
 
-		if (!is_andx_req(chain_cmd)) {
+		if (!smb1cli_is_andx_req(chain_cmd)) {
 			return true;
 		}
 		chain_cmd = CVAL(vwv, 0);
@@ -3899,32 +3899,17 @@ void smbd_process(struct tevent_context *ev_ctx,
 		.ev = ev_ctx,
 		.frame = talloc_stackframe(),
 	};
-	struct tevent_context *root_ev_ctx = NULL;
-	struct tevent_context *guest_ev_ctx = NULL;
 	struct smbXsrv_client *client = NULL;
 	struct smbd_server_connection *sconn = NULL;
 	struct smbXsrv_connection *xconn = NULL;
 	const char *locaddr = NULL;
 	const char *remaddr = NULL;
 	int ret;
-	size_t max_threads;
 	NTSTATUS status;
 	struct timeval tv = timeval_current();
 	NTTIME now = timeval_to_nttime(&tv);
 	char *chroot_dir = NULL;
 	int rc;
-
-	root_ev_ctx = smbd_impersonate_root_create(ev_ctx);
-	if (root_ev_ctx == NULL) {
-		DEBUG(0,("smbd_impersonate_root_create() failed\n"));
-		exit_server_cleanly("smbd_impersonate_root_create().\n");
-	}
-
-	guest_ev_ctx = smbd_impersonate_guest_create(ev_ctx);
-	if (guest_ev_ctx == NULL) {
-		DEBUG(0,("smbd_impersonate_guest_create() failed\n"));
-		exit_server_cleanly("smbd_impersonate_guest_create().\n");
-	}
 
 	status = smbXsrv_client_create(ev_ctx, ev_ctx, msg_ctx, now, &client);
 	if (!NT_STATUS_IS_OK(status)) {
@@ -3945,28 +3930,13 @@ void smbd_process(struct tevent_context *ev_ctx,
 	client->sconn = sconn;
 	sconn->client = client;
 
-	sconn->raw_ev_ctx = ev_ctx;
-	sconn->root_ev_ctx = root_ev_ctx;
-	sconn->guest_ev_ctx = guest_ev_ctx;
+	sconn->ev_ctx = ev_ctx;
 	sconn->msg_ctx = msg_ctx;
 
 	ret = pthreadpool_tevent_init(sconn, lp_aio_max_threads(),
-				      &sconn->raw_thread_pool);
+				      &sconn->pool);
 	if (ret != 0) {
-		exit_server("pthreadpool_tevent_init(raw) failed.");
-	}
-
-	max_threads = pthreadpool_tevent_max_threads(sconn->raw_thread_pool);
-	if (max_threads == 0) {
-		/*
-		 * We only have a sync pool, no need to create a 2nd one.
-		 */
-		sconn->sync_thread_pool = sconn->raw_thread_pool;
-	} else {
-		ret = pthreadpool_tevent_init(sconn, 0, &sconn->sync_thread_pool);
-		if (ret != 0) {
-			exit_server("pthreadpool_tevent_init(sync) failed.");
-		}
+		exit_server("pthreadpool_tevent_init() failed.");
 	}
 
 	if (lp_server_max_protocol() >= PROTOCOL_SMB2_02) {
@@ -4099,7 +4069,7 @@ void smbd_process(struct tevent_context *ev_ctx,
 			   ID_CACHE_KILL, smbd_id_cache_kill);
 
 	messaging_deregister(sconn->msg_ctx,
-			     MSG_SMB_CONF_UPDATED, sconn->raw_ev_ctx);
+			     MSG_SMB_CONF_UPDATED, sconn->ev_ctx);
 	messaging_register(sconn->msg_ctx, sconn,
 			   MSG_SMB_CONF_UPDATED, smbd_conf_updated);
 
@@ -4175,7 +4145,7 @@ bool req_is_in_chain(const struct smb_request *req)
 		return true;
 	}
 
-	if (!is_andx_req(req->cmd)) {
+	if (!smb1cli_is_andx_req(req->cmd)) {
 		return false;
 	}
 

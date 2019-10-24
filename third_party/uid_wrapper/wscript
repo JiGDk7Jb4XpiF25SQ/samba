@@ -3,7 +3,7 @@
 from waflib import Options
 import os, sys
 
-VERSION="1.2.4"
+VERSION="1.2.7"
 
 def configure(conf):
     if conf.CHECK_UID_WRAPPER():
@@ -59,13 +59,13 @@ def configure(conf):
             addmain=False,
             strict=True,
             msg='Checking for printf format validation support')
-	# Prototype checks
-	conf.CHECK_C_PROTOTYPE('setgroups',
-			'int setgroups(int ngroups, const gid_t *grouplist)',
-			define='HAVE_SETGROUPS_INT', headers='unistd.h sys/types.h')
-	conf.CHECK_C_PROTOTYPE('syscall',
-			'int syscall(int number, ...)',
-			define='HAVE_SYSCALL_INT', headers='unistd.h sys/syscall.h')
+        # Prototype checks
+        conf.CHECK_C_PROTOTYPE('setgroups',
+                'int setgroups(int ngroups, const gid_t *grouplist)',
+        define='HAVE_SETGROUPS_INT', headers='unistd.h sys/types.h')
+        conf.CHECK_C_PROTOTYPE('syscall',
+                'int syscall(int number, ...)',
+        define='HAVE_SYSCALL_INT', headers='unistd.h sys/syscall.h')
 
         if (sys.platform.rfind('linux') > -1):
             conf.CHECK_CODE('''
@@ -119,6 +119,6 @@ def build(bld):
         # breaks preloading!
         bld.SAMBA_LIBRARY('uid_wrapper',
                           source='uid_wrapper.c',
-                          deps='dl',
+                          deps='dl pthread',
                           install=False,
                           realname='libuid-wrapper.so')

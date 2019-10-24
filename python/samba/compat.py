@@ -70,8 +70,10 @@ if PY3:
         return (x > y) - (x < y)
     # compat functions
     from urllib.parse import quote as urllib_quote
+    from urllib.parse import urljoin as urllib_join
     from urllib.request import urlopen as urllib_urlopen
     from functools import cmp_to_key as cmp_to_key_fn
+    import socketserver as SocketServer
 
     # compat types
     integer_types = int,
@@ -82,6 +84,9 @@ if PY3:
     # alias
     import io
     StringIO = io.StringIO
+    def ConfigParser(defaults=None, dict_type=dict, allow_no_value=False):
+        from configparser import ConfigParser
+        return ConfigParser(defaults, dict_type, allow_no_value, interpolation=None)
 else:
     # Helper function to return bytes.
     # if 'unicode' is passed in then it is decoded using 'utf8' and
@@ -146,6 +151,8 @@ else:
     # compat functions
     from urllib import quote as urllib_quote
     from urllib import urlopen as urllib_urlopen
+    from urlparse import urljoin as urllib_join
+    import SocketServer as SocketServer
 
     # compat types
     integer_types = (int, long)
@@ -156,4 +163,5 @@ else:
     # alias
     import cStringIO
     StringIO = cStringIO.StringIO
+    from ConfigParser import ConfigParser
     cmp_fn = cmp

@@ -52,7 +52,11 @@ int virusfilter_vfs_next_move(
 {
 	int result;
 
-	result = SMB_VFS_NEXT_RENAME(vfs_h, smb_fname_src, smb_fname_dst);
+	result = SMB_VFS_NEXT_RENAMEAT(vfs_h,
+			vfs_h->conn->cwd_fsp,
+			smb_fname_src,
+			vfs_h->conn->cwd_fsp,
+			smb_fname_dst);
 	if (result == 0 || errno != EXDEV) {
 		return result;
 	}
@@ -977,7 +981,7 @@ int virusfilter_shell_set_conn_env(
 	virusfilter_env_set(mem_ctx, env_list, "VIRUSFILTER_SERVICE_NAME",
 			    lp_const_servicename(snum));
 	virusfilter_env_set(mem_ctx, env_list, "VIRUSFILTER_SERVICE_PATH",
-			    conn->cwd_fname->base_name);
+			    conn->cwd_fsp->fsp_name->base_name);
 
 	client_addr_p = tsocket_address_inet_addr_string(
 				conn->sconn->remote_address, talloc_tos());

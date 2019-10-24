@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 '''automated testing library for testing Samba against windows'''
 
@@ -834,7 +834,7 @@ options {
 
         """This server must therefore not yet be a directory server, so we must promote it"""
         child.sendline("copy /Y con answers.txt")
-        child.sendline('''
+        child.sendline(b'''
 [DCInstall]
 ; New forest promotion
 ReplicaOrNewDomain=Domain

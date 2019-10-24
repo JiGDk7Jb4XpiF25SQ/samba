@@ -51,6 +51,15 @@ NTSTATUS fsp_new(struct connection_struct *conn, TALLOC_CTX *mem_ctx,
 		goto fail;
 	}
 
+#if defined(HAVE_OFD_LOCKS)
+	fsp->use_ofd_locks = true;
+	if (lp_parm_bool(SNUM(conn),
+			 "smbd",
+			 "force process locks",
+			 false)) {
+		fsp->use_ofd_locks = false;
+	}
+#endif
 	fsp->fh->ref_count = 1;
 	fsp->fh->fd = -1;
 
@@ -72,6 +81,17 @@ fail:
 	TALLOC_FREE(fsp);
 
 	return status;
+}
+
+void fsp_set_gen_id(files_struct *fsp)
+{
+	static uint64_t gen_id = 1;
+
+	/*
+	 * A billion of 64-bit increments per second gives us
+	 * more than 500 years of runtime without wrap.
+	 */
+	fsp->fh->gen_id = gen_id++;
 }
 
 /****************************************************************************
@@ -107,11 +127,12 @@ NTSTATUS file_new(struct smb_request *req, connection_struct *conn,
 		fsp->op = op;
 		op->compat = fsp;
 		fsp->fnum = op->local_id;
-		fsp->fh->gen_id = smbXsrv_open_hash(op);
 	} else {
 		DEBUG(10, ("%s: req==NULL, INTERNAL_OPEN_ONLY, smbXsrv_open "
 			   "allocated\n", __func__));
 	}
+
+	fsp_set_gen_id(fsp);
 
 	/*
 	 * Create an smb_filename with "" for the base_name.  There are very
@@ -455,22 +476,6 @@ bool file_find_subpath(files_struct *dir_fsp)
 }
 
 /****************************************************************************
- Sync open files on a connection.
-****************************************************************************/
-
-void file_sync_all(connection_struct *conn)
-{
-	files_struct *fsp, *next;
-
-	for (fsp=conn->sconn->files; fsp; fsp=next) {
-		next=fsp->next;
-		if ((conn == fsp->conn) && (fsp->fh->fd != -1)) {
-			sync_file(conn, fsp, True /* write through */);
-		}
-	}
-}
-
-/****************************************************************************
  Free up a fsp.
 ****************************************************************************/
 
@@ -695,9 +700,12 @@ struct files_struct *file_fsp_smb2(struct smbd_smb2_request *smb2req,
  Duplicate the file handle part for a DOS or FCB open.
 ****************************************************************************/
 
-NTSTATUS dup_file_fsp(struct smb_request *req, files_struct *from,
-		      uint32_t access_mask, uint32_t share_access,
-		      uint32_t create_options, files_struct *to)
+NTSTATUS dup_file_fsp(
+	struct smb_request *req,
+	files_struct *from,
+	uint32_t access_mask,
+	uint32_t create_options,
+	files_struct *to)
 {
 	/* this can never happen for print files */
 	SMB_ASSERT(from->print_file == NULL);
@@ -713,7 +721,6 @@ NTSTATUS dup_file_fsp(struct smb_request *req, files_struct *from,
 	to->vuid = from->vuid;
 	to->open_time = from->open_time;
 	to->access_mask = access_mask;
-	to->share_access = share_access;
 	to->oplock_type = from->oplock_type;
 	to->can_lock = from->can_lock;
 	to->can_read = ((access_mask & FILE_READ_DATA) != 0);
@@ -778,14 +785,20 @@ NTSTATUS fsp_set_smb_fname(struct files_struct *fsp,
 			&fsp->name_hash);
 }
 
-const struct GUID *fsp_client_guid(const files_struct *fsp)
-{
-	return &fsp->conn->sconn->client->connections->smb2.client.guid;
-}
-
 size_t fsp_fullbasepath(struct files_struct *fsp, char *buf, size_t buflen)
 {
-	int len;
+	int len = 0;
+	char tmp_buf[1] = {'\0'};
+
+	/*
+	 * Don't pass NULL buffer to snprintf (to satisfy static checker)
+	 * Some callers will call this function with NULL for buf and
+	 * 0 for buflen in order to get length of fullbasepatch (without
+	 * needing to allocate or write to buf)
+	 */
+	if (buf == NULL) {
+		buf = tmp_buf;
+	}
 
 	len = snprintf(buf, buflen, "%s/%s", fsp->conn->connectpath,
 		       fsp->fsp_name->base_name);

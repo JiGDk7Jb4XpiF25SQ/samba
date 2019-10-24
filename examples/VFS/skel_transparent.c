@@ -164,17 +164,15 @@ static void skel_rewind_dir(vfs_handle_struct *handle, DIR *dirp)
 	SMB_VFS_NEXT_REWINDDIR(handle, dirp);
 }
 
-static int skel_mkdir(vfs_handle_struct *handle,
+static int skel_mkdirat(vfs_handle_struct *handle,
+		struct files_struct *dirfsp,
 		const struct smb_filename *smb_fname,
 		mode_t mode)
 {
-	return SMB_VFS_NEXT_MKDIR(handle, smb_fname, mode);
-}
-
-static int skel_rmdir(vfs_handle_struct *handle,
-		const struct smb_filename *smb_fname)
-{
-	return SMB_VFS_NEXT_RMDIR(handle, smb_fname);
+	return SMB_VFS_NEXT_MKDIRAT(handle,
+			dirfsp,
+			smb_fname,
+			mode);
 }
 
 static int skel_closedir(vfs_handle_struct *handle, DIR *dir)
@@ -198,7 +196,7 @@ static NTSTATUS skel_create_file(struct vfs_handle_struct *handle,
 				 uint32_t create_options,
 				 uint32_t file_attributes,
 				 uint32_t oplock_request,
-				 struct smb2_lease *lease,
+				 const struct smb2_lease *lease,
 				 uint64_t allocation_size,
 				 uint32_t private_flags,
 				 struct security_descriptor *sd,
@@ -369,11 +367,17 @@ static ssize_t skel_recvfile(vfs_handle_struct *handle, int fromfd,
 	return SMB_VFS_NEXT_RECVFILE(handle, fromfd, tofsp, offset, n);
 }
 
-static int skel_rename(vfs_handle_struct *handle,
+static int skel_renameat(vfs_handle_struct *handle,
+		       files_struct *srcfsp,
 		       const struct smb_filename *smb_fname_src,
+		       files_struct *dstfsp,
 		       const struct smb_filename *smb_fname_dst)
 {
-	return SMB_VFS_NEXT_RENAME(handle, smb_fname_src, smb_fname_dst);
+	return SMB_VFS_NEXT_RENAMEAT(handle,
+			srcfsp,
+			smb_fname_src,
+			dstfsp,
+			smb_fname_dst);
 }
 
 struct skel_fsync_state {
@@ -452,10 +456,15 @@ static uint64_t skel_get_alloc_size(struct vfs_handle_struct *handle,
 	return SMB_VFS_NEXT_GET_ALLOC_SIZE(handle, fsp, sbuf);
 }
 
-static int skel_unlink(vfs_handle_struct *handle,
-		       const struct smb_filename *smb_fname)
+static int skel_unlinkat(vfs_handle_struct *handle,
+			struct files_struct *dirfsp,
+			const struct smb_filename *smb_fname,
+			int flags)
 {
-	return SMB_VFS_NEXT_UNLINK(handle, smb_fname);
+	return SMB_VFS_NEXT_UNLINKAT(handle,
+			dirfsp,
+			smb_fname,
+			flags);
 }
 
 static int skel_chmod(vfs_handle_struct *handle,
@@ -469,14 +478,6 @@ static int skel_fchmod(vfs_handle_struct *handle, files_struct *fsp,
 		       mode_t mode)
 {
 	return SMB_VFS_NEXT_FCHMOD(handle, fsp, mode);
-}
-
-static int skel_chown(vfs_handle_struct *handle,
-			const struct smb_filename *smb_fname,
-			uid_t uid,
-			gid_t gid)
-{
-	return SMB_VFS_NEXT_CHOWN(handle, smb_fname, uid, gid);
 }
 
 static int skel_fchown(vfs_handle_struct *handle, files_struct *fsp,
@@ -537,6 +538,21 @@ static int skel_kernel_flock(struct vfs_handle_struct *handle,
 	return SMB_VFS_NEXT_KERNEL_FLOCK(handle, fsp, share_mode, access_mask);
 }
 
+static int skel_fcntl(struct vfs_handle_struct *handle,
+		      struct files_struct *fsp, int cmd, va_list cmd_arg)
+{
+	void *arg;
+	va_list dup_cmd_arg;
+	int result;
+
+	va_copy(dup_cmd_arg, cmd_arg);
+	arg = va_arg(dup_cmd_arg, void *);
+	result = SMB_VFS_NEXT_FCNTL(handle, fsp, cmd, arg);
+	va_end(dup_cmd_arg);
+
+	return result;
+}
+
 static int skel_linux_setlease(struct vfs_handle_struct *handle,
 			       struct files_struct *fsp, int leasetype)
 {
@@ -550,34 +566,56 @@ static bool skel_getlock(vfs_handle_struct *handle, files_struct *fsp,
 	return SMB_VFS_NEXT_GETLOCK(handle, fsp, poffset, pcount, ptype, ppid);
 }
 
-static int skel_symlink(vfs_handle_struct *handle,
+static int skel_symlinkat(vfs_handle_struct *handle,
 			const char *link_contents,
+			struct files_struct *dirfsp,
 			const struct smb_filename *new_smb_fname)
 {
-	return SMB_VFS_NEXT_SYMLINK(handle, link_contents, new_smb_fname);
+	return SMB_VFS_NEXT_SYMLINKAT(handle,
+				link_contents,
+				dirfsp,
+				new_smb_fname);
 }
 
-static int skel_vfs_readlink(vfs_handle_struct *handle,
+static int skel_vfs_readlinkat(vfs_handle_struct *handle,
+			files_struct *dirfsp,
 			const struct smb_filename *smb_fname,
 			char *buf,
 			size_t bufsiz)
 {
-	return SMB_VFS_NEXT_READLINK(handle, smb_fname, buf, bufsiz);
+	return SMB_VFS_NEXT_READLINKAT(handle,
+			dirfsp,
+			smb_fname,
+			buf,
+			bufsiz);
 }
 
-static int skel_link(vfs_handle_struct *handle,
+static int skel_linkat(vfs_handle_struct *handle,
+			files_struct *srcfsp,
 			const struct smb_filename *old_smb_fname,
-			const struct smb_filename *new_smb_fname)
+			files_struct *dstfsp,
+			const struct smb_filename *new_smb_fname,
+			int flags)
 {
-	return SMB_VFS_NEXT_LINK(handle, old_smb_fname, new_smb_fname);
+	return SMB_VFS_NEXT_LINKAT(handle,
+			srcfsp,
+			old_smb_fname,
+			dstfsp,
+			new_smb_fname,
+			flags);
 }
 
-static int skel_mknod(vfs_handle_struct *handle,
+static int skel_mknodat(vfs_handle_struct *handle,
+			files_struct *dirfsp,
 			const struct smb_filename *smb_fname,
 			mode_t mode,
 			SMB_DEV_T dev)
 {
-	return SMB_VFS_NEXT_MKNOD(handle, smb_fname, mode, dev);
+	return SMB_VFS_NEXT_MKNODAT(handle,
+			dirfsp,
+			smb_fname,
+			mode,
+			dev);
 }
 
 static struct smb_filename *skel_realpath(vfs_handle_struct *handle,
@@ -598,6 +636,12 @@ static struct file_id skel_file_id_create(vfs_handle_struct *handle,
 					  const SMB_STRUCT_STAT *sbuf)
 {
 	return SMB_VFS_NEXT_FILE_ID_CREATE(handle, sbuf);
+}
+
+static uint64_t skel_fs_file_id(vfs_handle_struct *handle,
+				const SMB_STRUCT_STAT *sbuf)
+{
+	return SMB_VFS_NEXT_FS_FILE_ID(handle, sbuf);
 }
 
 struct skel_offload_read_state {
@@ -812,26 +856,16 @@ static const char *skel_connectpath(struct vfs_handle_struct *handle,
 
 static NTSTATUS skel_brl_lock_windows(struct vfs_handle_struct *handle,
 				      struct byte_range_lock *br_lck,
-				      struct lock_struct *plock,
-				      bool blocking_lock)
+				      struct lock_struct *plock)
 {
-	return SMB_VFS_NEXT_BRL_LOCK_WINDOWS(handle,
-					     br_lck, plock, blocking_lock);
+	return SMB_VFS_NEXT_BRL_LOCK_WINDOWS(handle, br_lck, plock);
 }
 
 static bool skel_brl_unlock_windows(struct vfs_handle_struct *handle,
-				    struct messaging_context *msg_ctx,
 				    struct byte_range_lock *br_lck,
 				    const struct lock_struct *plock)
 {
-	return SMB_VFS_NEXT_BRL_UNLOCK_WINDOWS(handle, msg_ctx, br_lck, plock);
-}
-
-static bool skel_brl_cancel_windows(struct vfs_handle_struct *handle,
-				    struct byte_range_lock *br_lck,
-				    struct lock_struct *plock)
-{
-	return SMB_VFS_NEXT_BRL_CANCEL_WINDOWS(handle, br_lck, plock);
+	return SMB_VFS_NEXT_BRL_UNLOCK_WINDOWS(handle, br_lck, plock);
 }
 
 static bool skel_strict_lock_check(struct vfs_handle_struct *handle,
@@ -895,12 +929,11 @@ static void skel_get_dos_attributes_done(struct tevent_req *subreq);
 
 static struct tevent_req *skel_get_dos_attributes_send(
 			TALLOC_CTX *mem_ctx,
-			const struct smb_vfs_ev_glue *evg,
+			struct tevent_context *ev,
 			struct vfs_handle_struct *handle,
 			files_struct *dir_fsp,
 			struct smb_filename *smb_fname)
 {
-	struct tevent_context *ev = smb_vfs_ev_glue_ev_ctx(evg);
 	struct tevent_req *req = NULL;
 	struct skel_get_dos_attributes_state *state = NULL;
 	struct tevent_req *subreq = NULL;
@@ -912,7 +945,7 @@ static struct tevent_req *skel_get_dos_attributes_send(
 	}
 
 	subreq = SMB_VFS_NEXT_GET_DOS_ATTRIBUTES_SEND(mem_ctx,
-						      evg,
+						      ev,
 						      handle,
 						      dir_fsp,
 						      smb_fname);
@@ -1094,14 +1127,13 @@ static void skel_getxattrat_done(struct tevent_req *subreq);
 
 static struct tevent_req *skel_getxattrat_send(
 			TALLOC_CTX *mem_ctx,
-			const struct smb_vfs_ev_glue *evg,
+			struct tevent_context *ev,
 			struct vfs_handle_struct *handle,
 			files_struct *dir_fsp,
 			const struct smb_filename *smb_fname,
 			const char *xattr_name,
 			size_t alloc_hint)
 {
-	struct tevent_context *ev = smb_vfs_ev_glue_ev_ctx(evg);
 	struct tevent_req *req = NULL;
 	struct skel_getxattrat_state *state = NULL;
 	struct tevent_req *subreq = NULL;
@@ -1113,7 +1145,7 @@ static struct tevent_req *skel_getxattrat_send(
 	}
 
 	subreq = SMB_VFS_NEXT_GETXATTRAT_SEND(state,
-					      evg,
+					      ev,
 					      handle,
 					      dir_fsp,
 					      smb_fname,
@@ -1310,8 +1342,7 @@ static struct vfs_fn_pointers skel_transparent_fns = {
 	.seekdir_fn = skel_seekdir,
 	.telldir_fn = skel_telldir,
 	.rewind_dir_fn = skel_rewind_dir,
-	.mkdir_fn = skel_mkdir,
-	.rmdir_fn = skel_rmdir,
+	.mkdirat_fn = skel_mkdirat,
 	.closedir_fn = skel_closedir,
 
 	/* File operations */
@@ -1328,17 +1359,16 @@ static struct vfs_fn_pointers skel_transparent_fns = {
 	.lseek_fn = skel_lseek,
 	.sendfile_fn = skel_sendfile,
 	.recvfile_fn = skel_recvfile,
-	.rename_fn = skel_rename,
+	.renameat_fn = skel_renameat,
 	.fsync_send_fn = skel_fsync_send,
 	.fsync_recv_fn = skel_fsync_recv,
 	.stat_fn = skel_stat,
 	.fstat_fn = skel_fstat,
 	.lstat_fn = skel_lstat,
 	.get_alloc_size_fn = skel_get_alloc_size,
-	.unlink_fn = skel_unlink,
+	.unlinkat_fn = skel_unlinkat,
 	.chmod_fn = skel_chmod,
 	.fchmod_fn = skel_fchmod,
-	.chown_fn = skel_chown,
 	.fchown_fn = skel_fchown,
 	.lchown_fn = skel_lchown,
 	.chdir_fn = skel_chdir,
@@ -1348,15 +1378,17 @@ static struct vfs_fn_pointers skel_transparent_fns = {
 	.fallocate_fn = skel_fallocate,
 	.lock_fn = skel_lock,
 	.kernel_flock_fn = skel_kernel_flock,
+	.fcntl_fn = skel_fcntl,
 	.linux_setlease_fn = skel_linux_setlease,
 	.getlock_fn = skel_getlock,
-	.symlink_fn = skel_symlink,
-	.readlink_fn = skel_vfs_readlink,
-	.link_fn = skel_link,
-	.mknod_fn = skel_mknod,
+	.symlinkat_fn = skel_symlinkat,
+	.readlinkat_fn = skel_vfs_readlinkat,
+	.linkat_fn = skel_linkat,
+	.mknodat_fn = skel_mknodat,
 	.realpath_fn = skel_realpath,
 	.chflags_fn = skel_chflags,
 	.file_id_create_fn = skel_file_id_create,
+	.fs_file_id_fn = skel_fs_file_id,
 	.offload_read_send_fn = skel_offload_read_send,
 	.offload_read_recv_fn = skel_offload_read_recv,
 	.offload_write_send_fn = skel_offload_write_send,
@@ -1369,7 +1401,6 @@ static struct vfs_fn_pointers skel_transparent_fns = {
 	.connectpath_fn = skel_connectpath,
 	.brl_lock_windows_fn = skel_brl_lock_windows,
 	.brl_unlock_windows_fn = skel_brl_unlock_windows,
-	.brl_cancel_windows_fn = skel_brl_cancel_windows,
 	.strict_lock_check_fn = skel_strict_lock_check,
 	.translate_name_fn = skel_translate_name,
 	.fsctl_fn = skel_fsctl,

@@ -18,33 +18,70 @@
 
 #include "includes.h"
 #include "messages.h"
-#include "lib/util/talloc_report.h"
+#include "lib/util/talloc_report_printf.h"
+#ifdef HAVE_MALLINFO
+#include <malloc.h>
+#endif /* HAVE_MALLINFO */
 
-/**
- * Respond to a POOL_USAGE message by sending back string form of memory
- * usage stats.
- **/
-static void msg_pool_usage(struct messaging_context *msg_ctx,
-			   void *private_data, 
-			   uint32_t msg_type, 
-			   struct server_id src,
-			   DATA_BLOB *data)
+static bool pool_usage_filter(struct messaging_rec *rec, void *private_data)
 {
-	char *report;
-
-	SMB_ASSERT(msg_type == MSG_REQ_POOL_USAGE);
-
-	DEBUG(2,("Got POOL_USAGE\n"));
-
-	report = talloc_report_str(msg_ctx, NULL);
-
-	if (report != NULL) {
-		messaging_send_buf(msg_ctx, src, MSG_POOL_USAGE,
-				   (uint8_t *)report,
-				   talloc_get_size(report)-1);
+	if (rec->msg_type != MSG_REQ_POOL_USAGE) {
+		return false;
 	}
 
-	talloc_free(report);
+	DBG_DEBUG("Got MSG_REQ_POOL_USAGE\n");
+
+	if (rec->num_fds != 1) {
+		DBG_DEBUG("Got %"PRIu8" fds, expected one\n", rec->num_fds);
+		return false;
+	}
+
+	return true;
+}
+
+
+static void msg_pool_usage_do(struct tevent_req *req)
+{
+	struct messaging_context *msg_ctx = tevent_req_callback_data(
+		req, struct messaging_context);
+	struct messaging_rec *rec = NULL;
+	FILE *f = NULL;
+	int ret;
+
+	ret = messaging_filtered_read_recv(req, talloc_tos(), &rec);
+	TALLOC_FREE(req);
+	if (ret != 0) {
+		DBG_DEBUG("messaging_filtered_read_recv returned %s\n",
+			  strerror(ret));
+		return;
+	}
+
+	f = fdopen(rec->fds[0], "w");
+	if (f == NULL) {
+		close(rec->fds[0]);
+		TALLOC_FREE(rec);
+		DBG_DEBUG("fdopen failed: %s\n", strerror(errno));
+		return;
+	}
+
+	TALLOC_FREE(rec);
+
+	talloc_full_report_printf(NULL, f);
+
+	fclose(f);
+	f = NULL;
+
+	req = messaging_filtered_read_send(
+		msg_ctx,
+		messaging_tevent_context(msg_ctx),
+		msg_ctx,
+		pool_usage_filter,
+		NULL);
+	if (req == NULL) {
+		DBG_WARNING("messaging_filtered_read_send failed\n");
+		return;
+	}
+	tevent_req_set_callback(req, msg_pool_usage_do, msg_ctx);
 }
 
 /**
@@ -52,6 +89,18 @@ static void msg_pool_usage(struct messaging_context *msg_ctx,
  **/
 void register_msg_pool_usage(struct messaging_context *msg_ctx)
 {
-	messaging_register(msg_ctx, NULL, MSG_REQ_POOL_USAGE, msg_pool_usage);
+	struct tevent_req *req = NULL;
+
+	req = messaging_filtered_read_send(
+		msg_ctx,
+		messaging_tevent_context(msg_ctx),
+		msg_ctx,
+		pool_usage_filter,
+		NULL);
+	if (req == NULL) {
+		DBG_WARNING("messaging_filtered_read_send failed\n");
+		return;
+	}
+	tevent_req_set_callback(req, msg_pool_usage_do, msg_ctx);
 	DEBUG(2, ("Registered MSG_REQ_POOL_USAGE\n"));
-}	
+}

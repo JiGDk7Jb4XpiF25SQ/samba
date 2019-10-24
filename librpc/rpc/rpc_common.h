@@ -168,7 +168,11 @@ enum dcerpc_transport_t dcerpc_transport_by_tower(const struct epm_tower *tower)
 void dcerpc_set_frag_length(DATA_BLOB *blob, uint16_t v);
 uint16_t dcerpc_get_frag_length(const DATA_BLOB *blob);
 void dcerpc_set_auth_length(DATA_BLOB *blob, uint16_t v);
+uint16_t dcerpc_get_auth_length(const DATA_BLOB *blob);
 uint8_t dcerpc_get_endian_flag(DATA_BLOB *blob);
+uint8_t dcerpc_get_auth_type(const DATA_BLOB *blob);
+uint8_t dcerpc_get_auth_level(const DATA_BLOB *blob);
+uint32_t dcerpc_get_auth_context_id(const DATA_BLOB *blob);
 const char *dcerpc_default_transport_endpoint(TALLOC_CTX *mem_ctx,
 					      enum dcerpc_transport_t transport,
 					      const struct ndr_interface_table *table);
@@ -440,5 +444,17 @@ struct ndr_syntax_id dcerpc_construct_bind_time_features(uint64_t features);
 	(((stub_length) % DCERPC_AUTH_PAD_ALIGNMENT) > 0)?\
 	(DCERPC_AUTH_PAD_ALIGNMENT - (stub_length) % DCERPC_AUTH_PAD_ALIGNMENT):\
 	0)
+
+NTSTATUS dcerpc_generic_session_key(DATA_BLOB *session_key);
+
+NTSTATUS dcerpc_ncacn_push_auth(DATA_BLOB *blob,
+				TALLOC_CTX *mem_ctx,
+				struct ncacn_packet *pkt,
+				struct dcerpc_auth *auth_info);
+
+void dcerpc_log_packet(const char *lockdir,
+		       const struct ndr_interface_table *ndr,
+		       uint32_t opnum, uint32_t flags,
+		       const DATA_BLOB *pkt);
 
 #endif /* __DEFAULT_LIBRPC_RPCCOMMON_H__ */

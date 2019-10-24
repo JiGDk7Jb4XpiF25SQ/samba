@@ -35,13 +35,34 @@ from samba.auth import system_session, admin_session
 from samba.netcmd import CommandError
 from samba.netcmd.fsmo import get_fsmo_roleowner
 
+# vals is a sequence of ldb.bytes objects which are a subclass
+# of 'byte' type in python3 and just a str type in python2, to
+# display as string these need to be converted to string via (str)
+# function in python3 but that may generate a UnicodeDecode error,
+# if so use repr instead.  We need to at least try to get the 'str'
+# value if possible to allow some tests which check the strings
+# outputted to pass, these tests compare attr values logged to stdout
+# against those in various results files.
+
+def dump_attr_values(vals):
+    result = ""
+    for value in vals:
+        if len(result):
+            result = "," + result
+        try:
+            result = result + str(value)
+        except UnicodeDecodeError:
+            result = result + repr(value)
+    return result
 
 class dbcheck(object):
     """check a SAM database for errors"""
 
     def __init__(self, samdb, samdb_schema=None, verbose=False, fix=False,
                  yes=False, quiet=False, in_transaction=False,
-                 reset_well_known_acls=False):
+                 quick_membership_checks=False,
+                 reset_well_known_acls=False,
+                 check_expired_tombstones=False):
         self.samdb = samdb
         self.dict_oid_name = None
         self.samdb_schema = (samdb_schema or samdb)
@@ -60,6 +81,7 @@ class dbcheck(object):
         self.fix_all_string_dn_component_mismatch = False
         self.fix_all_GUID_dn_component_mismatch = False
         self.fix_all_SID_dn_component_mismatch = False
+        self.fix_all_SID_dn_component_missing = False
         self.fix_all_old_dn_string_component_mismatch = False
         self.fix_all_metadata = False
         self.fix_time_metadata = False
@@ -86,7 +108,10 @@ class dbcheck(object):
         self.fix_utf8_userparameters = False
         self.fix_doubled_userparameters = False
         self.fix_sid_rid_set_conflict = False
+        self.quick_membership_checks = quick_membership_checks
         self.reset_well_known_acls = reset_well_known_acls
+        self.check_expired_tombstones = check_expired_tombstones
+        self.expired_tombstones = 0
         self.reset_all_well_known_acls = False
         self.in_transaction = in_transaction
         self.infrastructure_dn = ldb.Dn(samdb, "CN=Infrastructure," + samdb.domain_dn())
@@ -100,6 +125,7 @@ class dbcheck(object):
         self.fix_missing_deleted_objects = False
         self.fix_replica_locations = False
         self.fix_missing_rid_set_master = False
+        self.fix_changes_after_deletion_bug = False
 
         self.dn_set = set()
         self.link_id_cache = {}
@@ -188,6 +214,17 @@ class dbcheck(object):
         else:
             self.rid_set_dn = None
 
+        ntds_service_dn = "CN=Directory Service,CN=Windows NT,CN=Services,%s" % \
+                          self.samdb.get_config_basedn().get_linearized()
+        res = samdb.search(base=ntds_service_dn,
+                           scope=ldb.SCOPE_BASE,
+                           expression="(objectClass=nTDSService)",
+                           attrs=["tombstoneLifetime"])
+        if "tombstoneLifetime" in res[0]:
+            self.tombstoneLifetime = int(res[0]["tombstoneLifetime"][0])
+        else:
+            self.tombstoneLifetime = 180
+
         self.compatibleFeatures = []
         self.requiredFeatures = []
 
@@ -206,7 +243,8 @@ class dbcheck(object):
                 raise
             pass
 
-    def check_database(self, DN=None, scope=ldb.SCOPE_SUBTREE, controls=[], attrs=['*']):
+    def check_database(self, DN=None, scope=ldb.SCOPE_SUBTREE, controls=None,
+                       attrs=None):
         '''perform a database check, returning the number of errors found'''
         res = self.samdb.search(base=DN, scope=scope, attrs=['dn'], controls=controls)
         self.report('Checking %u objects' % len(res))
@@ -222,6 +260,13 @@ class dbcheck(object):
 
         if DN is None:
             error_count += self.check_rootdse()
+
+        if self.expired_tombstones > 0:
+            self.report("NOTICE: found %d expired tombstones, "
+                        "'samba' will remove them daily, "
+                        "'samba-tool domain tombstones expunge' "
+                        "would do that immediately." % (
+                        self.expired_tombstones))
 
         if error_count != 0 and not self.fix:
             self.report("Please use --fix to fix these errors")
@@ -383,10 +428,11 @@ systemFlags: -1946157056%s""" % (dn, guid_suffix),
 
     def do_modify(self, m, controls, msg, validate=True):
         '''perform a modify with optional verbose output'''
+        controls = controls + ["local_oid:%s:0" % dsdb.DSDB_CONTROL_DBCHECK]
         if self.verbose:
             self.report(self.samdb.write_ldif(m, ldb.CHANGETYPE_MODIFY))
+            self.report("controls: %r" % controls)
         try:
-            controls = controls + ["local_oid:%s:0" % dsdb.DSDB_CONTROL_DBCHECK]
             self.samdb.modify(m, controls=controls, validate=validate)
         except Exception as err:
             if self.in_transaction:
@@ -493,7 +539,7 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
     def err_duplicate_values(self, dn, attrname, dup_values, values):
         '''fix attribute normalisation errors'''
         self.report("ERROR: Duplicate values for attribute '%s' in '%s'" % (attrname, dn))
-        self.report("Values contain a duplicate: [%s]/[%s]!" % (','.join(dup_values), ','.join(values)))
+        self.report("Values contain a duplicate: [%s]/[%s]!" % (','.join(dump_attr_values(dup_values)), ','.join(dump_attr_values(values))))
         if not self.confirm_all("Fix duplicates for '%s' from '%s'?" % (attrname, dn), 'fix_all_duplicates'):
             self.report("Not fixing attribute '%s'" % attrname)
             return
@@ -547,6 +593,19 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
     def err_missing_target_dn_or_GUID(self, dn, attrname, val, dsdb_dn):
         """handle a missing target DN (if specified, GUID form can't be found,
         and otherwise DN string form can't be found)"""
+
+        # Don't change anything if the object itself is deleted
+        if str(dn).find('\\0ADEL') != -1:
+            # We don't bump the error count as Samba produces these
+            # in normal operation
+            self.report("WARNING: no target object found for GUID "
+                        "component link %s in deleted object "
+                        "%s - %s" % (attrname, dn, val))
+            self.report("Not removing dangling one-way "
+                        "link on deleted object "
+                        "(tombstone garbage collection in progress?)")
+            return 0
+
         # check if its a backlink
         linkID, _ = self.get_attr_linkID_and_reverse_name(attrname)
         if (linkID & 1 == 0) and str(dsdb_dn).find('\\0ADEL') == -1:
@@ -629,7 +688,6 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
     def err_incorrect_binary_dn(self, dn, attrname, val, dsdb_dn, errstr):
         """handle an incorrect binary DN component"""
         self.report("ERROR: %s binary component for %s in object %s - %s" % (errstr, attrname, dn, val))
-        controls = ["extended_dn:1:1", "show_recycled:1"]
 
         if not self.confirm_all('Change DN to %s?' % str(dsdb_dn), 'fix_all_binary_dn'):
             self.report("Not fixing %s" % errstr)
@@ -677,6 +735,38 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
         if self.do_modify(m, ["show_recycled:1"],
                           "Failed to fix incorrect DN %s on attribute %s" % (mismatch_type, attrname)):
             self.report("Fixed incorrect DN %s on attribute %s" % (mismatch_type, attrname))
+
+    def err_dn_component_missing_target_sid(self, dn, attrname, val, dsdb_dn, target_sid_blob):
+        """handle a DN string being incorrect"""
+        self.report("ERROR: missing DN SID component for %s in object %s - %s" % (attrname, dn, val))
+
+        if len(dsdb_dn.prefix) != 0:
+            self.report("Not fixing missing DN SID on DN+BINARY or DN+STRING")
+            return
+
+        correct_dn = ldb.Dn(self.samdb, dsdb_dn.dn.extended_str())
+        correct_dn.set_extended_component("SID", target_sid_blob)
+
+        if not self.confirm_all('Change DN to %s?' % correct_dn.extended_str(),
+                                'fix_all_SID_dn_component_missing'):
+            self.report("Not fixing missing DN SID component")
+            return
+
+        target_guid_blob = correct_dn.get_extended_component("GUID")
+        guid_sid_dn = ldb.Dn(self.samdb, "")
+        guid_sid_dn.set_extended_component("GUID", target_guid_blob)
+        guid_sid_dn.set_extended_component("SID", target_sid_blob)
+
+        m = ldb.Message()
+        m.dn = dn
+        m['new_value'] = ldb.MessageElement(guid_sid_dn.extended_str(), ldb.FLAG_MOD_ADD, attrname)
+        controls = [
+            "show_recycled:1",
+            "local_oid:%s:1" % dsdb.DSDB_CONTROL_DBCHECK_FIX_LINK_DN_SID
+        ]
+        if self.do_modify(m, controls,
+                          "Failed to ADD missing DN SID on attribute %s" % (attrname)):
+            self.report("Fixed missing DN SID on attribute %s" % (attrname))
 
     def err_unknown_attribute(self, obj, attrname):
         '''handle an unknown attribute error'''
@@ -779,7 +869,7 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
         res = self.samdb.search("",
                                 scope=ldb.SCOPE_BASE, attrs=["dsServiceName"])
         assert len(res) == 1
-        serviceName = res[0]["dsServiceName"][0]
+        serviceName = str(res[0]["dsServiceName"][0])
         if not self.confirm_all('Sieze role %s onto current DC by adding fSMORoleOwner=%s' % (obj.dn, serviceName), 'seize_fsmo_role'):
             self.report("Not Siezing role %s onto current DC by adding fSMORoleOwner=%s" % (obj.dn, serviceName))
             return
@@ -825,7 +915,7 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
         else:
             self.samdb.transaction_cancel()
 
-    def err_wrong_dn(self, obj, new_dn, rdn_attr, rdn_val, name_val):
+    def err_wrong_dn(self, obj, new_dn, rdn_attr, rdn_val, name_val, controls):
         '''handle a wrong dn'''
 
         new_rdn = ldb.Dn(self.samdb, str(new_dn))
@@ -842,7 +932,7 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
             self.report("Not renaming %s to %s" % (obj.dn, new_dn))
             return
 
-        if self.do_rename(obj.dn, new_rdn, new_parent, ["show_recycled:1", "relax:0"],
+        if self.do_rename(obj.dn, new_rdn, new_parent, controls,
                           "Failed to rename object %s into %s" % (obj.dn, new_dn)):
             self.report("Renamed %s into %s" % (obj.dn, new_dn))
 
@@ -902,8 +992,19 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
 
         m = ldb.Message()
         m.dn = obj.dn
-        m['value'] = ldb.MessageElement(obj[attrname][0].decode('utf-16-le').decode('utf-16-le').encode('utf-16-le'),
+        # m['value'] = ldb.MessageElement(obj[attrname][0].decode('utf-16-le').decode('utf-16-le').encode('utf-16-le'),
+        # hmm the above old python2 code doesn't make sense to me and cannot
+        # work in python3 because a string doesn't have a decode method.
+        # However in python2 for some unknown reason this double decode
+        # followed by encode seems to result in what looks like utf8.
+        # In python2 just .decode('utf-16-le').encode('utf-16-le') does nothing
+        # but trigger the 'double UTF16 encoded' condition again :/
+        #
+        # In python2 and python3 value.decode('utf-16-le').encode('utf8') seems
+        # to do the trick and work as expected.
+        m['value'] = ldb.MessageElement(obj[attrname][0].decode('utf-16-le').encode('utf8'),
                                         ldb.FLAG_MOD_REPLACE, 'userParameters')
+
         if self.do_modify(m, [],
                           "Failed to correct doubled-UTF16 encoded userParameters on %s by converting" % (obj.dn)):
             self.report("Corrected doubled-UTF16 encoded userParameters on %s by converting" % (obj.dn))
@@ -1035,7 +1136,7 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
             return (missing_forward_links, error_count)
 
         if forward_syntax != ldb.SYNTAX_DN:
-            self.report("Not checking for missing forward links for syntax: %s",
+            self.report("Not checking for missing forward links for syntax: %s" %
                         forward_syntax)
             return (missing_forward_links, error_count)
 
@@ -1135,8 +1236,13 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
         else:
             reverse_syntax_oid = None
 
-        error_count, duplicate_dict, unique_dict = \
-            self.check_duplicate_links(obj, attrname, syntax_oid, linkID, reverse_link_name)
+        is_member_link = attrname in ("member", "memberOf")
+        if is_member_link and self.quick_membership_checks:
+            duplicate_dict = {}
+        else:
+            error_count, duplicate_dict, unique_dict = \
+                self.check_duplicate_links(obj, attrname, syntax_oid,
+                                           linkID, reverse_link_name)
 
         if len(duplicate_dict) != 0:
 
@@ -1223,14 +1329,14 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
                 dsdb_dn.prefix = "B:8:%08X:" % int(res[0]['instanceType'][0])
                 dsdb_dn.binary = "%08X" % int(res[0]['instanceType'][0])
 
-                if str(dsdb_dn) != val:
+                if str(dsdb_dn) != str(val):
                     error_count += 1
                     self.err_incorrect_binary_dn(obj.dn, attrname, val, dsdb_dn, "incorrect instanceType part of Binary DN")
                     continue
 
             # now we have two cases - the source object might or might not be deleted
-            is_deleted = 'isDeleted' in obj and obj['isDeleted'][0].upper() == 'TRUE'
-            target_is_deleted = 'isDeleted' in res[0] and res[0]['isDeleted'][0].upper() == 'TRUE'
+            is_deleted = 'isDeleted' in obj and str(obj['isDeleted'][0]).upper() == 'TRUE'
+            target_is_deleted = 'isDeleted' in res[0] and str(res[0]['isDeleted'][0]).upper() == 'TRUE'
 
             if is_deleted and obj.dn not in self.deleted_objects_containers and linkID:
                 # A fully deleted object should not have any linked
@@ -1248,7 +1354,7 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
                 if local_usn:
                     if 'replPropertyMetaData' in res[0]:
                         repl = ndr_unpack(drsblobs.replPropertyMetaDataBlob,
-                                          str(res[0]['replPropertyMetadata']))
+                                          res[0]['replPropertyMetadata'][0])
                         found_data = False
                         for o in repl.ctr.array:
                             if o.attid == drsuapi.DRSUAPI_ATTID_isDeleted:
@@ -1292,7 +1398,14 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
                                                       res[0].dn, "GUID")
                 continue
 
-            if res[0].dn.get_extended_component("SID") != dsdb_dn.dn.get_extended_component("SID"):
+            target_sid = res[0].dn.get_extended_component("SID")
+            link_sid = dsdb_dn.dn.get_extended_component("SID")
+            if link_sid is None and target_sid is not None:
+                error_count += 1
+                self.err_dn_component_missing_target_sid(obj.dn, attrname, val,
+                                                         dsdb_dn, target_sid)
+                continue
+            if link_sid != target_sid:
                 error_count += 1
                 self.err_dn_component_target_mismatch(obj.dn, attrname, val, dsdb_dn,
                                                       res[0].dn, "SID")
@@ -1314,6 +1427,9 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
                     bad_dn = dsdb_dn.prefix + dsdb_dn.dn.get_linearized()
                     self.err_dn_string_component_old(obj.dn, attrname, bad_dn,
                                                      dsdb_dn, res[0].dn)
+                continue
+
+            if is_member_link and self.quick_membership_checks:
                 continue
 
             # check the reverse_link is correct if there should be one
@@ -1407,6 +1523,13 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
 
         return error_count
 
+    def find_repl_attid(self, repl, attid):
+        for o in repl.ctr.array:
+            if o.attid == attid:
+                return o
+
+        return None
+
     def get_originating_time(self, val, attid):
         '''Read metadata properties and return the originating time for
            a given attributeId.
@@ -1414,13 +1537,10 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
            :return: the originating time or 0 if not found
         '''
 
-        repl = ndr_unpack(drsblobs.replPropertyMetaDataBlob, str(val))
-        obj = repl.ctr
-
-        for o in repl.ctr.array:
-            if o.attid == attid:
-                return o.originating_change_time
-
+        repl = ndr_unpack(drsblobs.replPropertyMetaDataBlob, val)
+        o = self.find_repl_attid(repl, attid)
+        if o is not None:
+            return o.originating_change_time
         return 0
 
     def process_metadata(self, dn, val):
@@ -1432,8 +1552,7 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
         list_attid = []
         in_schema_nc = dn.is_child_of(self.schema_dn)
 
-        repl = ndr_unpack(drsblobs.replPropertyMetaDataBlob, str(val))
-        obj = repl.ctr
+        repl = ndr_unpack(drsblobs.replPropertyMetaDataBlob, val)
 
         for o in repl.ctr.array:
             att = self.samdb_schema.get_lDAPDisplayName_by_attid(o.attid)
@@ -1501,9 +1620,9 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
         sd_attr = "nTSecurityDescriptor"
         sd_val = obj[sd_attr]
 
-        sd = ndr_unpack(security.descriptor, str(sd_val))
+        sd = ndr_unpack(security.descriptor, sd_val[0])
 
-        is_deleted = 'isDeleted' in obj and obj['isDeleted'][0].upper() == 'TRUE'
+        is_deleted = 'isDeleted' in obj and str(obj['isDeleted'][0]).upper() == 'TRUE'
         if is_deleted:
             # we don't fix deleted objects
             return (sd, None)
@@ -1587,7 +1706,7 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
                                     attrs=["isDeleted", "objectClass"],
                                     controls=["show_recycled:1"])
             o = res[0]
-            is_deleted = 'isDeleted' in o and o['isDeleted'][0].upper() == 'TRUE'
+            is_deleted = 'isDeleted' in o and str(o['isDeleted'][0]).upper() == 'TRUE'
             if is_deleted:
                 # we don't fix deleted objects
                 return (sd, None)
@@ -1623,7 +1742,6 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
         '''re-write the SD due to not matching the default (optional mode for fixing an incorrect provision)'''
         sd_attr = "nTSecurityDescriptor"
         sd_val = ndr_pack(sd)
-        sd_old_val = ndr_pack(sd_old)
         sd_flags = security.SECINFO_DACL | security.SECINFO_SACL
         if sd.owner_sid is not None:
             sd_flags |= security.SECINFO_OWNER
@@ -1672,9 +1790,135 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
             self.report("Fixed attribute '%s' of '%s'\n" % (sd_attr, dn))
         self.samdb.set_session_info(self.system_session_info)
 
+    def is_expired_tombstone(self, dn, repl_val):
+        if self.check_expired_tombstones:
+            # This is not the default, it's just
+            # used to keep dbcheck tests work with
+            # old static provision dumps
+            return False
+
+        repl = ndr_unpack(drsblobs.replPropertyMetaDataBlob, repl_val)
+
+        isDeleted = self.find_repl_attid(repl, drsuapi.DRSUAPI_ATTID_isDeleted)
+
+        delete_time = samba.nttime2unix(isDeleted.originating_change_time)
+        current_time = time.time()
+
+        tombstone_delta = self.tombstoneLifetime * (24 * 60 * 60)
+
+        delta = current_time - delete_time
+        if delta <= tombstone_delta:
+            return False
+
+        self.report("SKIPING: object %s is an expired tombstone" % dn)
+        self.report("isDeleted: attid=0x%08x version=%d invocation=%s usn=%s (local=%s) at %s" % (
+                    isDeleted.attid,
+                    isDeleted.version,
+                    isDeleted.originating_invocation_id,
+                    isDeleted.originating_usn,
+                    isDeleted.local_usn,
+                    time.ctime(samba.nttime2unix(isDeleted.originating_change_time))))
+        self.expired_tombstones += 1
+        return True
+
+    def find_changes_after_deletion(self, repl_val):
+        repl = ndr_unpack(drsblobs.replPropertyMetaDataBlob, repl_val)
+
+        isDeleted = self.find_repl_attid(repl, drsuapi.DRSUAPI_ATTID_isDeleted)
+
+        delete_time = samba.nttime2unix(isDeleted.originating_change_time)
+
+        tombstone_delta = self.tombstoneLifetime * (24 * 60 * 60)
+
+        found = []
+        for o in repl.ctr.array:
+            if o.attid == drsuapi.DRSUAPI_ATTID_isDeleted:
+                continue
+
+            if o.local_usn <= isDeleted.local_usn:
+                continue
+
+            if o.originating_change_time <= isDeleted.originating_change_time:
+                continue
+
+            change_time = samba.nttime2unix(o.originating_change_time)
+
+            delta = change_time - delete_time
+            if delta <= tombstone_delta:
+                continue
+
+            # If the modification happened after the tombstone lifetime
+            # has passed, we have a bug as the object might be deleted
+            # already on other DCs and won't be able to replicate
+            # back
+            found.append(o)
+
+        return found, isDeleted
+
+    def has_changes_after_deletion(self, dn, repl_val):
+        found, isDeleted = self.find_changes_after_deletion(repl_val)
+        if len(found) == 0:
+            return False
+
+        def report_attid(o):
+            try:
+                attname = self.samdb_schema.get_lDAPDisplayName_by_attid(o.attid)
+            except KeyError:
+                attname = "<unknown:0x%x08x>" % o.attid
+
+            self.report("%s: attid=0x%08x version=%d invocation=%s usn=%s (local=%s) at %s" % (
+                        attname, o.attid, o.version,
+                        o.originating_invocation_id,
+                        o.originating_usn,
+                        o.local_usn,
+                        time.ctime(samba.nttime2unix(o.originating_change_time))))
+
+        self.report("ERROR: object %s, has changes after deletion" % dn)
+        report_attid(isDeleted)
+        for o in found:
+            report_attid(o)
+
+        return True
+
+    def err_changes_after_deletion(self, dn, repl_val):
+        found, isDeleted = self.find_changes_after_deletion(repl_val)
+
+        in_schema_nc = dn.is_child_of(self.schema_dn)
+        rdn_attr = dn.get_rdn_name()
+        rdn_attid = self.samdb_schema.get_attid_from_lDAPDisplayName(rdn_attr,
+                                                     is_schema_nc=in_schema_nc)
+
+        unexpected = []
+        for o in found:
+            if o.attid == rdn_attid:
+                continue
+            if o.attid == drsuapi.DRSUAPI_ATTID_name:
+                continue
+            if o.attid == drsuapi.DRSUAPI_ATTID_lastKnownParent:
+                continue
+            try:
+                attname = self.samdb_schema.get_lDAPDisplayName_by_attid(o.attid)
+            except KeyError:
+                attname = "<unknown:0x%x08x>" % o.attid
+            unexpected.append(attname)
+
+        if len(unexpected) > 0:
+            self.report('Unexpeted attributes: %s' % ",".join(unexpected))
+            self.report('Not fixing changes after deletion bug')
+            return
+
+        if not self.confirm_all('Delete broken tombstone object %s deleted %s days ago?' % (
+                                dn, self.tombstoneLifetime), 'fix_changes_after_deletion_bug'):
+            self.report('Not fixing changes after deletion bug')
+            return
+
+        if self.do_delete(dn, ["relax:0"],
+                          "Failed to remove DN %s" % dn):
+            self.report("Removed DN %s" % dn)
+
     def has_replmetadata_zero_invocationid(self, dn, repl_meta_data):
         repl = ndr_unpack(drsblobs.replPropertyMetaDataBlob,
-                          str(repl_meta_data))
+                          repl_meta_data)
         ctr = repl.ctr
         found = False
         for o in ctr.array:
@@ -1694,7 +1938,7 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
 
     def err_replmetadata_zero_invocationid(self, dn, attr, repl_meta_data):
         repl = ndr_unpack(drsblobs.replPropertyMetaDataBlob,
-                          str(repl_meta_data))
+                          repl_meta_data)
         ctr = repl.ctr
         now = samba.unix2nttime(int(time.time()))
         found = False
@@ -1731,7 +1975,7 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
 
     def err_replmetadata_unknown_attid(self, dn, attr, repl_meta_data):
         repl = ndr_unpack(drsblobs.replPropertyMetaDataBlob,
-                          str(repl_meta_data))
+                          repl_meta_data)
         ctr = repl.ctr
         for o in ctr.array:
             # Search for an invalid attid
@@ -1743,7 +1987,7 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
 
     def err_replmetadata_incorrect_attid(self, dn, attr, repl_meta_data, wrong_attids):
         repl = ndr_unpack(drsblobs.replPropertyMetaDataBlob,
-                          str(repl_meta_data))
+                          repl_meta_data)
         fix = False
 
         set_att = set()
@@ -1841,27 +2085,27 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
         if "description" not in obj:
             self.report("ERROR: description not present on Deleted Objects container %s" % obj.dn)
             faulty = True
-        if "showInAdvancedViewOnly" not in obj or obj['showInAdvancedViewOnly'][0].upper() == 'FALSE':
+        if "showInAdvancedViewOnly" not in obj or str(obj['showInAdvancedViewOnly'][0]).upper() == 'FALSE':
             self.report("ERROR: showInAdvancedViewOnly not present on Deleted Objects container %s" % obj.dn)
             faulty = True
         if "objectCategory" not in obj:
             self.report("ERROR: objectCategory not present on Deleted Objects container %s" % obj.dn)
             faulty = True
-        if "isCriticalSystemObject" not in obj or obj['isCriticalSystemObject'][0].upper() == 'FALSE':
+        if "isCriticalSystemObject" not in obj or str(obj['isCriticalSystemObject'][0]).upper() == 'FALSE':
             self.report("ERROR: isCriticalSystemObject not present on Deleted Objects container %s" % obj.dn)
             faulty = True
         if "isRecycled" in obj:
             self.report("ERROR: isRecycled present on Deleted Objects container %s" % obj.dn)
             faulty = True
-        if "isDeleted" in obj and obj['isDeleted'][0].upper() == 'FALSE':
+        if "isDeleted" in obj and str(obj['isDeleted'][0]).upper() == 'FALSE':
             self.report("ERROR: isDeleted not set on Deleted Objects container %s" % obj.dn)
             faulty = True
         if "objectClass" not in obj or (len(obj['objectClass']) != 2 or
-                                        obj['objectClass'][0] != 'top' or
-                                        obj['objectClass'][1] != 'container'):
+                                        str(obj['objectClass'][0]) != 'top' or
+                                        str(obj['objectClass'][1]) != 'container'):
             self.report("ERROR: objectClass incorrectly set on Deleted Objects container %s" % obj.dn)
             faulty = True
-        if "systemFlags" not in obj or obj['systemFlags'][0] != '-1946157056':
+        if "systemFlags" not in obj or str(obj['systemFlags'][0]) != '-1946157056':
             self.report("ERROR: systemFlags incorrectly set on Deleted Objects container %s" % obj.dn)
             faulty = True
         return faulty
@@ -1900,7 +2144,7 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
         target = self.samdb.get_dsServiceName()
 
         if self.samdb.am_rodc():
-            self.report('Not fixing %s for the RODC' % (attr, obj.dn))
+            self.report('Not fixing %s %s for the RODC' % (attr, obj.dn))
             return
 
         if not self.confirm_all('Add yourself to the replica locations for %s?'
@@ -1939,8 +2183,7 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
                     raise
             else:
                 instancetype |= dsdb.INSTANCE_TYPE_NC_ABOVE
-
-        if self.write_ncs is not None and str(nc_root) in self.write_ncs:
+        if self.write_ncs is not None and str(nc_root) in [str(x) for x in self.write_ncs]:
             instancetype |= dsdb.INSTANCE_TYPE_WRITE
 
         return instancetype
@@ -1955,14 +2198,15 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
 
         raise KeyError
 
-    def check_object(self, dn, attrs=['*']):
+    def check_object(self, dn, attrs=None):
         '''check one object'''
         if self.verbose:
             self.report("Checking object %s" % dn)
-
-        # If we modify the pass-by-reference attrs variable, then we get a
-        # replPropertyMetadata for every object that we check.
-        attrs = list(attrs)
+        if attrs is None:
+            attrs = ['*']
+        else:
+            # make a local copy to modify
+            attrs = list(attrs)
         if "dn" in map(str.lower, attrs):
             attrs.append("name")
         if "distinguishedname" in map(str.lower, attrs):
@@ -2020,7 +2264,6 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
         error_count = 0
         set_attrs_from_md = set()
         set_attrs_seen = set()
-        got_repl_property_meta_data = False
         got_objectclass = False
 
         nc_dn = self.samdb.get_nc_root(obj.dn)
@@ -2037,6 +2280,26 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
         name_val = None
         isDeleted = False
         systemFlags = 0
+        repl_meta_data_val = None
+
+        for attrname in obj:
+            if str(attrname).lower() == 'isdeleted':
+                if str(obj[attrname][0]) != "FALSE":
+                    isDeleted = True
+
+            if str(attrname).lower() == 'systemflags':
+                systemFlags = int(obj[attrname][0])
+
+            if str(attrname).lower() == 'replpropertymetadata':
+                repl_meta_data_val = obj[attrname][0]
+
+        if isDeleted and repl_meta_data_val:
+            if self.has_changes_after_deletion(dn, repl_meta_data_val):
+                error_count += 1
+                self.err_changes_after_deletion(dn, repl_meta_data_val)
+                return error_count
+            if self.is_expired_tombstone(dn, repl_meta_data_val):
+                return error_count
 
         for attrname in obj:
             if attrname == 'dn' or attrname == "distinguishedName":
@@ -2051,7 +2314,7 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
                     self.report("ERROR: Not fixing num_values(%d) for '%s' on '%s'" %
                                 (len(obj[attrname]), attrname, str(obj.dn)))
                 else:
-                    name_val = obj[attrname][0]
+                    name_val = str(obj[attrname][0])
 
             if str(attrname).lower() == str(obj.dn.get_rdn_name()).lower():
                 object_rdn_attr = attrname
@@ -2060,25 +2323,18 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
                     self.report("ERROR: Not fixing num_values(%d) for '%s' on '%s'" %
                                 (len(obj[attrname]), attrname, str(obj.dn)))
                 else:
-                    object_rdn_val = obj[attrname][0]
-
-            if str(attrname).lower() == 'isdeleted':
-                if obj[attrname][0] != "FALSE":
-                    isDeleted = True
-
-            if str(attrname).lower() == 'systemflags':
-                systemFlags = int(obj[attrname][0])
+                    object_rdn_val = str(obj[attrname][0])
 
             if str(attrname).lower() == 'replpropertymetadata':
-                if self.has_replmetadata_zero_invocationid(dn, obj[attrname]):
+                if self.has_replmetadata_zero_invocationid(dn, obj[attrname][0]):
                     error_count += 1
-                    self.err_replmetadata_zero_invocationid(dn, attrname, obj[attrname])
+                    self.err_replmetadata_zero_invocationid(dn, attrname, obj[attrname][0])
                     # We don't continue, as we may also have other fixes for this attribute
                     # based on what other attributes we see.
 
                 try:
                     (set_attrs_from_md, list_attid_from_md, wrong_attids) \
-                        = self.process_metadata(dn, obj[attrname])
+                        = self.process_metadata(dn, obj[attrname][0])
                 except KeyError:
                     error_count += 1
                     self.err_replmetadata_unknown_attid(dn, attrname, obj[attrname])
@@ -2088,17 +2344,16 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
                    or len(wrong_attids) > 0 \
                    or sorted(list_attid_from_md) != list_attid_from_md:
                     error_count += 1
-                    self.err_replmetadata_incorrect_attid(dn, attrname, obj[attrname], wrong_attids)
+                    self.err_replmetadata_incorrect_attid(dn, attrname, obj[attrname][0], wrong_attids)
 
                 else:
                     # Here we check that the first attid is 0
                     # (objectClass).
                     if list_attid_from_md[0] != 0:
                         error_count += 1
-                        self.report("ERROR: Not fixing incorrect inital attributeID in '%s' on '%s', it should be objectClass" %
+                        self.report("ERROR: Not fixing incorrect initial attributeID in '%s' on '%s', it should be objectClass" %
                                     (attrname, str(dn)))
 
-                got_repl_property_meta_data = True
                 continue
 
             if str(attrname).lower() == 'ntsecuritydescriptor':
@@ -2120,7 +2375,7 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
                         continue
 
                     current_sd = ndr_unpack(security.descriptor,
-                                            str(obj[attrname][0]))
+                                            obj[attrname][0])
 
                     diff = get_diff_sds(well_known_sd, current_sd, security.dom_sid(self.samdb.get_domain_sid()))
                     if diff != "":
@@ -2149,22 +2404,23 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
                 continue
 
             if str(attrname).lower() == 'userparameters':
-                if len(obj[attrname][0]) == 1 and obj[attrname][0][0] == '\x20':
+                if len(obj[attrname][0]) == 1 and obj[attrname][0][0] == b'\x20'[0]:
                     error_count += 1
                     self.err_short_userParameters(obj, attrname, obj[attrname])
                     continue
 
-                elif obj[attrname][0][:16] == '\x20\x00\x20\x00\x20\x00\x20\x00\x20\x00\x20\x00\x20\x00\x20\x00':
+                elif obj[attrname][0][:16] == b'\x20\x00\x20\x00\x20\x00\x20\x00\x20\x00\x20\x00\x20\x00\x20\x00':
                     # This is the correct, normal prefix
                     continue
 
-                elif obj[attrname][0][:20] == 'IAAgACAAIAAgACAAIAAg':
+                elif obj[attrname][0][:20] == b'IAAgACAAIAAgACAAIAAg':
                     # this is the typical prefix from a windows migration
                     error_count += 1
                     self.err_base64_userParameters(obj, attrname, obj[attrname])
                     continue
 
-                elif obj[attrname][0][1] != '\x00' and obj[attrname][0][3] != '\x00' and obj[attrname][0][5] != '\x00' and obj[attrname][0][7] != '\x00' and obj[attrname][0][9] != '\x00':
+                #43:00:00:00:74:00:00:00:78
+                elif obj[attrname][0][1] != b'\x00'[0] and obj[attrname][0][3] != b'\x00'[0] and obj[attrname][0][5] != b'\x00'[0] and obj[attrname][0][7] != b'\x00'[0] and obj[attrname][0][9] != b'\x00'[0]:
                     # This is a prefix that is not in UTF-16 format for the space or munged dialback prefix
                     error_count += 1
                     self.err_utf8_userParameters(obj, attrname, obj[attrname])
@@ -2173,10 +2429,10 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
                 elif len(obj[attrname][0]) % 2 != 0:
                     # This is a value that isn't even in length
                     error_count += 1
-                    self.err_odd_userParameters(obj, attrname, obj[attrname])
+                    self.err_odd_userParameters(obj, attrname)
                     continue
 
-                elif obj[attrname][0][1] == '\x00' and obj[attrname][0][2] == '\x00' and obj[attrname][0][3] == '\x00' and obj[attrname][0][4] != '\x00' and obj[attrname][0][5] == '\x00':
+                elif obj[attrname][0][1] == b'\x00'[0] and obj[attrname][0][2] == b'\x00'[0] and obj[attrname][0][3] == b'\x00'[0] and obj[attrname][0][4] != b'\x00'[0] and obj[attrname][0][5] == b'\x00'[0]:
                     # This is a prefix that would happen if a SAMR-written value was replicated from a Samba 4.1 server to a working server
                     error_count += 1
                     self.err_doubled_userParameters(obj, attrname, obj[attrname])
@@ -2192,7 +2448,7 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
 
             # check for empty attributes
             for val in obj[attrname]:
-                if val == '':
+                if val == b'':
                     self.err_empty_attribute(dn, attrname)
                     error_count += 1
                     continue
@@ -2238,7 +2494,7 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
 
             if str(attrname).lower() == "instancetype":
                 calculated_instancetype = self.calculate_instancetype(dn)
-                if len(obj["instanceType"]) != 1 or obj["instanceType"][0] != str(calculated_instancetype):
+                if len(obj["instanceType"]) != 1 or int(obj["instanceType"][0]) != calculated_instancetype:
                     error_count += 1
                     self.err_wrong_instancetype(obj, calculated_instancetype)
 
@@ -2256,9 +2512,11 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
 
         if name_val is not None:
             parent_dn = None
+            controls = ["show_recycled:1", "relax:0"]
             if isDeleted:
                 if not (systemFlags & samba.dsdb.SYSTEM_FLAG_DISALLOW_MOVE_ON_DELETE):
                     parent_dn = deleted_objects_dn
+                controls += ["local_oid:%s:1" % dsdb.DSDB_CONTROL_DBCHECK_FIX_LINK_DN_NAME]
             if parent_dn is None:
                 parent_dn = obj.dn.parent()
             expected_dn = ldb.Dn(self.samdb, "RDN=RDN,%s" % (parent_dn))
@@ -2269,19 +2527,20 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
 
             if expected_dn != obj.dn:
                 error_count += 1
-                self.err_wrong_dn(obj, expected_dn, object_rdn_attr, object_rdn_val, name_val)
+                self.err_wrong_dn(obj, expected_dn, object_rdn_attr,
+                        object_rdn_val, name_val, controls)
             elif obj.dn.get_rdn_value() != object_rdn_val:
                 error_count += 1
                 self.report("ERROR: Not fixing %s=%r on '%s'" % (object_rdn_attr, object_rdn_val, str(obj.dn)))
 
         show_dn = True
-        if got_repl_property_meta_data:
+        if repl_meta_data_val:
             if obj.dn == deleted_objects_dn:
                 isDeletedAttId = 131120
                 # It's 29/12/9999 at 23:59:59 UTC as specified in MS-ADTS 7.1.1.4.2 Deleted Objects Container
 
                 expectedTimeDo = 2650466015990000000
-                originating = self.get_originating_time(obj["replPropertyMetaData"], isDeletedAttId)
+                originating = self.get_originating_time(repl_meta_data_val, isDeletedAttId)
                 if originating != expectedTimeDo:
                     if self.confirm_all("Fix isDeleted originating_change_time on '%s'" % str(dn), 'fix_time_metadata'):
                         nmsg = ldb.Message()
@@ -2316,8 +2575,13 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
         except ldb.LdbError as e11:
             (enum, estr) = e11.args
             if enum == ldb.ERR_NO_SUCH_OBJECT:
-                self.err_missing_parent(obj)
-                error_count += 1
+                if isDeleted:
+                    self.report("WARNING: parent object not found for %s" % (obj.dn))
+                    self.report("Not moving to LostAndFound "
+                                "(tombstone garbage collection in progress?)")
+                else:
+                    self.err_missing_parent(obj)
+                    error_count += 1
             else:
                 raise
 
@@ -2340,7 +2604,7 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
 
                 found = False
                 for loc in msg[location]:
-                    if loc == self.samdb.get_dsServiceName():
+                    if str(loc) == self.samdb.get_dsServiceName():
                         found = True
                 if not found:
                     # This DC is not in the replica locations
@@ -2474,7 +2738,7 @@ newSuperior: %s""" % (str(from_dn), str(to_rdn), str(to_base)))
             self.report('ERROR: dsServiceName missing in @ROOTDSE')
             return error_count + 1
 
-        if not obj['dsServiceName'][0].startswith('<GUID='):
+        if not str(obj['dsServiceName'][0]).startswith('<GUID='):
             self.report('ERROR: dsServiceName not in GUID form in @ROOTDSE')
             error_count += 1
             if not self.confirm('Change dsServiceName to GUID form?'):

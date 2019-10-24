@@ -268,14 +268,15 @@ static int print_sam_info (struct samu *sam_pwent, bool verbosity, bool smbpwdst
 	if (verbosity) {
 		char temp[44];
 		const uint8_t *hours;
+		struct dom_sid_buf buf;
 
 		printf ("Unix username:        %s\n", pdb_get_username(sam_pwent));
 		printf ("NT username:          %s\n", pdb_get_nt_username(sam_pwent));
 		printf ("Account Flags:        %s\n", pdb_encode_acct_ctrl(pdb_get_acct_ctrl(sam_pwent), NEW_PW_FORMAT_SPACE_PADDED_LEN));
 		printf ("User SID:             %s\n",
-			sid_string_tos(pdb_get_user_sid(sam_pwent)));
+			dom_sid_str_buf(pdb_get_user_sid(sam_pwent), &buf));
 		printf ("Primary Group SID:    %s\n",
-			sid_string_tos(pdb_get_group_sid(sam_pwent)));
+			dom_sid_str_buf(pdb_get_group_sid(sam_pwent), &buf));
 		printf ("Full Name:            %s\n", pdb_get_fullname(sam_pwent));
 		printf ("Home Directory:       %s\n", pdb_get_homedir(sam_pwent));
 		printf ("HomeDir Drive:        %s\n", pdb_get_dir_drive(sam_pwent));
@@ -593,13 +594,18 @@ static int set_user_info(const char *username, const char *fullname,
 	}
 
 	if (kickoff_time) {
-		char *endptr;
 		time_t value = get_time_t_max();
 
 		if (strcmp(kickoff_time, "never") != 0) {
-			uint32_t num = strtoul(kickoff_time, &endptr, 10);
+			int error = 0;
+			uint32_t num;
 
-			if ((endptr == kickoff_time) || (endptr[0] != '\0')) {
+			num = smb_strtoul(kickoff_time,
+					  NULL,
+					  10,
+					  &error,
+					  SMB_STR_FULL_STR_CONV);
+			if (error != 0) {
 				fprintf(stderr, "Failed to parse kickoff time\n");
 				return -1;
 			}
@@ -1122,8 +1128,6 @@ int main(int argc, const char **argv)
 	if (user_name == NULL)
 		user_name = poptGetArg(pc);
 
-	cmdline_messaging_context(get_dyn_CONFIGFILE());
-
 	if (!lp_load_global(get_dyn_CONFIGFILE())) {
 		fprintf(stderr, "Can't load %s - run testparm to debug it\n", get_dyn_CONFIGFILE());
 		exit(1);
@@ -1180,6 +1184,7 @@ int main(int argc, const char **argv)
 	checkparms = setparms & ~MASK_ALWAYS_GOOD;
 
 	if (checkparms & BIT_FIX_INIT) {
+		poptFreeContext(pc);
 		return fix_users_list();
 	}
 
@@ -1235,6 +1240,8 @@ int main(int argc, const char **argv)
 	if (((checkparms & BIT_IMPORT) ||
 	     (checkparms & BIT_EXPORT)) &&
 	    !(checkparms & ~(BIT_IMPORT +BIT_EXPORT +BIT_USER))) {
+
+		poptFreeContext(pc);
 
 		if (backend_in) {
 			status = make_pdb_method_name(&bin, backend_in);
@@ -1293,9 +1300,11 @@ int main(int argc, const char **argv)
 	/* list users operations */
 	if (checkparms & BIT_LIST) {
 		if (!(checkparms & ~BIT_LIST)) {
+			poptFreeContext(pc);
 			return print_users_list(verbose, spstyle);
 		}
 		if (!(checkparms & ~(BIT_USER + BIT_LIST))) {
+			poptFreeContext(pc);
 			return print_user_info(user_name, verbose, spstyle);
 		}
 	}
@@ -1320,12 +1329,14 @@ int main(int argc, const char **argv)
 		/* check use of -u option */
 		if (!(checkparms & BIT_USER)) {
 			fprintf (stderr, "Username not specified! (use -u option)\n");
+			poptFreeContext(pc);
 			return -1;
 		}
 
 		/* account creation operations */
 		if (!(checkparms & ~(BIT_CREATE + BIT_USER + BIT_MACHINE))) {
-		       	if (checkparms & BIT_MACHINE) {
+			poptFreeContext(pc);
+			if (checkparms & BIT_MACHINE) {
 				return new_machine(user_name, machine_sid);
 			} else {
 				return new_user(user_name, full_name,
@@ -1337,7 +1348,8 @@ int main(int argc, const char **argv)
 
 		/* account deletion operations */
 		if (!(checkparms & ~(BIT_DELETE + BIT_USER + BIT_MACHINE))) {
-		       	if (checkparms & BIT_MACHINE) {
+			poptFreeContext(pc);
+			if (checkparms & BIT_MACHINE) {
 				return delete_machine_entry(user_name);
 			} else {
 				return delete_user_entry(user_name);
@@ -1346,6 +1358,7 @@ int main(int argc, const char **argv)
 
 		/* account modification operations */
 		if (!(checkparms & ~(BIT_MODIFY + BIT_USER + BIT_MACHINE))) {
+			poptFreeContext(pc);
 			if (checkparms & BIT_MACHINE) {
 				return set_machine_info(user_name,
 							account_control,
@@ -1367,6 +1380,7 @@ int main(int argc, const char **argv)
 	}
 	poptPrintHelp(pc, stderr, 0);
 
+	poptFreeContext(pc);
 	TALLOC_FREE(frame);
 	return 1;
 }

@@ -18,6 +18,8 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
+from __future__ import print_function
+
 import samba.getopt as options
 import ldb
 import logging
@@ -35,11 +37,17 @@ from samba.samdb import SamDB
 from samba import drs_utils, nttime2string, dsdb
 from samba.dcerpc import drsuapi, misc
 from samba.join import join_clone
-from samba.ndr import ndr_unpack
-from samba.dcerpc import drsblobs
 from samba import colour
-import logging
 
+from samba.uptodateness import (
+    get_partition_maps,
+    get_utdv_edges,
+    get_utdv_distances,
+    get_utdv_summary,
+    get_kcc_and_dsas,
+)
+from samba.compat import get_string
+from samba.samdb import get_default_backend_store
 
 def drsuapi_connect(ctx):
     '''make a DRSUAPI connection to the server'''
@@ -271,10 +279,10 @@ class cmd_drs_showrepl(Command):
 
         dsa_details = {
             "options": int(attr_default(ntds[0], "options", 0)),
-            "objectGUID": self.samdb.schema_format_value(
-                "objectGUID", ntds[0]["objectGUID"][0]),
-            "invocationId": self.samdb.schema_format_value(
-                "objectGUID", ntds[0]["invocationId"][0])
+            "objectGUID": get_string(self.samdb.schema_format_value(
+                "objectGUID", ntds[0]["objectGUID"][0])),
+            "invocationId": get_string(self.samdb.schema_format_value(
+                "objectGUID", ntds[0]["invocationId"][0]))
         }
 
         conn = self.samdb.search(base=ntds_dn, expression="(objectClass=nTDSConnection)")
@@ -283,13 +291,13 @@ class cmd_drs_showrepl(Command):
 
         conn_details = []
         for c in conn:
-            c_rdn, sep, c_server_dn = c['fromServer'][0].partition(',')
+            c_rdn, sep, c_server_dn = str(c['fromServer'][0]).partition(',')
             d = {
                 'name': str(c['name']),
-                'remote DN': c['fromServer'][0],
+                'remote DN': str(c['fromServer'][0]),
                 'options': int(attr_default(c, 'options', 0)),
-                'enabled': (attr_default(c, 'enabledConnection',
-                                         'TRUE').upper() == 'TRUE')
+                'enabled': (get_string(attr_default(c, 'enabledConnection',
+                                         'TRUE')).upper() == 'TRUE')
             }
 
             conn_details.append(d)
@@ -297,12 +305,12 @@ class cmd_drs_showrepl(Command):
                 c_server_res = self.samdb.search(base=c_server_dn,
                                                  scope=ldb.SCOPE_BASE,
                                                  attrs=["dnsHostName"])
-                d['dns name'] = c_server_res[0]["dnsHostName"][0]
+                d['dns name'] = str(c_server_res[0]["dnsHostName"][0])
             except ldb.LdbError as e:
                 (errno, _) = e.args
                 if errno == ldb.ERR_NO_SUCH_OBJECT:
                     d['is deleted'] = True
-            except KeyError:
+            except (KeyError, IndexError):
                 pass
 
             d['replicates NC'] = []
@@ -360,7 +368,7 @@ class cmd_drs_showrepl(Command):
 
             self.message("\tConnection name: %s" % d['name'])
             self.message("\tEnabled        : %s" % str(d['enabled']).upper())
-            self.message("\tServer DNS name : %s" % d['dns name'])
+            self.message("\tServer DNS name : %s" % d.get('dns name'))
             self.message("\tServer DN name  : %s" % d['remote DN'])
             self.message("\t\tTransportType: RPC")
             self.message("\t\toptions: 0x%08X" % d['options'])
@@ -441,8 +449,10 @@ class cmd_drs_replicate(Command):
         self.server = SOURCE_DC
         drsuapi_connect(self)
 
+        # Override the default flag LDB_FLG_DONT_CREATE_DB
         self.local_samdb = SamDB(session_info=system_session(), url=None,
-                                 credentials=self.creds, lp=self.lp)
+                                 credentials=self.creds, lp=self.lp,
+                                 flags=0)
 
         self.samdb = SamDB(url="ldap://%s" % self.server,
                            session_info=system_session(),
@@ -749,31 +759,116 @@ class cmd_drs_clone_dc_database(Command):
         Option("--targetdir", help="where to store provision (required)", type=str),
         Option("-q", "--quiet", help="Be quiet", action="store_true"),
         Option("--include-secrets", help="Also replicate secret values", action="store_true"),
-        Option("-v", "--verbose", help="Be verbose", action="store_true")
+        Option("--backend-store", type="choice", metavar="BACKENDSTORE",
+               choices=["tdb", "mdb"],
+               help="Specify the database backend to be used "
+                    "(default is %s)" % get_default_backend_store()),
+        Option("--backend-store-size", type="bytes", metavar="SIZE",
+               help="Specify the size of the backend database, currently" +
+                    "only supported by lmdb backends (default is 8 Gb).")
     ]
 
     takes_args = ["domain"]
 
     def run(self, domain, sambaopts=None, credopts=None,
             versionopts=None, server=None, targetdir=None,
-            quiet=False, verbose=False, include_secrets=False):
+            quiet=False, verbose=False, include_secrets=False,
+            backend_store=None, backend_store_size=None):
         lp = sambaopts.get_loadparm()
         creds = credopts.get_credentials(lp)
 
-        logger = self.get_logger()
-        if verbose:
-            logger.setLevel(logging.DEBUG)
-        elif quiet:
-            logger.setLevel(logging.WARNING)
-        else:
-            logger.setLevel(logging.INFO)
+        logger = self.get_logger(verbose=verbose, quiet=quiet)
 
         if targetdir is None:
             raise CommandError("--targetdir option must be specified")
 
         join_clone(logger=logger, server=server, creds=creds, lp=lp,
                    domain=domain, dns_backend='SAMBA_INTERNAL',
-                   targetdir=targetdir, include_secrets=include_secrets)
+                   targetdir=targetdir, include_secrets=include_secrets,
+                   backend_store=backend_store,
+                   backend_store_size=backend_store_size)
+
+
+class cmd_drs_uptodateness(Command):
+    """Show uptodateness status"""
+
+    synopsis = "%prog [options]"
+
+    takes_optiongroups = {
+        "sambaopts": options.SambaOptions,
+        "versionopts": options.VersionOptions,
+        "credopts": options.CredentialsOptions,
+    }
+
+    takes_options = [
+        Option("-H", "--URL", metavar="URL", dest="H",
+               help="LDB URL for database or target server"),
+        Option("-p", "--partition",
+               help="restrict to this partition"),
+        Option("--json", action='store_true',
+               help="Print data in json format"),
+        Option("--maximum", action='store_true',
+               help="Print maximum out-of-date-ness only"),
+        Option("--median", action='store_true',
+               help="Print median out-of-date-ness only"),
+        Option("--full", action='store_true',
+               help="Print full out-of-date-ness data"),
+    ]
+
+    def format_as_json(self, partitions_summaries):
+        return json.dumps(partitions_summaries, indent=2)
+
+    def format_as_text(self, partitions_summaries):
+        lines = []
+        for part_name, summary in partitions_summaries.items():
+            items = ['%s: %s' % (k, v) for k, v in summary.items()]
+            line = '%-15s %s' % (part_name, '  '.join(items))
+            lines.append(line)
+        return '\n'.join(lines)
+
+    def run(self, H=None, partition=None,
+            json=False, maximum=False, median=False, full=False,
+            sambaopts=None, credopts=None, versionopts=None,
+            quiet=False, verbose=False):
+
+        lp = sambaopts.get_loadparm()
+        creds = credopts.get_credentials(lp, fallback_machine=True)
+        local_kcc, dsas = get_kcc_and_dsas(H, lp, creds)
+        samdb = local_kcc.samdb
+        short_partitions, _ = get_partition_maps(samdb)
+        if partition:
+            if partition in short_partitions:
+                part_dn = short_partitions[partition]
+                # narrow down to specified partition only
+                short_partitions = {partition: part_dn}
+            else:
+                raise CommandError("unknown partition %s" % partition)
+
+        filters = []
+        if maximum:
+            filters.append('maximum')
+        if median:
+            filters.append('median')
+
+        partitions_distances = {}
+        partitions_summaries = {}
+        for part_name, part_dn in short_partitions.items():
+            utdv_edges = get_utdv_edges(local_kcc, dsas, part_dn, lp, creds)
+            distances = get_utdv_distances(utdv_edges, dsas)
+            summary = get_utdv_summary(distances, filters=filters)
+            partitions_distances[part_name] = distances
+            partitions_summaries[part_name] = summary
+
+        if full:
+            # always print json format
+            output = self.format_as_json(partitions_distances)
+        else:
+            if json:
+                output = self.format_as_json(partitions_summaries)
+            else:
+                output = self.format_as_text(partitions_summaries)
+
+        print(output, file=self.outf)
 
 
 class cmd_drs(SuperCommand):
@@ -786,3 +881,4 @@ class cmd_drs(SuperCommand):
     subcommands["showrepl"] = cmd_drs_showrepl()
     subcommands["options"] = cmd_drs_options()
     subcommands["clone-dc-database"] = cmd_drs_clone_dc_database()
+    subcommands["uptodateness"] = cmd_drs_uptodateness()

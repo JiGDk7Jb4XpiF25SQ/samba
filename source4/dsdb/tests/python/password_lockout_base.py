@@ -364,7 +364,7 @@ lockoutThreshold: """ + str(lockoutThreshold) + """
     def tearDown(self):
         super(BasePasswordTestCase, self).tearDown()
 
-    def _test_login_lockout(self, creds):
+    def _test_login_lockout(self, creds, wait_lockout_duration=True):
         username = creds.get_username()
         userpass = creds.get_password()
         userdn = "cn=%s,cn=users,%s" % (username, self.base_dn)
@@ -401,7 +401,7 @@ lockoutThreshold: """ + str(lockoutThreshold) + """
         self.assertGreaterEqual(lastLogon, lastLogonTimestamp)
 
         # Open a second LDB connection with the user credentials. Use the
-        # command line credentials for informations like the domain, the realm
+        # command line credentials for information like the domain, the realm
         # and the workstation.
         creds_lockout = self.insta_creds(creds)
 
@@ -561,6 +561,10 @@ lockoutThreshold: """ + str(lockoutThreshold) + """
                                   userAccountControl=dsdb.UF_NORMAL_ACCOUNT,
                                   msDSUserAccountControlComputed=dsdb.UF_LOCKOUT)
 
+        # if we're just checking the user gets locked out, we can stop here
+        if not wait_lockout_duration:
+            return
+
         # wait for the lockout to end
         time.sleep(self.account_lockout_duration + 1)
         print(self.account_lockout_duration + 1)
@@ -691,7 +695,7 @@ lockoutThreshold: """ + str(lockoutThreshold) + """
         # time should increase.
 
         # Open a second LDB connection with the user credentials. Use the
-        # command line credentials for informations like the domain, the realm
+        # command line credentials for information like the domain, the realm
         # and the workstation.
         username = creds.get_username()
         userdn = "cn=%s,cn=users,%s" % (username, self.base_dn)

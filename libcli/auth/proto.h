@@ -15,9 +15,15 @@ void netlogon_creds_des_encrypt_LMKey(struct netlogon_creds_CredentialState *cre
 void netlogon_creds_des_decrypt_LMKey(struct netlogon_creds_CredentialState *creds, struct netr_LMSessionKey *key);
 void netlogon_creds_des_encrypt(struct netlogon_creds_CredentialState *creds, struct samr_Password *pass);
 void netlogon_creds_des_decrypt(struct netlogon_creds_CredentialState *creds, struct samr_Password *pass);
-void netlogon_creds_arcfour_crypt(struct netlogon_creds_CredentialState *creds, uint8_t *data, size_t len);
-void netlogon_creds_aes_encrypt(struct netlogon_creds_CredentialState *creds, uint8_t *data, size_t len);
-void netlogon_creds_aes_decrypt(struct netlogon_creds_CredentialState *creds, uint8_t *data, size_t len);
+NTSTATUS netlogon_creds_arcfour_crypt(struct netlogon_creds_CredentialState *creds,
+				      uint8_t *data,
+				      size_t len);
+NTSTATUS netlogon_creds_aes_encrypt(struct netlogon_creds_CredentialState *creds,
+				    uint8_t *data,
+				    size_t len);
+NTSTATUS netlogon_creds_aes_decrypt(struct netlogon_creds_CredentialState *creds,
+				    uint8_t *data,
+				    size_t len);
 
 /*****************************************************************
 The above functions are common to the client and server interface
@@ -59,18 +65,18 @@ struct netlogon_creds_CredentialState *netlogon_creds_server_init(TALLOC_CTX *me
 NTSTATUS netlogon_creds_server_step_check(struct netlogon_creds_CredentialState *creds,
 				 const struct netr_Authenticator *received_authenticator,
 				 struct netr_Authenticator *return_authenticator) ;
-void netlogon_creds_decrypt_samlogon_validation(struct netlogon_creds_CredentialState *creds,
-						uint16_t validation_level,
-						union netr_Validation *validation);
-void netlogon_creds_encrypt_samlogon_validation(struct netlogon_creds_CredentialState *creds,
-						uint16_t validation_level,
-						union netr_Validation *validation);
-void netlogon_creds_decrypt_samlogon_logon(struct netlogon_creds_CredentialState *creds,
-					   enum netr_LogonInfoClass level,
-					   union netr_LogonLevel *logon);
-void netlogon_creds_encrypt_samlogon_logon(struct netlogon_creds_CredentialState *creds,
-					   enum netr_LogonInfoClass level,
-					   union netr_LogonLevel *logon);
+NTSTATUS netlogon_creds_decrypt_samlogon_validation(struct netlogon_creds_CredentialState *creds,
+						    uint16_t validation_level,
+						    union netr_Validation *validation);
+NTSTATUS netlogon_creds_encrypt_samlogon_validation(struct netlogon_creds_CredentialState *creds,
+						    uint16_t validation_level,
+						    union netr_Validation *validation);
+NTSTATUS netlogon_creds_decrypt_samlogon_logon(struct netlogon_creds_CredentialState *creds,
+					       enum netr_LogonInfoClass level,
+					       union netr_LogonLevel *logon);
+NTSTATUS netlogon_creds_encrypt_samlogon_logon(struct netlogon_creds_CredentialState *creds,
+					       enum netr_LogonInfoClass level,
+					       union netr_LogonLevel *logon);
 union netr_LogonLevel *netlogon_creds_shallow_copy_logon(TALLOC_CTX *mem_ctx,
 					enum netr_LogonInfoClass level,
 					const union netr_LogonLevel *in);
@@ -180,9 +186,17 @@ bool decode_pw_buffer(TALLOC_CTX *ctx,
 		      charset_t string_charset);
 
 /***********************************************************
+ Encode an arc4 password change buffer.
+************************************************************/
+NTSTATUS encode_rc4_passwd_buffer(const char *passwd,
+				  const DATA_BLOB *session_key,
+				  struct samr_CryptPasswordEx *out_crypt_pwd);
+
+/***********************************************************
  Decode an arc4 encrypted password change buffer.
 ************************************************************/
-void encode_or_decode_arc4_passwd_buffer(unsigned char pw_buf[532], const DATA_BLOB *psession_key);
+NTSTATUS decode_rc4_passwd_buffer(const DATA_BLOB *psession_key,
+				  struct samr_CryptPasswordEx *inout_crypt_pwd);
 
 /***********************************************************
  encode a password buffer with an already unicode password.  The
@@ -197,10 +211,10 @@ bool set_pw_in_buffer(uint8_t buffer[516], const DATA_BLOB *password);
 bool extract_pw_from_buffer(TALLOC_CTX *mem_ctx, 
 			    uint8_t in_buffer[516], DATA_BLOB *new_pass);
 struct wkssvc_PasswordBuffer;
-void encode_wkssvc_join_password_buffer(TALLOC_CTX *mem_ctx,
-					const char *pwd,
-					DATA_BLOB *session_key,
-					struct wkssvc_PasswordBuffer **pwd_buf);
+WERROR encode_wkssvc_join_password_buffer(TALLOC_CTX *mem_ctx,
+					  const char *pwd,
+					  DATA_BLOB *session_key,
+					  struct wkssvc_PasswordBuffer **pwd_buf);
 WERROR decode_wkssvc_join_password_buffer(TALLOC_CTX *mem_ctx,
 					  struct wkssvc_PasswordBuffer *pwd_buf,
 					  DATA_BLOB *session_key,
@@ -214,7 +228,6 @@ void E_P24(const uint8_t *p21, const uint8_t *c8, uint8_t *p24);
 void D_P16(const uint8_t *p14, const uint8_t *in, uint8_t *out);
 void E_old_pw_hash( uint8_t *p14, const uint8_t *in, uint8_t *out);
 void des_crypt128(uint8_t out[8], const uint8_t in[8], const uint8_t key[16]);
-void des_crypt64(uint8_t out[8], const uint8_t in[8], const uint8_t key[8], int forw);
 void des_crypt112(uint8_t out[8], const uint8_t in[8], const uint8_t key[14], int forw);
 void des_crypt112_16(uint8_t out[16], const uint8_t in[16], const uint8_t key[14], int forw);
 void sam_rid_crypt(unsigned int rid, const uint8_t *in, uint8_t *out, int forw);

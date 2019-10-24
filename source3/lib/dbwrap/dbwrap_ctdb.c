@@ -98,7 +98,7 @@ static int ctdb_async_ctx_init_internal(TALLOC_CTX *mem_ctx,
 				    &ctdb_async_ctx.async_conn);
 	unbecome_root();
 
-	if (ctdb_async_ctx.async_conn == NULL) {
+	if (ret != 0 || ctdb_async_ctx.async_conn == NULL) {
 		DBG_ERR("ctdbd_init_connection failed\n");
 		return EIO;
 	}
@@ -527,6 +527,11 @@ static struct db_record *db_ctdb_fetch_locked_transaction(struct db_ctdb_ctx *ct
 	result->storev = db_ctdb_storev_transaction;
 	result->delete_rec = db_ctdb_delete_transaction;
 
+	if (ctx->transaction == NULL) {
+		DEBUG(0, ("no transaction available\n"));
+		TALLOC_FREE(result);
+		return NULL;
+	}
 	if (pull_newest_from_marshall_buffer(ctx->transaction->m_write, key,
 					     NULL, result, &result->value)) {
 		return result;
@@ -1232,12 +1237,14 @@ again:
 	result->value.dsize = ctdb_data.dsize - sizeof(crec->header);
 	result->value.dptr = NULL;
 
-	if ((result->value.dsize != 0)
-	    && !(result->value.dptr = (uint8_t *)talloc_memdup(
-			 result, ctdb_data.dptr + sizeof(crec->header),
-			 result->value.dsize))) {
-		DEBUG(0, ("talloc failed\n"));
-		TALLOC_FREE(result);
+	if (result->value.dsize != 0) {
+		result->value.dptr = talloc_memdup(
+			result, ctdb_data.dptr + sizeof(crec->header),
+			result->value.dsize);
+		if (result->value.dptr == NULL) {
+			DBG_ERR("talloc failed\n");
+			TALLOC_FREE(result);
+		}
 	}
 
 	SAFE_FREE(ctdb_data.dptr);
@@ -1530,12 +1537,20 @@ struct traverse_state {
 static void traverse_callback(TDB_DATA key, TDB_DATA data, void *private_data)
 {
 	struct traverse_state *state = (struct traverse_state *)private_data;
-	struct db_record *rec;
-	TALLOC_CTX *tmp_ctx = talloc_new(state->db);
+	struct db_record *rec = NULL;
+	TALLOC_CTX *tmp_ctx = NULL;
+
+	tmp_ctx = talloc_new(state->db);
+	if (tmp_ctx == NULL) {
+		DBG_ERR("talloc_new failed\n");
+		return;
+	}
+
 	/* we have to give them a locked record to prevent races */
 	rec = db_ctdb_fetch_locked(state->db, tmp_ctx, key);
-	if (rec && rec->value.dsize > 0) {
+	if (rec != NULL && rec->value.dsize > 0) {
 		state->fn(rec, state->private_data);
+		state->count++;
 	}
 	talloc_free(tmp_ctx);
 }
@@ -1616,10 +1631,11 @@ static int db_ctdb_traverse(struct db_context *db,
                                                         struct db_ctdb_ctx);
 	struct traverse_state state;
 
-	state.db = db;
-	state.fn = fn;
-	state.private_data = private_data;
-	state.count = 0;
+	state = (struct traverse_state) {
+		.db = db,
+		.fn = fn,
+		.private_data = private_data,
+	};
 
 	if (db->persistent) {
 		struct tdb_context *ltdb = ctx->wtdb->tdb;
@@ -1748,15 +1764,24 @@ static int db_ctdb_traverse_read(struct db_context *db,
                                                         struct db_ctdb_ctx);
 	struct traverse_state state;
 
-	state.db = db;
-	state.fn = fn;
-	state.private_data = private_data;
-	state.count = 0;
+	state = (struct traverse_state) {
+		.db = db,
+		.fn = fn,
+		.private_data = private_data,
+	};
 
 	if (db->persistent) {
 		/* for persistent databases we don't need to do a ctdb traverse,
 		   we can do a faster local traverse */
-		return tdb_traverse_read(ctx->wtdb->tdb, traverse_persistent_callback_read, &state);
+		int nrecs;
+
+		nrecs = tdb_traverse_read(ctx->wtdb->tdb,
+					  traverse_persistent_callback_read,
+					  &state);
+		if (nrecs == -1) {
+			return -1;
+		}
+		return state.count;
 	}
 
 	ret = db_ctdbd_traverse(ctx->db_id, traverse_read_callback, &state);
@@ -1856,6 +1881,11 @@ struct db_context *db_open_ctdb(TALLOC_CTX *mem_ctx,
 
 	db_path = ctdbd_dbpath(messaging_ctdb_connection(), db_ctdb,
 			       db_ctdb->db_id);
+	if (db_path == NULL) {
+		DBG_ERR("ctdbd_dbpath failed\n");
+		TALLOC_FREE(result);
+		return NULL;
+	}
 
 	result->persistent = persistent;
 	result->lock_order = lock_order;

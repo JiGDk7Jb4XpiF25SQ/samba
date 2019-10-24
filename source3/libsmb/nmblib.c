@@ -207,24 +207,32 @@ static int parse_nmb_name(char *inbuf,int ofs,int length, struct nmb_name *name)
 		unsigned char c1,c2;
 		c1 = ubuf[offset++]-'A';
 		c2 = ubuf[offset++]-'A';
-		if ((c1 & 0xF0) || (c2 & 0xF0) || (n > sizeof(name->name)-1))
+		if ((c1 & 0xF0) || (c2 & 0xF0)) {
 			return(0);
+		}
+		if (n >= sizeof(name->name)) {
+			return 0;
+		}
 		name->name[n++] = (c1<<4) | c2;
 		m -= 2;
 	}
-	name->name[n] = 0;
-
-	if (n==MAX_NETBIOSNAME_LEN) {
-		/* parse out the name type, its always
-		 * in the 16th byte of the name */
-		name->name_type = ((unsigned char)name->name[15]) & 0xff;
-
-		/* remove trailing spaces */
-		name->name[15] = 0;
-		n = 14;
-		while (n && name->name[n]==' ')
-			name->name[n--] = 0;
+	/*
+	 * RFC1002: For a valid NetBIOS name, exiting from the above,
+	 * n *must* be MAX_NETBIOSNAME_LEN (16).
+	 */
+	if (n != MAX_NETBIOSNAME_LEN) {
+		return 0;
 	}
+
+	/* parse out the name type, its always
+	 * in the 16th byte of the name */
+	name->name_type = ((unsigned char)name->name[15]) & 0xff;
+
+	/* remove trailing spaces */
+	name->name[15] = 0;
+	n = 14;
+	while (n && name->name[n]==' ')
+		name->name[n--] = 0;
 
 	/* now the domain parts (if any) */
 	n = 0;
@@ -454,13 +462,12 @@ static int put_compressed_name_ptr(unsigned char *buf,
 				struct res_rec *rec,
 				int ptr_offset)
 {
-	int ret=0;
+	int ret=offset;
 	if (buf) {
 		buf[offset] = (0xC0 | ((ptr_offset >> 8) & 0xFF));
 		buf[offset+1] = (ptr_offset & 0xFF);
 	}
 	offset += 2;
-	ret += 2;
 	if (buf) {
 		RSSVAL(buf,offset,rec->rr_type);
 		RSSVAL(buf,offset+2,rec->rr_class);
@@ -469,7 +476,7 @@ static int put_compressed_name_ptr(unsigned char *buf,
 		memcpy(buf+offset+10,rec->rdata,rec->rdlength);
 	}
 	offset += 10+rec->rdlength;
-	ret += 10+rec->rdlength;
+	ret = (offset - ret);
 
 	return ret;
 }

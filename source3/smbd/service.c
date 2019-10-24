@@ -28,6 +28,7 @@
 #include "printing/pcap.h"
 #include "passdb/lookup_sid.h"
 #include "auth.h"
+#include "../auth/auth_util.h"
 #include "lib/param/loadparm.h"
 #include "messages.h"
 #include "lib/afs/afs_funcs.h"
@@ -71,16 +72,16 @@ bool set_conn_connectpath(connection_struct *conn, const char *connectpath)
 	talloc_free(conn->connectpath);
 	conn->connectpath = destname;
 	/*
-	 * Ensure conn->cwd_fname is initialized.
+	 * Ensure conn->cwd_fsp->fsp_name is initialized.
 	 * start as conn->connectpath.
 	 */
-	TALLOC_FREE(conn->cwd_fname);
-	conn->cwd_fname = synthetic_smb_fname(conn,
+	TALLOC_FREE(conn->cwd_fsp->fsp_name);
+	conn->cwd_fsp->fsp_name = synthetic_smb_fname(conn,
 				conn->connectpath,
 				NULL,
 				NULL,
 				0);
-	if (conn->cwd_fname == NULL) {
+	if (conn->cwd_fsp->fsp_name == NULL) {
 		return false;
 	}
 	return true;
@@ -151,17 +152,45 @@ bool chdir_current_service(connection_struct *conn)
 
 	ret = vfs_ChDir(conn, &connectpath_fname);
 	if (ret != 0) {
-		DEBUG(((errno!=EACCES)?0:3),
-		      ("chdir (%s) failed, reason: %s\n",
-		       conn->connectpath, strerror(errno)));
+		int saved_errno = errno;
+
+		if (saved_errno == EACCES) {
+			char *str = utok_string(
+				talloc_tos(),
+				conn->session_info->unix_token);
+			DBG_WARNING("vfs_ChDir(%s) got "
+				    "permission denied, current "
+				    "token: %s\n",
+				    conn->connectpath, str);
+			TALLOC_FREE(str);
+		} else {
+			DBG_ERR("vfs_ChDir(%s) failed: "
+				"%s!\n",
+				conn->connectpath,
+				strerror(saved_errno));
+		}
 		return false;
 	}
 
 	ret = vfs_ChDir(conn, &origpath_fname);
 	if (ret != 0) {
-		DEBUG(((errno!=EACCES)?0:3),
-			("chdir (%s) failed, reason: %s\n",
-			conn->origpath, strerror(errno)));
+		int saved_errno = errno;
+
+		if (saved_errno == EACCES) {
+			char *str = utok_string(
+				talloc_tos(),
+				conn->session_info->unix_token);
+			DBG_WARNING("vfs_ChDir(%s) got "
+				    "permission denied, current "
+				    "token: %s\n",
+				    conn->origpath, str);
+			TALLOC_FREE(str);
+		} else {
+			DBG_ERR("vfs_ChDir(%s) failed: "
+				"%s!\n",
+				conn->origpath,
+				strerror(saved_errno));
+		}
 		return false;
 	}
 
@@ -283,8 +312,9 @@ static NTSTATUS find_forced_group(bool force_user,
 	}
 
 	if (!sid_to_gid(&group_sid, &gid)) {
+		struct dom_sid_buf buf;
 		DEBUG(10, ("sid_to_gid(%s) for %s failed\n",
-			   sid_string_dbg(&group_sid), groupname));
+			   dom_sid_str_buf(&group_sid, &buf), groupname));
 		goto done;
 	}
 
@@ -717,7 +747,7 @@ static NTSTATUS make_connection_snum(struct smbXsrv_connection *xconn,
 	}
 
 /* USER Activites: */
-	if (!change_to_user(conn, conn->vuid)) {
+	if (!change_to_user_and_service(conn, conn->vuid)) {
 		/* No point continuing if they fail the basic checks */
 		DEBUG(0,("Can't become connected user!\n"));
 		status = NT_STATUS_LOGON_FAILURE;
@@ -834,7 +864,7 @@ static NTSTATUS make_connection_snum(struct smbXsrv_connection *xconn,
 	conn->origpath = talloc_strdup(conn, conn->connectpath);
 
 	/* Figure out the characteristics of the underlying filesystem. This
-	 * assumes that all the filesystem mounted withing a share path have
+	 * assumes that all the filesystem mounted within a share path have
 	 * the same characteristics, which is likely but not guaranteed.
 	 */
 
@@ -1116,10 +1146,6 @@ void close_cnum(connection_struct *conn, uint64_t vuid)
 
 	file_close_conn(conn);
 
-	if (!IS_IPC(conn)) {
-		dptr_closecnum(conn);
-	}
-
 	change_to_root_user();
 
 	DEBUG(IS_IPC(conn)?3:2, ("%s (%s) closed connection to service %s\n",
@@ -1136,7 +1162,7 @@ void close_cnum(connection_struct *conn, uint64_t vuid)
 
 	/* execute any "postexec = " line */
 	if (*lp_postexec(talloc_tos(), SNUM(conn)) &&
-	    change_to_user(conn, vuid))  {
+	    change_to_user_and_service(conn, vuid))  {
 		char *cmd = talloc_sub_advanced(talloc_tos(),
 					lp_const_servicename(SNUM(conn)),
 					conn->session_info->unix_info->unix_name,

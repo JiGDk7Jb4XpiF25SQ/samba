@@ -18,15 +18,17 @@
 
 import optparse
 import samba
-from samba import getopt as options
 from samba import colour
+from samba.getopt import SambaOption
+from samba.logger import get_samba_logger
 from ldb import LdbError
 import sys
 import traceback
 import textwrap
 
 
-class Option(optparse.Option):
+class Option(SambaOption):
+    SUPPRESS_HELP = optparse.SUPPRESS_HELP
     pass
 
 # This help formatter does text wrapping and preserves newlines
@@ -92,7 +94,7 @@ class Command(object):
         self.outf = outf
         self.errf = errf
 
-    def usage(self, prog, *args):
+    def usage(self, prog=None):
         parser, _ = self._create_parser(prog)
         parser.print_usage()
 
@@ -129,7 +131,7 @@ class Command(object):
         if force_traceback or samba.get_debug_level() >= 3:
             traceback.print_tb(etraceback, file=self.errf)
 
-    def _create_parser(self, prog, epilog=None):
+    def _create_parser(self, prog=None, epilog=None):
         parser = optparse.OptionParser(
             usage=self.synopsis,
             description=self.full_description,
@@ -137,7 +139,8 @@ class Command(object):
             prog=prog, epilog=epilog)
         parser.add_options(self.takes_options)
         optiongroups = {}
-        for name, optiongroup in self.takes_optiongroups.items():
+        for name in sorted(self.takes_optiongroups.keys()):
+            optiongroup = self.takes_optiongroups[name]
             optiongroups[name] = optiongroup(parser)
             parser.add_option_group(optiongroups[name])
         return parser, optiongroups
@@ -189,12 +192,12 @@ class Command(object):
         """Run the command. This should be overridden by all subclasses."""
         raise NotImplementedError(self.run)
 
-    def get_logger(self, name="netcmd"):
+    def get_logger(self, name="", verbose=False, quiet=False, **kwargs):
         """Get a logger object."""
-        import logging
-        logger = logging.getLogger(name)
-        logger.addHandler(logging.StreamHandler(self.errf))
-        return logger
+        return get_samba_logger(
+            name=name or self.name, stream=self.errf,
+            verbose=verbose, quiet=quiet,
+            **kwargs)
 
     def apply_colour_choice(self, requested):
         """Heuristics to work out whether the user wants colour output, from a
@@ -246,7 +249,7 @@ class SuperCommand(Command):
             subcommand = '--help'
 
         epilog = "\nAvailable subcommands:\n"
-        subcmds = self.subcommands.keys()
+        subcmds = list(self.subcommands.keys())
         subcmds.sort()
         max_length = max([len(c) for c in subcmds])
         for cmd_name in subcmds:

@@ -26,6 +26,7 @@
 #include "librpc/gen_ndr/ndr_spoolss.h"
 #include "torture/rpc/torture_rpc.h"
 #include "rpc_server/dcerpc_server.h"
+#include "rpc_server/dcerpc_server_proto.h"
 #include "rpc_server/service_rpc.h"
 #include "smbd/process_model.h"
 #include "smb_server/smb_server.h"
@@ -33,9 +34,14 @@
 #include "ntvfs/ntvfs.h"
 #include "param/param.h"
 
-static NTSTATUS spoolss__op_bind(struct dcesrv_call_state *dce_call,
-				 const struct dcesrv_interface *iface,
-				 uint32_t if_version)
+struct dcesrv_context_callbacks srv_cb = {
+	.log.successful_authz = log_successful_dcesrv_authz_event,
+	.auth.gensec_prepare = dcesrv_gensec_prepare,
+	.assoc_group.find = dcesrv_assoc_group_find,
+};
+
+static NTSTATUS spoolss__op_bind(struct dcesrv_connection_context *context,
+				 const struct dcesrv_interface *iface)
 {
 	return NT_STATUS_OK;
 }
@@ -248,7 +254,11 @@ static NTSTATUS spoolss__op_init_server(struct dcesrv_context *dce_ctx, const st
 		NTSTATUS ret;
 		const char *name = ndr_table_spoolss.endpoints->names[i];
 
-		ret = dcesrv_interface_register(dce_ctx, name, &notify_test_spoolss_interface, NULL);
+		ret = dcesrv_interface_register(dce_ctx,
+						name,
+						NULL,
+						&notify_test_spoolss_interface,
+						NULL);
 		if (!NT_STATUS_IS_OK(ret)) {
 			DEBUG(1,("spoolss_op_init_server: failed to register endpoint '%s'\n",name));
 			return ret;
@@ -479,7 +489,8 @@ static bool test_start_dcerpc_server(struct torture_context *tctx,
 				   address, NULL);
 	torture_assert_ntstatus_ok(tctx, status, "starting smb server");
 
-	status = dcesrv_init_context(tctx, tctx->lp_ctx, endpoints, &dce_ctx);
+	status = dcesrv_init_context(tctx, tctx->lp_ctx, endpoints,
+				     &srv_cb, &dce_ctx);
 	torture_assert_ntstatus_ok(tctx, status,
 				   "unable to initialize DCE/RPC server");
 

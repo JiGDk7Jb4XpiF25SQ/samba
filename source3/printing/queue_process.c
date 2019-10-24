@@ -31,13 +31,11 @@
 #include "smbd/smbd.h"
 #include "rpc_server/rpc_config.h"
 #include "printing/load.h"
+#include "printing/spoolssd.h"
 #include "rpc_server/spoolss/srv_spoolss_nt.h"
 #include "auth.h"
 #include "nt_printing.h"
 #include "util_event.h"
-
-extern pid_t start_spoolssd(struct tevent_context *ev_ctx,
-			    struct messaging_context *msg_ctx);
 
 /**
  * @brief Purge stale printers and reload from pre-populated pcap cache.
@@ -172,7 +170,7 @@ static bool printing_subsystem_queue_tasks(struct bq_state *state)
 	/* cancel any existing housekeeping event */
 	TALLOC_FREE(state->housekeep);
 
-	if (housekeeping_period == 0) {
+	if ((housekeeping_period == 0) || !lp_load_printers()) {
 		DEBUG(4, ("background print queue housekeeping disabled\n"));
 		return true;
 	}
@@ -483,9 +481,7 @@ void printing_subsystem_update(struct tevent_context *ev_ctx,
 			       bool force)
 {
 	if (background_lpq_updater_pid != -1) {
-		if (pcap_cache_loaded(NULL)) {
-			load_printers();
-		}
+		load_printers();
 		if (force) {
 			/* Send a sighup to the background process.
 			 * this will force it to reload printers */

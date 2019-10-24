@@ -466,7 +466,7 @@ static int net_ads_gpo_link_get(struct net_context *c, int argc, const char **ar
 		d_printf("%s\n%s\n%s",
 			 _("Usage:"),
 			 _("net ads gpo linkget <container>"),
-			 _("  Lists gPLink of a containter\n"
+			 _("  Lists gPLink of a container\n"
 			   "    container\tContainer to get link for\n"));
 		return -1;
 	}
@@ -585,6 +585,18 @@ out:
 
 #endif
 
+/*
+Arguments:
+- struct net_context *: Pointer to net_context*
+- argc: Number of command line arguments passed to 'net ads gpo getgpo' command
+- **argv: Command line argument string passed to 'net ads gpo getgpo' command
+
+This function performs following operations:
+1. Create  talloc context using talloc_init
+2. Preform ads_startup()
+3. Call ads_get_gpo() to retrieve gpo details inside 'struct GROUP_POLICY_OBJECT'
+4. Call dumps_gpo() to dump GPO on stdout
+*/
 static int net_ads_gpo_get_gpo(struct net_context *c, int argc, const char **argv)
 {
 	ADS_STRUCT *ads;
@@ -623,7 +635,7 @@ static int net_ads_gpo_get_gpo(struct net_context *c, int argc, const char **arg
 		goto out;
 	}
 
-	dump_gpo(&gpo, 1);
+	dump_gpo(&gpo, 0);
 
 out:
 	talloc_destroy(mem_ctx);
@@ -673,9 +685,9 @@ int net_ads_gpo(struct net_context *c, int argc, const char **argv)
 			"linkget",
 			net_ads_gpo_link_get,
 			NET_TRANSPORT_ADS,
-			N_("Lists gPLink of containter"),
+			N_("Lists gPLink of container"),
 			N_("net ads gpo linkget\n"
-			   "    Lists gPLink of containter")
+			   "    Lists gPLink of container")
 		},
 		{
 			"list",

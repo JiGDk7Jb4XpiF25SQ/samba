@@ -17,7 +17,6 @@
 Blackbox tests for blackboxtest check output methods.
 """
 
-import time
 import signal
 from samba.tests import BlackboxTestCase
 
@@ -33,7 +32,7 @@ class TimeoutHelper():
             with Timeout(3):
                 foobar("Request 1")
         except TimeoutHelper.Timeout:
-            print "Timeout"
+            print("Timeout")
     """
 
     class Timeout(Exception):
@@ -55,7 +54,9 @@ class TimeoutHelper():
 
 def _make_cmdline(data='$', repeat=(5 * 1024 * 1024), retcode=0):
     """Build a command to call gen_output.py to generate large output"""
-    return 'gen_output.py --data {} --repeat {} --retcode {}'.format(data, repeat, retcode)
+    return 'gen_output.py --data {0} --repeat {1} --retcode {2}'.format(data,
+                                                                        repeat,
+                                                                        retcode)
 
 
 class CheckOutputTests(BlackboxTestCase):

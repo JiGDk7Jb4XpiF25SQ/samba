@@ -65,7 +65,7 @@ struct db_context *db_open(TALLOC_CTX *mem_ctx,
 {
 	struct db_context *result = NULL;
 	const char *base;
-	const char *sockname;
+	struct loadparm_context *lp_ctx = NULL;
 
 	if (!DBWRAP_LOCK_ORDER_VALID(lock_order)) {
 		errno = EINVAL;
@@ -126,9 +126,10 @@ struct db_context *db_open(TALLOC_CTX *mem_ctx,
 		}
 	}
 
-	sockname = lp_ctdbd_socket();
-
 	if (lp_clustering()) {
+		const char *sockname;
+
+		sockname = lp_ctdbd_socket();
 		if (!socket_exist(sockname)) {
 			DEBUG(1, ("ctdb socket does not exist - is ctdb not "
 				  "running?\n"));
@@ -140,13 +141,19 @@ struct db_context *db_open(TALLOC_CTX *mem_ctx,
 			struct messaging_context *msg_ctx;
 			struct ctdbd_connection *conn;
 
+			/*
+			 * Initialize messaging before getting the ctdb
+			 * connection, as the ctdb connection requires messaging
+			 * to be initialized.
+			 */
+			msg_ctx = global_messaging_context();
+
 			conn = messaging_ctdb_connection();
 			if (conn == NULL) {
 				DBG_WARNING("No ctdb connection\n");
 				errno = EIO;
 				return NULL;
 			}
-			msg_ctx = global_messaging_context();
 
 			result = db_open_ctdb(mem_ctx, msg_ctx, base,
 					      hash_size,
@@ -159,27 +166,26 @@ struct db_context *db_open(TALLOC_CTX *mem_ctx,
 				}
 				return NULL;
 			}
+
+			return result;
 		}
 	}
 
-	if (result == NULL) {
-		struct loadparm_context *lp_ctx = loadparm_init_s3(mem_ctx, loadparm_s3_helpers());
+	lp_ctx = loadparm_init_s3(mem_ctx, loadparm_s3_helpers());
 
-		if (hash_size == 0) {
-			hash_size = lpcfg_tdb_hash_size(lp_ctx, name);
-		}
-		tdb_flags = lpcfg_tdb_flags(lp_ctx, tdb_flags);
-
-		result = dbwrap_local_open(
-			mem_ctx,
-			name,
-			hash_size,
-			tdb_flags,
-			open_flags,
-			mode,
-			lock_order,
-			dbwrap_flags);
-		talloc_unlink(mem_ctx, lp_ctx);
+	if (hash_size == 0) {
+		hash_size = lpcfg_tdb_hash_size(lp_ctx, name);
 	}
+	tdb_flags = lpcfg_tdb_flags(lp_ctx, tdb_flags);
+
+	result = dbwrap_local_open(mem_ctx,
+				   name,
+				   hash_size,
+				   tdb_flags,
+				   open_flags,
+				   mode,
+				   lock_order,
+				   dbwrap_flags);
+	talloc_unlink(mem_ctx, lp_ctx);
 	return result;
 }

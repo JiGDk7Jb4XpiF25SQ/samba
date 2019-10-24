@@ -25,6 +25,7 @@
 #ifdef HAVE_PTHREAD
 #include "system/threads.h"
 #endif
+#define TEVENT_DEPRECATED 1
 #include "tevent.h"
 #include "tevent_internal.h"
 #include "tevent_util.h"
@@ -207,6 +208,8 @@ static int tevent_wrapper_context_destructor(struct tevent_context *wrap_ev)
 	if (glue == NULL) {
 		tevent_abort(wrap_ev,
 			"tevent_wrapper_context_destructor() active on main");
+		/* static checker support, return below is never reached */
+		return -1;
 	}
 
 	if (glue->destroyed && glue->busy) {

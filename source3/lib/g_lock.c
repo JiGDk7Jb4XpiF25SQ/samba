@@ -90,7 +90,8 @@ static bool g_lock_parse(uint8_t *buf, size_t buflen, struct g_lock *lck)
 	return true;
 }
 
-static void g_lock_get_rec(struct g_lock *lck, size_t i,
+static void g_lock_get_rec(const struct g_lock *lck,
+			   size_t i,
 			   struct g_lock_rec *rec)
 {
 	if (i >= lck->num_recs) {
@@ -346,7 +347,7 @@ struct g_lock_lock_fn_state {
 static void g_lock_lock_fn(struct db_record *rec, void *private_data)
 {
 	struct g_lock_lock_fn_state *state = private_data;
-	struct server_id blocker;
+	struct server_id blocker = {0};
 
 	state->status = g_lock_trylock(rec, state->self, state->state->type,
 				       &blocker);
@@ -517,7 +518,7 @@ static void g_lock_unlock_fn(struct db_record *rec,
 
 	ok = g_lock_parse(value.dptr, value.dsize, &lck);
 	if (!ok) {
-		DBG_DEBUG("g_lock_get for %s failed\n",
+		DBG_DEBUG("g_lock_parse for %s failed\n",
 			  hex_encode_talloc(talloc_tos(),
 					    state->key.dptr,
 					    state->key.dsize));

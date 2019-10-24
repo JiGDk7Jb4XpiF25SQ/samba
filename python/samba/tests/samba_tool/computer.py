@@ -65,7 +65,8 @@ class ComputerCmdTestCase(SambaToolCmdTest):
             (result, out, err) = self._create_computer(computer)
 
             self.assertCmdSuccess(result, out, err)
-            self.assertEquals(err, "", "There shouldn't be any error message")
+            self.assertNotIn(
+                "ERROR", err, "There shouldn't be any error message")
             self.assertIn("Computer '%s' created successfully" %
                           computer["name"], out)
 
@@ -254,14 +255,14 @@ class ComputerCmdTestCase(SambaToolCmdTest):
         return ou
 
     def _create_computer(self, computer):
-        args = '{} {} --description={}'.format(
+        args = '{0} {1} --description={2}'.format(
             computer['name'], self.creds, computer["description"])
 
         for ip_address in computer.get('ip_address_list', []):
-            args += ' --ip-address={}'.format(ip_address)
+            args += ' --ip-address={0}'.format(ip_address)
 
         for service_principal_name in computer.get('service_principal_name_list', []):
-            args += ' --service-principal-name={}'.format(service_principal_name)
+            args += ' --service-principal-name={0}'.format(service_principal_name)
 
         args = args.split()
 
@@ -281,7 +282,7 @@ class ComputerCmdTestCase(SambaToolCmdTest):
                           self.samdb.domain_dn()))
         computerlist = self.samdb.search(base=self.samdb.domain_dn(),
                                          scope=ldb.SCOPE_SUBTREE,
-                                         expression=search_filter, attrs=[])
+                                         expression=search_filter)
         if computerlist:
             return computerlist[0]
         else:
@@ -290,9 +291,9 @@ class ComputerCmdTestCase(SambaToolCmdTest):
     def _find_dns_record(self, name, ip_address):
         name = name.rstrip('$')  # computername
         records = self.samdb.search(
-            base="DC=DomainDnsZones,{}".format(self.samdb.get_default_basedn()),
+            base="DC=DomainDnsZones,{0}".format(self.samdb.get_default_basedn()),
             scope=ldb.SCOPE_SUBTREE,
-            expression="(&(objectClass=dnsNode)(name={}))".format(name),
+            expression="(&(objectClass=dnsNode)(name={0}))".format(name),
             attrs=['dnsRecord', 'dNSTombstoned'])
 
         # unpack data and compare

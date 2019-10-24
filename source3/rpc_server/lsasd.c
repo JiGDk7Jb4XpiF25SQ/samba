@@ -38,6 +38,10 @@
 #include "librpc/gen_ndr/srv_lsa.h"
 #include "librpc/gen_ndr/srv_samr.h"
 #include "librpc/gen_ndr/srv_netlogon.h"
+#include "rpc_server/lsasd.h"
+
+#undef DBGC_CLASS
+#define DBGC_CLASS DBGC_RPC_SRV
 
 #define DAEMON_NAME "lsasd"
 #define LSASD_MAX_SOCKETS 64
@@ -55,9 +59,6 @@ static struct pf_daemon_config default_pf_lsasd_cfg = {
 	.child_min_life = 60 /* 1 minute minimum life time */
 };
 static struct pf_daemon_config pf_lsasd_cfg = { 0 };
-
-void start_lsasd(struct tevent_context *ev_ctx,
-		 struct messaging_context *msg_ctx);
 
 static void lsasd_reopen_logs(int child_id)
 {
@@ -132,12 +133,7 @@ static void lsasd_sig_term_handler(struct tevent_context *ev,
 				  void *siginfo,
 				  void *private_data)
 {
-	rpc_netlogon_shutdown();
-	rpc_samr_shutdown();
-	rpc_lsarpc_shutdown();
-
-	DEBUG(0, ("termination signal\n"));
-	exit(0);
+	exit_server_cleanly("termination signal");
 }
 
 static void lsasd_setup_sig_term_handler(struct tevent_context *ev_ctx)
@@ -150,8 +146,7 @@ static void lsasd_setup_sig_term_handler(struct tevent_context *ev_ctx)
 			       lsasd_sig_term_handler,
 			       NULL);
 	if (!se) {
-		DEBUG(0, ("failed to setup SIGTERM handler\n"));
-		exit(1);
+		exit_server("failed to setup SIGTERM handler");
 	}
 }
 
@@ -297,7 +292,7 @@ struct lsasd_children_data {
 	struct messaging_context *msg_ctx;
 	struct pf_worker_data *pf;
 	int listen_fd_size;
-	int *listen_fds;
+	struct pf_listen_fd *listen_fds;
 };
 
 static void lsasd_next_client(void *pvt);
@@ -307,7 +302,7 @@ static int lsasd_children_main(struct tevent_context *ev_ctx,
 			       struct pf_worker_data *pf,
 			       int child_id,
 			       int listen_fd_size,
-			       int *listen_fds,
+			       struct pf_listen_fd *listen_fds,
 			       void *private_data)
 {
 	struct lsasd_children_data *data;
@@ -345,7 +340,7 @@ static int lsasd_children_main(struct tevent_context *ev_ctx,
 	return ret;
 }
 
-static void lsasd_client_terminated(void *pvt)
+static void lsasd_client_terminated(struct pipes_struct *p, void *pvt)
 {
 	struct lsasd_children_data *data;
 
@@ -419,6 +414,7 @@ static void lsasd_handle_client(struct tevent_req *req)
 	rc = prefork_listen_recv(req,
 				 tmp_ctx,
 				 &sd,
+				 NULL,
 				 &srv_addr,
 				 &cli_addr);
 
@@ -449,7 +445,8 @@ static void lsasd_handle_client(struct tevent_req *req)
 				    cli_addr,
 				    srv_addr,
 				    sd,
-				    NULL);
+				    lsasd_client_terminated,
+				    data);
 	} else if (tsocket_address_is_unix(srv_addr)) {
 		const char *p;
 		const char *b;
@@ -468,12 +465,16 @@ static void lsasd_handle_client(struct tevent_req *req)
 		}
 
 		if (strstr(p, "/np/")) {
-			named_pipe_accept_function(data->ev_ctx,
-						   data->msg_ctx,
-						   b,
-						   sd,
-						   lsasd_client_terminated,
-						   data);
+			dcerpc_ncacn_accept(data->ev_ctx,
+					    data->msg_ctx,
+					    NCACN_NP,
+					    b,
+					    NULL,  /* remote client address */
+					    NULL,  /* local server address */
+					    sd,
+					    lsasd_client_terminated,
+					    data);
+
 		} else {
 			dcerpc_ncacn_accept(data->ev_ctx,
 					    data->msg_ctx,
@@ -482,7 +483,8 @@ static void lsasd_handle_client(struct tevent_req *req)
 					    cli_addr,
 					    srv_addr,
 					    sd,
-					    NULL);
+					    lsasd_client_terminated,
+					    data);
 		}
 	} else {
 		DEBUG(0, ("ERROR: Unsupported socket!\n"));
@@ -587,7 +589,7 @@ static void lsasd_check_children(struct tevent_context *ev_ctx,
 
 static bool lsasd_create_sockets(struct tevent_context *ev_ctx,
 				 struct messaging_context *msg_ctx,
-				 int *listen_fd,
+				 struct pf_listen_fd *listen_fd,
 				 int *listen_fd_size)
 {
 	struct dcerpc_binding_vector *v, *v_orig;
@@ -609,18 +611,18 @@ static bool lsasd_create_sockets(struct tevent_context *ev_ctx,
 	}
 
 	/* Create only one tcpip listener for all services */
-	status = rpc_create_tcpip_sockets(&ndr_table_lsarpc,
-					  v_orig,
-					  0,
-					  listen_fd,
-					  listen_fd_size);
+	status = dcesrv_create_ncacn_ip_tcp_sockets(&ndr_table_lsarpc,
+						    v_orig,
+						    0,
+						    listen_fd,
+						    listen_fd_size);
 	if (!NT_STATUS_IS_OK(status)) {
 		goto done;
 	}
 
 	/* Start to listen on tcpip sockets */
 	for (i = 0; i < *listen_fd_size; i++) {
-		rc = listen(listen_fd[i], pf_lsasd_cfg.max_allowed_clients);
+		rc = listen(listen_fd[i].fd, pf_lsasd_cfg.max_allowed_clients);
 		if (rc == -1) {
 			DEBUG(0, ("Failed to listen on tcpip socket - %s\n",
 				  strerror(errno)));
@@ -629,8 +631,8 @@ static bool lsasd_create_sockets(struct tevent_context *ev_ctx,
 	}
 
 	/* LSARPC */
-	fd = create_named_pipe_socket("lsarpc");
-	if (fd < 0) {
+	status = dcesrv_create_ncacn_np_socket("lsarpc", &fd);
+	if (!NT_STATUS_IS_OK(status)) {
 		goto done;
 	}
 
@@ -640,11 +642,13 @@ static bool lsasd_create_sockets(struct tevent_context *ev_ctx,
 			  strerror(errno)));
 		goto done;
 	}
-	listen_fd[*listen_fd_size] = fd;
+	listen_fd[*listen_fd_size].fd = fd;
+	listen_fd[*listen_fd_size].fd_data = NULL;
 	(*listen_fd_size)++;
+	fd = -1;
 
-	fd = create_named_pipe_socket("lsass");
-	if (fd < 0) {
+	status = dcesrv_create_ncacn_np_socket("lsass", &fd);
+	if (!NT_STATUS_IS_OK(status)) {
 		goto done;
 	}
 
@@ -654,11 +658,13 @@ static bool lsasd_create_sockets(struct tevent_context *ev_ctx,
 			  strerror(errno)));
 		goto done;
 	}
-	listen_fd[*listen_fd_size] = fd;
+	listen_fd[*listen_fd_size].fd = fd;
+	listen_fd[*listen_fd_size].fd_data = NULL;
 	(*listen_fd_size)++;
+	fd = -1;
 
-	fd = create_dcerpc_ncalrpc_socket("lsarpc");
-	if (fd < 0) {
+	status = dcesrv_create_ncalrpc_socket("lsarpc", &fd);
+	if (!NT_STATUS_IS_OK(status)) {
 		goto done;
 	}
 
@@ -668,7 +674,8 @@ static bool lsasd_create_sockets(struct tevent_context *ev_ctx,
 			  strerror(errno)));
 		goto done;
 	}
-	listen_fd[*listen_fd_size] = fd;
+	listen_fd[*listen_fd_size].fd = fd;
+	listen_fd[*listen_fd_size].fd_data = NULL;
 	(*listen_fd_size)++;
 	fd = -1;
 
@@ -698,8 +705,8 @@ static bool lsasd_create_sockets(struct tevent_context *ev_ctx,
 	}
 
 	/* SAMR */
-	fd = create_named_pipe_socket("samr");
-	if (fd < 0) {
+	status = dcesrv_create_ncacn_np_socket("samr", &fd);
+	if (!NT_STATUS_IS_OK(status)) {
 		goto done;
 	}
 
@@ -709,11 +716,13 @@ static bool lsasd_create_sockets(struct tevent_context *ev_ctx,
 			  strerror(errno)));
 		goto done;
 	}
-	listen_fd[*listen_fd_size] = fd;
+	listen_fd[*listen_fd_size].fd = fd;
+	listen_fd[*listen_fd_size].fd_data = NULL;
 	(*listen_fd_size)++;
+	fd = -1;
 
-	fd = create_dcerpc_ncalrpc_socket("samr");
-	if (fd < 0) {
+	status = dcesrv_create_ncalrpc_socket("samr", &fd);
+	if (!NT_STATUS_IS_OK(status)) {
 		goto done;
 	}
 
@@ -723,7 +732,8 @@ static bool lsasd_create_sockets(struct tevent_context *ev_ctx,
 			  strerror(errno)));
 		goto done;
 	}
-	listen_fd[*listen_fd_size] = fd;
+	listen_fd[*listen_fd_size].fd = fd;
+	listen_fd[*listen_fd_size].fd_data = NULL;
 	(*listen_fd_size)++;
 	fd = -1;
 
@@ -753,8 +763,8 @@ static bool lsasd_create_sockets(struct tevent_context *ev_ctx,
 	}
 
 	/* NETLOGON */
-	fd = create_named_pipe_socket("netlogon");
-	if (fd < 0) {
+	status = dcesrv_create_ncacn_np_socket("netlogon", &fd);
+	if (!NT_STATUS_IS_OK(status)) {
 		goto done;
 	}
 
@@ -764,11 +774,13 @@ static bool lsasd_create_sockets(struct tevent_context *ev_ctx,
 			  strerror(errno)));
 		goto done;
 	}
-	listen_fd[*listen_fd_size] = fd;
+	listen_fd[*listen_fd_size].fd = fd;
+	listen_fd[*listen_fd_size].fd_data = NULL;
 	(*listen_fd_size)++;
+	fd = -1;
 
-	fd = create_dcerpc_ncalrpc_socket("netlogon");
-	if (fd < 0) {
+	status = dcesrv_create_ncalrpc_socket("netlogon", &fd);
+	if (!NT_STATUS_IS_OK(status)) {
 		goto done;
 	}
 
@@ -778,7 +790,8 @@ static bool lsasd_create_sockets(struct tevent_context *ev_ctx,
 			  strerror(errno)));
 		goto done;
 	}
-	listen_fd[*listen_fd_size] = fd;
+	listen_fd[*listen_fd_size].fd = fd;
+	listen_fd[*listen_fd_size].fd_data = NULL;
 	(*listen_fd_size)++;
 	fd = -1;
 
@@ -820,7 +833,7 @@ void start_lsasd(struct tevent_context *ev_ctx,
 		 struct messaging_context *msg_ctx)
 {
 	NTSTATUS status;
-	int listen_fd[LSASD_MAX_SOCKETS];
+	struct pf_listen_fd listen_fd[LSASD_MAX_SOCKETS];
 	int listen_fd_size = 0;
 	pid_t pid;
 	int rc;

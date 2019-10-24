@@ -41,14 +41,6 @@ for y in (Build.BuildContext, Build.CleanContext, Build.InstallContext, Build.Un
     class tmp(y):
         variant = 'default'
 
-def pre_build(self):
-    self.cwdx = self.bldnode.parent
-    self.cwd = self.cwdx.abspath()
-    self.bdir = self.bldnode.abspath()
-    return Build.BuildContext.old_pre_build(self)
-Build.BuildContext.old_pre_build = Build.BuildContext.pre_build
-Build.BuildContext.pre_build = pre_build
-
 def abspath(self, env=None):
     if env and hasattr(self, 'children'):
         return self.get_bld().abspath()
@@ -133,23 +125,6 @@ def undefine(self, key, from_env=True, comment=None):
     if from_env:
         self.env[key] = ()
 
-def install_dir(self, path):
-        if not path:
-                return []
-
-        destpath = Utils.subst_vars(path, self.env)
-
-        if self.is_install > 0:
-                Logs.info('* creating %s', destpath)
-                Utils.check_dir(destpath)
-        elif self.is_install < 0:
-                Logs.info('* removing %s', destpath)
-                try:
-                        os.remove(destpath)
-                except OSError:
-                        pass
-Build.BuildContext.install_dir = install_dir
-
 class ConfigurationContext(Configure.ConfigurationContext):
     def init_dirs(self):
         self.setenv('default')
@@ -157,7 +132,9 @@ class ConfigurationContext(Configure.ConfigurationContext):
         return super(ConfigurationContext, self).init_dirs()
 
 def find_program_samba(self, *k, **kw):
-    kw['mandatory'] = False
+    # Override the waf default set in the @conf decorator in Configure.py
+    if 'mandatory' not in kw:
+        kw['mandatory'] = False
     ret = self.find_program_old(*k, **kw)
     return ret
 Configure.ConfigurationContext.find_program_old = Configure.ConfigurationContext.find_program

@@ -331,13 +331,21 @@ int lp_int(const char *s)
  */
 unsigned long lp_ulong(const char *s)
 {
+	int error = 0;
+	unsigned long int ret;
 
 	if (!s || !*s) {
-		DEBUG(0,("lp_ulong(%s): is called with NULL!\n",s));
+		DBG_DEBUG("lp_ulong(%s): is called with NULL!\n",s);
 		return -1;
 	}
 
-	return strtoul(s, NULL, 0);
+	ret = smb_strtoul(s, NULL, 0, &error, SMB_STR_STANDARD);
+	if (error != 0) {
+		DBG_DEBUG("lp_ulong(%s): conversion failed\n",s);
+		return -1;
+	}
+
+	return ret;
 }
 
 /**
@@ -345,13 +353,21 @@ unsigned long lp_ulong(const char *s)
  */
 unsigned long long lp_ulonglong(const char *s)
 {
+	int error = 0;
+	unsigned long long int ret;
 
 	if (!s || !*s) {
-		DEBUG(0, ("lp_ulonglong(%s): is called with NULL!\n", s));
+		DBG_DEBUG("lp_ulonglong(%s): is called with NULL!\n", s);
 		return -1;
 	}
 
-	return strtoull(s, NULL, 0);
+	ret = smb_strtoull(s, NULL, 0, &error, SMB_STR_STANDARD);
+	if (error != 0) {
+		DBG_DEBUG("lp_ulonglong(%s): conversion failed\n",s);
+		return -1;
+	}
+
+	return ret;
 }
 
 /**
@@ -1429,7 +1445,7 @@ bool handle_smb_ports(struct loadparm_context *lp_ctx, struct loadparm_service *
 		}
 	}
 
-	if(!set_variable_helper(lp_ctx->globals->ctx, parm_num, ptr, "smb ports",
+	if (!set_variable_helper(lp_ctx->globals->ctx, parm_num, ptr, "smb ports",
 			       	pszParmValue)) {
 		return false;
 	}
@@ -1458,8 +1474,16 @@ bool handle_rpc_server_dynamic_port_range(struct loadparm_context *lp_ctx,
 					  const char *pszParmValue,
 					  char **ptr)
 {
+	static int parm_num = -1;
 	int low_port = -1, high_port = -1;
 	int rc;
+
+	if (parm_num == -1) {
+		parm_num = lpcfg_map_parameter("rpc server dynamic port range");
+		if (parm_num == -1) {
+			return false;
+		}
+	}
 
 	if (pszParmValue == NULL || pszParmValue[0] == '\0') {
 		return false;
@@ -1475,6 +1499,12 @@ bool handle_rpc_server_dynamic_port_range(struct loadparm_context *lp_ctx,
 	}
 
 	if (low_port < SERVER_TCP_PORT_MIN|| high_port > SERVER_TCP_PORT_MAX) {
+		return false;
+	}
+
+	if (!set_variable_helper(lp_ctx->globals->ctx, parm_num, ptr,
+				 "rpc server dynamic port range",
+				 pszParmValue)) {
 		return false;
 	}
 
@@ -2145,15 +2175,14 @@ static bool do_section(const char *pszSectionName, void *userdata)
 	isglobal = ((strwicmp(pszSectionName, GLOBAL_NAME) == 0) ||
 			 (strwicmp(pszSectionName, GLOBAL_NAME2) == 0));
 
-	bRetval = false;
-
 	/* if we've just struck a global section, note the fact. */
 	lp_ctx->bInGlobalSection = isglobal;
 
 	/* check for multiple global sections */
 	if (lp_ctx->bInGlobalSection) {
 		DEBUG(4, ("Processing section \"[%s]\"\n", pszSectionName));
-		return true;
+		bRetval = true;
+		goto out;
 	}
 
 	/* if we have a current service, tidy it up before moving on */
@@ -2172,10 +2201,11 @@ static bool do_section(const char *pszSectionName, void *userdata)
 								   pszSectionName))
 		    == NULL) {
 			DEBUG(0, ("Failed to add a new service\n"));
-			return false;
+			bRetval = false;
+			goto out;
 		}
 	}
-
+out:
 	return bRetval;
 }
 
@@ -2592,6 +2622,8 @@ struct loadparm_context *loadparm_init(TALLOC_CTX *mem_ctx)
 	lp_ctx->sDefault->force_directory_mode = 0000;
 	lp_ctx->sDefault->aio_read_size = 1;
 	lp_ctx->sDefault->aio_write_size = 1;
+	lp_ctx->sDefault->smbd_search_ask_sharemode = true;
+	lp_ctx->sDefault->smbd_getinfo_ask_sharemode = true;
 
 	DEBUG(3, ("Initialising global parameters\n"));
 
@@ -2693,9 +2725,9 @@ struct loadparm_context *loadparm_init(TALLOC_CTX *mem_ctx)
 	lpcfg_do_global_parameter(lp_ctx, "host msdfs", "true");
 
 	lpcfg_do_global_parameter(lp_ctx, "LargeReadwrite", "True");
-	lpcfg_do_global_parameter(lp_ctx, "server min protocol", "LANMAN1");
+	lpcfg_do_global_parameter(lp_ctx, "server min protocol", "SMB2_02");
 	lpcfg_do_global_parameter(lp_ctx, "server max protocol", "SMB3");
-	lpcfg_do_global_parameter(lp_ctx, "client min protocol", "CORE");
+	lpcfg_do_global_parameter(lp_ctx, "client min protocol", "SMB2_02");
 	lpcfg_do_global_parameter(lp_ctx, "client max protocol", "default");
 	lpcfg_do_global_parameter(lp_ctx, "client ipc min protocol", "default");
 	lpcfg_do_global_parameter(lp_ctx, "client ipc max protocol", "default");
@@ -2759,7 +2791,6 @@ struct loadparm_context *loadparm_init(TALLOC_CTX *mem_ctx)
 	lpcfg_do_global_parameter(lp_ctx, "cldap port", "389");
 	lpcfg_do_global_parameter(lp_ctx, "krb5 port", "88");
 	lpcfg_do_global_parameter(lp_ctx, "kpasswd port", "464");
-	lpcfg_do_global_parameter(lp_ctx, "web port", "901");
 
 	lpcfg_do_global_parameter(lp_ctx, "nt status support", "True");
 
@@ -2772,9 +2803,7 @@ struct loadparm_context *loadparm_init(TALLOC_CTX *mem_ctx)
 	lpcfg_do_global_parameter(lp_ctx, "tls certfile", "tls/cert.pem");
 	lpcfg_do_global_parameter(lp_ctx, "tls cafile", "tls/ca.pem");
 	lpcfg_do_global_parameter(lp_ctx, "tls priority", "NORMAL:-VERS-SSL3.0");
-	lpcfg_do_global_parameter(lp_ctx, "prefork children:smb", "4");
 
-	lpcfg_do_global_parameter(lp_ctx, "rndc command", "/usr/sbin/rndc");
 	lpcfg_do_global_parameter(lp_ctx, "nsupdate command", "/usr/bin/nsupdate -g");
 
         lpcfg_do_global_parameter(lp_ctx, "allow dns updates", "secure only");
@@ -2817,11 +2846,13 @@ struct loadparm_context *loadparm_init(TALLOC_CTX *mem_ctx)
 
 	lpcfg_do_global_parameter(lp_ctx, "passdb backend", "tdbsam");
 
+	lpcfg_do_global_parameter(lp_ctx, "deadtime", "10080");
+
 	lpcfg_do_global_parameter(lp_ctx, "getwd cache", "True");
 
 	lpcfg_do_global_parameter(lp_ctx, "winbind nested groups", "True");
 
-	lpcfg_do_global_parameter(lp_ctx, "mangled names", "True");
+	lpcfg_do_global_parameter(lp_ctx, "mangled names", "illegal");
 
 	lpcfg_do_global_parameter_var(lp_ctx, "smb2 max credits", "%u", DEFAULT_SMB2_MAX_CREDITS);
 
@@ -2870,8 +2901,6 @@ struct loadparm_context *loadparm_init(TALLOC_CTX *mem_ctx)
 	lpcfg_do_global_parameter(lp_ctx, "level2 oplocks", "yes");
 
 	lpcfg_do_global_parameter(lp_ctx, "show add printer wizard", "yes");
-
-	lpcfg_do_global_parameter(lp_ctx, "allocation roundup size", "1048576");
 
 	lpcfg_do_global_parameter(lp_ctx, "ldap page size", "1000");
 
@@ -2929,7 +2958,7 @@ struct loadparm_context *loadparm_init(TALLOC_CTX *mem_ctx)
 
 	lpcfg_do_global_parameter(lp_ctx, "durable handles", "yes");
 
-	lpcfg_do_global_parameter(lp_ctx, "max stat cache size", "256");
+	lpcfg_do_global_parameter(lp_ctx, "max stat cache size", "512");
 
 	lpcfg_do_global_parameter(lp_ctx, "ldap passwd sync", "no");
 
@@ -2997,13 +3026,19 @@ struct loadparm_context *loadparm_init(TALLOC_CTX *mem_ctx)
 				  "rpc server dynamic port range",
 				  "49152-65535");
 
-	lpcfg_do_global_parameter(lp_ctx, "prefork children", "1");
+	lpcfg_do_global_parameter(lp_ctx, "prefork children", "4");
+	lpcfg_do_global_parameter(lp_ctx, "prefork backoff increment", "10");
+	lpcfg_do_global_parameter(lp_ctx, "prefork maximum backoff", "120");
 
 	lpcfg_do_global_parameter(lp_ctx, "check parent directory delete on close", "no");
 
 	lpcfg_do_global_parameter(lp_ctx, "ea support", "yes");
 
 	lpcfg_do_global_parameter(lp_ctx, "store dos attributes", "yes");
+
+	lpcfg_do_global_parameter(lp_ctx, "debug encryption", "no");
+
+	lpcfg_do_global_parameter(lp_ctx, "spotlight backend", "noindex");
 
 	for (i = 0; parm_table[i].label; i++) {
 		if (!(lp_ctx->flags[i] & FLAG_CMDLINE)) {
@@ -3300,7 +3335,7 @@ struct loadparm_service *lpcfg_service(struct loadparm_context *lp_ctx,
 
 const char *lpcfg_servicename(const struct loadparm_service *service)
 {
-	return lpcfg_string((const char *)service->szService);
+	return service ? lpcfg_string((const char *)service->szService) : NULL;
 }
 
 /**

@@ -26,6 +26,7 @@ from socket import inet_ntop
 from socket import AF_INET
 from socket import AF_INET6
 import shlex
+import struct
 
 from samba import remove_dc
 from samba.samdb import SamDB
@@ -153,10 +154,10 @@ def dns_addr_array_string(array):
         return ret
     for i in range(array.AddrCount):
         if array.AddrArray[i].MaxSa[0] == 0x02:
-            x = "".join([chr(b) for b in array.AddrArray[i].MaxSa])[4:8]
+            x = struct.pack('4B', *array.AddrArray[i].MaxSa[4:8])
             addr = inet_ntop(AF_INET, x)
         elif array.AddrArray[i].MaxSa[0] == 0x17:
-            x = "".join([chr(b) for b in array.AddrArray[i].MaxSa])[8:24]
+            x = struct.pack('16B', *array.AddrArray[i].MaxSa[8:24])
             addr = inet_ntop(AF_INET6, x)
         else:
             addr = 'UNKNOWN'
@@ -780,7 +781,7 @@ class cmd_zonedelete(Command):
                                             None)
         except WERRORError as e:
             if e.args[0] == werror.WERR_DNS_ERROR_ZONE_DOES_NOT_EXIST:
-                self.outf.write('Zone does not exist and so could not be deleted.')
+                raise CommandError('Zone does not exist and so could not be deleted.')
             raise e
 
         self.outf.write('Zone %s deleted successfully\n' % zone)
@@ -860,7 +861,7 @@ class cmd_query(Command):
                 None, record_type, select_flags, None, None)
         except WERRORError as e:
             if e.args[0] == werror.WERR_DNS_ERROR_NAME_DOES_NOT_EXIST:
-                self.outf.write('Record or zone does not exist.')
+                raise CommandError('Record or zone does not exist.')
             raise e
 
         print_dnsrecords(self.outf, res)
@@ -940,7 +941,7 @@ class cmd_add_record(Command):
                                          0, server, zone, name, add_rec_buf, None)
         except WERRORError as e:
             if e.args[0] == werror.WERR_DNS_ERROR_NAME_DOES_NOT_EXIST:
-                self.outf.write('Zone does not exist; record could not be added.\n')
+                raise CommandError('Zone does not exist; record could not be added.')
             raise e
 
         self.outf.write('Record added successfully\n')
@@ -1011,7 +1012,7 @@ class cmd_update_record(Command):
                                          del_rec_buf)
         except WERRORError as e:
             if e.args[0] == werror.WERR_DNS_ERROR_NAME_DOES_NOT_EXIST:
-                self.outf.write('Zone does not exist; record could not be updated.\n')
+                raise CommandError('Zone does not exist; record could not be updated.')
             raise e
 
         self.outf.write('Record updated successfully\n')
@@ -1066,7 +1067,7 @@ class cmd_delete_record(Command):
                                          del_rec_buf)
         except WERRORError as e:
             if e.args[0] == werror.WERR_DNS_ERROR_NAME_DOES_NOT_EXIST:
-                self.outf.write('Zone does not exist; record could not be deleted.\n')
+                raise CommandError('Zone does not exist; record could not be deleted.')
             raise e
 
         self.outf.write('Record deleted successfully\n')
@@ -1104,13 +1105,7 @@ class cmd_cleanup_record(Command):
         lp = sambaopts.get_loadparm()
         creds = credopts.get_credentials(lp)
 
-        logger = self.get_logger()
-        if verbose:
-            logger.setLevel(logging.DEBUG)
-        elif quiet:
-            logger.setLevel(logging.WARNING)
-        else:
-            logger.setLevel(logging.INFO)
+        logger = self.get_logger(verbose=verbose, quiet=quiet)
 
         samdb = SamDB(url="ldap://%s" % server,
                       session_info=system_session(),

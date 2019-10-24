@@ -34,6 +34,8 @@
    decode */
 void dcerpc_set_frag_length(DATA_BLOB *blob, uint16_t v)
 {
+	SMB_ASSERT(blob->length >= DCERPC_NCACN_PAYLOAD_OFFSET);
+
 	if (CVAL(blob->data,DCERPC_DREP_OFFSET) & DCERPC_DREP_LE) {
 		SSVAL(blob->data, DCERPC_FRAG_LEN_OFFSET, v);
 	} else {
@@ -43,6 +45,8 @@ void dcerpc_set_frag_length(DATA_BLOB *blob, uint16_t v)
 
 uint16_t dcerpc_get_frag_length(const DATA_BLOB *blob)
 {
+	SMB_ASSERT(blob->length >= DCERPC_NCACN_PAYLOAD_OFFSET);
+
 	if (CVAL(blob->data,DCERPC_DREP_OFFSET) & DCERPC_DREP_LE) {
 		return SVAL(blob->data, DCERPC_FRAG_LEN_OFFSET);
 	} else {
@@ -52,6 +56,8 @@ uint16_t dcerpc_get_frag_length(const DATA_BLOB *blob)
 
 void dcerpc_set_auth_length(DATA_BLOB *blob, uint16_t v)
 {
+	SMB_ASSERT(blob->length >= DCERPC_NCACN_PAYLOAD_OFFSET);
+
 	if (CVAL(blob->data,DCERPC_DREP_OFFSET) & DCERPC_DREP_LE) {
 		SSVAL(blob->data, DCERPC_AUTH_LEN_OFFSET, v);
 	} else {
@@ -59,9 +65,109 @@ void dcerpc_set_auth_length(DATA_BLOB *blob, uint16_t v)
 	}
 }
 
+uint16_t dcerpc_get_auth_length(const DATA_BLOB *blob)
+{
+	SMB_ASSERT(blob->length >= DCERPC_NCACN_PAYLOAD_OFFSET);
+
+	if (CVAL(blob->data,DCERPC_DREP_OFFSET) & DCERPC_DREP_LE) {
+		return SVAL(blob->data, DCERPC_AUTH_LEN_OFFSET);
+	} else {
+		return RSVAL(blob->data, DCERPC_AUTH_LEN_OFFSET);
+	}
+}
+
 uint8_t dcerpc_get_endian_flag(DATA_BLOB *blob)
 {
+	SMB_ASSERT(blob->length >= DCERPC_NCACN_PAYLOAD_OFFSET);
+
 	return blob->data[DCERPC_DREP_OFFSET];
+}
+
+static uint16_t dcerpc_get_auth_context_offset(const DATA_BLOB *blob)
+{
+	uint16_t frag_len = dcerpc_get_frag_length(blob);
+	uint16_t auth_len = dcerpc_get_auth_length(blob);
+	uint16_t min_offset;
+	uint16_t offset;
+
+	if (auth_len == 0) {
+		return 0;
+	}
+
+	if (frag_len > blob->length) {
+		return 0;
+	}
+
+	if (auth_len > frag_len) {
+		return 0;
+	}
+
+	min_offset = DCERPC_NCACN_PAYLOAD_OFFSET + DCERPC_AUTH_TRAILER_LENGTH;
+	offset = frag_len - auth_len;
+	if (offset < min_offset) {
+		return 0;
+	}
+	offset -= DCERPC_AUTH_TRAILER_LENGTH;
+
+	return offset;
+}
+
+uint8_t dcerpc_get_auth_type(const DATA_BLOB *blob)
+{
+	uint16_t offset;
+
+	offset = dcerpc_get_auth_context_offset(blob);
+	if (offset == 0) {
+		return 0;
+	}
+
+	/*
+	 * auth_typw is in the 1st byte
+	 * of the auth trailer
+	 */
+	offset += 0;
+
+	return blob->data[offset];
+}
+
+uint8_t dcerpc_get_auth_level(const DATA_BLOB *blob)
+{
+	uint16_t offset;
+
+	offset = dcerpc_get_auth_context_offset(blob);
+	if (offset == 0) {
+		return 0;
+	}
+
+	/*
+	 * auth_level is in 2nd byte
+	 * of the auth trailer
+	 */
+	offset += 1;
+
+	return blob->data[offset];
+}
+
+uint32_t dcerpc_get_auth_context_id(const DATA_BLOB *blob)
+{
+	uint16_t offset;
+
+	offset = dcerpc_get_auth_context_offset(blob);
+	if (offset == 0) {
+		return 0;
+	}
+
+	/*
+	 * auth_context_id is in the last 4 byte
+	 * of the auth trailer
+	 */
+	offset += 4;
+
+	if (CVAL(blob->data,DCERPC_DREP_OFFSET) & DCERPC_DREP_LE) {
+		return IVAL(blob->data, offset);
+	} else {
+		return RIVAL(blob->data, offset);
+	}
 }
 
 /**
@@ -1233,4 +1339,105 @@ struct ndr_syntax_id dcerpc_construct_bind_time_features(uint64_t features)
 	s.uuid.node[5]      = values[7];
 
 	return s;
+}
+
+NTSTATUS dcerpc_generic_session_key(DATA_BLOB *session_key)
+{
+	*session_key = data_blob_null;
+
+	/* this took quite a few CPU cycles to find ... */
+	session_key->data = discard_const_p(unsigned char, "SystemLibraryDTC");
+	session_key->length = 16;
+	return NT_STATUS_OK;
+}
+
+/*
+   push a ncacn_packet into a blob, potentially with auth info
+*/
+NTSTATUS dcerpc_ncacn_push_auth(DATA_BLOB *blob,
+				TALLOC_CTX *mem_ctx,
+				struct ncacn_packet *pkt,
+				struct dcerpc_auth *auth_info)
+{
+	struct ndr_push *ndr;
+	enum ndr_err_code ndr_err;
+
+	ndr = ndr_push_init_ctx(mem_ctx);
+	if (!ndr) {
+		return NT_STATUS_NO_MEMORY;
+	}
+
+	if (auth_info) {
+		pkt->auth_length = auth_info->credentials.length;
+	} else {
+		pkt->auth_length = 0;
+	}
+
+	ndr_err = ndr_push_ncacn_packet(ndr, NDR_SCALARS|NDR_BUFFERS, pkt);
+	if (!NDR_ERR_CODE_IS_SUCCESS(ndr_err)) {
+		return ndr_map_error2ntstatus(ndr_err);
+	}
+
+	if (auth_info) {
+#if 0
+		/* the s3 rpc server doesn't handle auth padding in
+		   bind requests. Use zero auth padding to keep us
+		   working with old servers */
+		uint32_t offset = ndr->offset;
+		ndr_err = ndr_push_align(ndr, 16);
+		if (!NDR_ERR_CODE_IS_SUCCESS(ndr_err)) {
+			return ndr_map_error2ntstatus(ndr_err);
+		}
+		auth_info->auth_pad_length = ndr->offset - offset;
+#else
+		auth_info->auth_pad_length = 0;
+#endif
+		ndr_err = ndr_push_dcerpc_auth(ndr, NDR_SCALARS|NDR_BUFFERS, auth_info);
+		if (!NDR_ERR_CODE_IS_SUCCESS(ndr_err)) {
+			return ndr_map_error2ntstatus(ndr_err);
+		}
+	}
+
+	*blob = ndr_push_blob(ndr);
+
+	/* fill in the frag length */
+	dcerpc_set_frag_length(blob, blob->length);
+
+	return NT_STATUS_OK;
+}
+
+/*
+  log a rpc packet in a format suitable for ndrdump. This is especially useful
+  for sealed packets, where ethereal cannot easily see the contents
+
+  this triggers on a debug level of >= 10
+*/
+void dcerpc_log_packet(const char *lockdir,
+		       const struct ndr_interface_table *ndr,
+		       uint32_t opnum, uint32_t flags,
+		       const DATA_BLOB *pkt)
+{
+	const int num_examples = 20;
+	int i;
+
+	if (lockdir == NULL) return;
+
+	for (i=0;i<num_examples;i++) {
+		char *name=NULL;
+		int ret;
+		ret = asprintf(&name, "%s/rpclog/%s-%u.%d.%s",
+			       lockdir, ndr->name, opnum, i,
+			       (flags&NDR_IN)?"in":"out");
+		if (ret == -1) {
+			return;
+		}
+		if (!file_exist(name)) {
+			if (file_save(name, pkt->data, pkt->length)) {
+				DEBUG(10,("Logged rpc packet to %s\n", name));
+			}
+			free(name);
+			break;
+		}
+		free(name);
+	}
 }

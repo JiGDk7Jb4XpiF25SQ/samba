@@ -120,7 +120,7 @@ subsystem. Each operation could perform in a following ways:
   this mode;</para></listitem>
   <listitem><para><emphasis>splitter</emphasis>, a way when some file system
   activity is done in addition to the transparently calling previous
-  implentation. This usually involves mangling the result of that call
+  implementation. This usually involves mangling the result of that call
   before returning it back to the caller. This mode is selected by
   <literal>SMB_VFS_LAYER_SPLITTER</literal> constant;</para></listitem>
   <listitem><para><emphasis>logger</emphasis> does not change anything or
@@ -311,7 +311,7 @@ typedef enum _vfs_op_layer {
 
 <para>
 As each Samba module a VFS module should have a
-<programlisting>NTSTATUS vfs_example_init(void);</programlisting> function if it's staticly linked to samba or
+<programlisting>NTSTATUS vfs_example_init(void);</programlisting> function if it's statically linked to samba or
 <programlisting>NTSTATUS init_module(void);</programlisting> function if it's a shared module.
 </para>
 
@@ -371,7 +371,7 @@ typedef struct _vfs_op_tuple {
 </varlistentry>
 
 <varlistentry><term>layer</term>
-<listitem><para>the vfs_op_layer in whitch the function operates.</para></listitem>
+<listitem><para>the vfs_op_layer in which the function operates.</para></listitem>
 </varlistentry>
 
 </variablelist>

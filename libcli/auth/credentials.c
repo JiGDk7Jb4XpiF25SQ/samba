@@ -22,22 +22,25 @@
 
 #include "includes.h"
 #include "system/time.h"
-#include "../lib/crypto/crypto.h"
 #include "libcli/auth/libcli_auth.h"
 #include "../libcli/security/dom_sid.h"
+
+#ifndef HAVE_GNUTLS_AES_CFB8
+#include "lib/crypto/aes.h"
+#endif
+
+#include "lib/crypto/gnutls_helpers.h"
+#include <gnutls/gnutls.h>
+#include <gnutls/crypto.h>
 
 static void netlogon_creds_step_crypt(struct netlogon_creds_CredentialState *creds,
 				      const struct netr_Credential *in,
 				      struct netr_Credential *out)
 {
 	if (creds->negotiate_flags & NETLOGON_NEG_SUPPORTS_AES) {
-		AES_KEY key;
-		uint8_t iv[AES_BLOCK_SIZE];
+		memcpy(out->data, in->data, sizeof(out->data));
 
-		AES_set_encrypt_key(creds->session_key, 128, &key);
-		ZERO_STRUCT(iv);
-
-		aes_cfb8_encrypt(in->data, out->data, 8, &key, iv, AES_ENCRYPT);
+		netlogon_creds_aes_encrypt(creds, out->data, sizeof(out->data));
 	} else {
 		des_crypt112(out->data, in->data, creds->session_key, 1);
 	}
@@ -62,7 +65,7 @@ static void netlogon_creds_init_64bit(struct netlogon_creds_CredentialState *cre
 	SIVAL(sum2,0,sum[0]);
 	SIVAL(sum2,4,sum[1]);
 
-	ZERO_STRUCT(creds->session_key);
+	ZERO_ARRAY(creds->session_key);
 
 	des_crypt128(creds->session_key, sum2, machine_password->hash);
 }
@@ -72,27 +75,55 @@ static void netlogon_creds_init_64bit(struct netlogon_creds_CredentialState *cre
 
   this call is made after the netr_ServerReqChallenge call
 */
-static void netlogon_creds_init_128bit(struct netlogon_creds_CredentialState *creds,
+static NTSTATUS netlogon_creds_init_128bit(struct netlogon_creds_CredentialState *creds,
 				       const struct netr_Credential *client_challenge,
 				       const struct netr_Credential *server_challenge,
 				       const struct samr_Password *machine_password)
 {
-	unsigned char zero[4], tmp[16];
-	HMACMD5Context ctx;
-	MD5_CTX md5;
+	uint8_t zero[4] = {0};
+	uint8_t tmp[gnutls_hash_get_len(GNUTLS_MAC_MD5)];
+	gnutls_hash_hd_t hash_hnd = NULL;
+	int rc;
 
-	ZERO_STRUCT(creds->session_key);
+	ZERO_ARRAY(creds->session_key);
 
-	memset(zero, 0, sizeof(zero));
+	rc = gnutls_hash_init(&hash_hnd, GNUTLS_DIG_MD5);
+	if (rc < 0) {
+		return gnutls_error_to_ntstatus(rc, NT_STATUS_HASH_NOT_SUPPORTED);
+	}
 
-	hmac_md5_init_rfc2104(machine_password->hash, sizeof(machine_password->hash), &ctx);
-	MD5Init(&md5);
-	MD5Update(&md5, zero, sizeof(zero));
-	MD5Update(&md5, client_challenge->data, 8);
-	MD5Update(&md5, server_challenge->data, 8);
-	MD5Final(tmp, &md5);
-	hmac_md5_update(tmp, sizeof(tmp), &ctx);
-	hmac_md5_final(creds->session_key, &ctx);
+	rc = gnutls_hash(hash_hnd, zero, sizeof(zero));
+	if (rc < 0) {
+		gnutls_hash_deinit(hash_hnd, NULL);
+		return gnutls_error_to_ntstatus(rc, NT_STATUS_HASH_NOT_SUPPORTED);
+	}
+	rc = gnutls_hash(hash_hnd, client_challenge->data, 8);
+	if (rc < 0) {
+		gnutls_hash_deinit(hash_hnd, NULL);
+		return gnutls_error_to_ntstatus(rc, NT_STATUS_HASH_NOT_SUPPORTED);
+	}
+	rc = gnutls_hash(hash_hnd, server_challenge->data, 8);
+	if (rc < 0) {
+		gnutls_hash_deinit(hash_hnd, NULL);
+		return gnutls_error_to_ntstatus(rc, NT_STATUS_HASH_NOT_SUPPORTED);
+	}
+
+	gnutls_hash_deinit(hash_hnd, tmp);
+
+	/* This doesn't require HMAC MD5 RFC2104 as the hash is only 16 bytes */
+	rc = gnutls_hmac_fast(GNUTLS_MAC_MD5,
+			      machine_password->hash,
+			      sizeof(machine_password->hash),
+			      tmp,
+			      sizeof(tmp),
+			      creds->session_key);
+	ZERO_ARRAY(tmp);
+
+	if (rc < 0) {
+		return gnutls_error_to_ntstatus(rc, NT_STATUS_HASH_NOT_SUPPORTED);
+	}
+
+	return NT_STATUS_OK;
 }
 
 /*
@@ -100,27 +131,45 @@ static void netlogon_creds_init_128bit(struct netlogon_creds_CredentialState *cr
 
   this call is made after the netr_ServerReqChallenge call
 */
-static void netlogon_creds_init_hmac_sha256(struct netlogon_creds_CredentialState *creds,
-					    const struct netr_Credential *client_challenge,
-					    const struct netr_Credential *server_challenge,
-					    const struct samr_Password *machine_password)
+static NTSTATUS netlogon_creds_init_hmac_sha256(struct netlogon_creds_CredentialState *creds,
+						const struct netr_Credential *client_challenge,
+						const struct netr_Credential *server_challenge,
+						const struct samr_Password *machine_password)
 {
-	struct HMACSHA256Context ctx;
-	uint8_t digest[SHA256_DIGEST_LENGTH];
+	gnutls_hmac_hd_t hmac_hnd = NULL;
+	uint8_t digest[gnutls_hash_get_len(GNUTLS_MAC_SHA256)];
+	int rc;
 
-	ZERO_STRUCT(creds->session_key);
+	ZERO_ARRAY(creds->session_key);
 
-	hmac_sha256_init(machine_password->hash,
-			 sizeof(machine_password->hash),
-			 &ctx);
-	hmac_sha256_update(client_challenge->data, 8, &ctx);
-	hmac_sha256_update(server_challenge->data, 8, &ctx);
-	hmac_sha256_final(digest, &ctx);
+	rc = gnutls_hmac_init(&hmac_hnd,
+			      GNUTLS_MAC_SHA256,
+			      machine_password->hash,
+			      sizeof(machine_password->hash));
+	if (rc < 0) {
+		return gnutls_error_to_ntstatus(rc, NT_STATUS_HMAC_NOT_SUPPORTED);
+	}
+	rc = gnutls_hmac(hmac_hnd,
+			 client_challenge->data,
+			 8);
+	if (rc < 0) {
+		gnutls_hmac_deinit(hmac_hnd, NULL);
+		return gnutls_error_to_ntstatus(rc, NT_STATUS_HMAC_NOT_SUPPORTED);
+	}
+	rc  = gnutls_hmac(hmac_hnd,
+			  server_challenge->data,
+			  8);
+	if (rc < 0) {
+		gnutls_hmac_deinit(hmac_hnd, NULL);
+		return gnutls_error_to_ntstatus(rc, NT_STATUS_HMAC_NOT_SUPPORTED);
+	}
+	gnutls_hmac_deinit(hmac_hnd, digest);
 
 	memcpy(creds->session_key, digest, sizeof(creds->session_key));
 
-	ZERO_STRUCT(digest);
-	ZERO_STRUCT(ctx);
+	ZERO_ARRAY(digest);
+
+	return NT_STATUS_OK;
 }
 
 static void netlogon_creds_first_step(struct netlogon_creds_CredentialState *creds,
@@ -213,41 +262,135 @@ void netlogon_creds_des_decrypt(struct netlogon_creds_CredentialState *creds, st
 /*
   ARCFOUR encrypt/decrypt a password buffer using the session key
 */
-void netlogon_creds_arcfour_crypt(struct netlogon_creds_CredentialState *creds, uint8_t *data, size_t len)
+NTSTATUS netlogon_creds_arcfour_crypt(struct netlogon_creds_CredentialState *creds,
+				      uint8_t *data,
+				      size_t len)
 {
-	DATA_BLOB session_key = data_blob(creds->session_key, 16);
+	gnutls_cipher_hd_t cipher_hnd = NULL;
+	gnutls_datum_t session_key = {
+		.data = creds->session_key,
+		.size = sizeof(creds->session_key),
+	};
+	int rc;
 
-	arcfour_crypt_blob(data, len, &session_key);
+	rc = gnutls_cipher_init(&cipher_hnd,
+				GNUTLS_CIPHER_ARCFOUR_128,
+				&session_key,
+				NULL);
+	if (rc < 0) {
+		return gnutls_error_to_ntstatus(rc,
+						NT_STATUS_CRYPTO_SYSTEM_INVALID);
+	}
+	rc = gnutls_cipher_encrypt(cipher_hnd,
+				   data,
+				   len);
+	gnutls_cipher_deinit(cipher_hnd);
+	if (rc < 0) {
+		return gnutls_error_to_ntstatus(rc,
+						NT_STATUS_CRYPTO_SYSTEM_INVALID);
+	}
 
-	data_blob_free(&session_key);
+	return NT_STATUS_OK;
 }
 
 /*
   AES encrypt a password buffer using the session key
 */
-void netlogon_creds_aes_encrypt(struct netlogon_creds_CredentialState *creds, uint8_t *data, size_t len)
+NTSTATUS netlogon_creds_aes_encrypt(struct netlogon_creds_CredentialState *creds,
+				    uint8_t *data,
+				    size_t len)
 {
+#ifdef HAVE_GNUTLS_AES_CFB8
+	gnutls_cipher_hd_t cipher_hnd = NULL;
+	gnutls_datum_t key = {
+		.data = creds->session_key,
+		.size = sizeof(creds->session_key),
+	};
+	uint32_t iv_size =
+		gnutls_cipher_get_iv_size(GNUTLS_CIPHER_AES_128_CFB8);
+	uint8_t _iv[iv_size];
+	gnutls_datum_t iv = {
+		.data = _iv,
+		.size = iv_size,
+	};
+	int rc;
+
+	ZERO_ARRAY(_iv);
+
+	rc = gnutls_cipher_init(&cipher_hnd,
+				GNUTLS_CIPHER_AES_128_CFB8,
+				&key,
+				&iv);
+	if (rc < 0) {
+		return gnutls_error_to_ntstatus(rc, NT_STATUS_CRYPTO_SYSTEM_INVALID);
+	}
+
+	rc = gnutls_cipher_encrypt(cipher_hnd, data, len);
+	gnutls_cipher_deinit(cipher_hnd);
+	if (rc < 0) {
+		return gnutls_error_to_ntstatus(rc, NT_STATUS_CRYPTO_SYSTEM_INVALID);
+	}
+
+#else /* NOT HAVE_GNUTLS_AES_CFB8 */
 	AES_KEY key;
-	uint8_t iv[AES_BLOCK_SIZE];
+	uint8_t iv[AES_BLOCK_SIZE] = {0};
 
 	AES_set_encrypt_key(creds->session_key, 128, &key);
-	ZERO_STRUCT(iv);
 
 	aes_cfb8_encrypt(data, data, len, &key, iv, AES_ENCRYPT);
+#endif /* HAVE_GNUTLS_AES_CFB8 */
+
+	return NT_STATUS_OK;
 }
 
 /*
   AES decrypt a password buffer using the session key
 */
-void netlogon_creds_aes_decrypt(struct netlogon_creds_CredentialState *creds, uint8_t *data, size_t len)
+NTSTATUS netlogon_creds_aes_decrypt(struct netlogon_creds_CredentialState *creds, uint8_t *data, size_t len)
 {
+#ifdef HAVE_GNUTLS_AES_CFB8
+	gnutls_cipher_hd_t cipher_hnd = NULL;
+	gnutls_datum_t key = {
+		.data = creds->session_key,
+		.size = sizeof(creds->session_key),
+	};
+	uint32_t iv_size =
+		gnutls_cipher_get_iv_size(GNUTLS_CIPHER_AES_128_CFB8);
+	uint8_t _iv[iv_size];
+	gnutls_datum_t iv = {
+		.data = _iv,
+		.size = iv_size,
+	};
+	int rc;
+
+	ZERO_ARRAY(_iv);
+
+	rc = gnutls_cipher_init(&cipher_hnd,
+				GNUTLS_CIPHER_AES_128_CFB8,
+				&key,
+				&iv);
+	if (rc < 0) {
+		return gnutls_error_to_ntstatus(rc,
+						NT_STATUS_CRYPTO_SYSTEM_INVALID);
+	}
+
+	rc = gnutls_cipher_decrypt(cipher_hnd, data, len);
+	gnutls_cipher_deinit(cipher_hnd);
+	if (rc < 0) {
+		return gnutls_error_to_ntstatus(rc,
+						NT_STATUS_CRYPTO_SYSTEM_INVALID);
+	}
+
+#else /* NOT HAVE_GNUTLS_AES_CFB8 */
 	AES_KEY key;
-	uint8_t iv[AES_BLOCK_SIZE];
+	uint8_t iv[AES_BLOCK_SIZE] = {0};
 
 	AES_set_encrypt_key(creds->session_key, 128, &key);
-	ZERO_STRUCT(iv);
 
 	aes_cfb8_encrypt(data, data, len, &key, iv, AES_DECRYPT);
+#endif /* HAVE_GNUTLS_AES_CFB8 */
+
+	return NT_STATUS_OK;
 }
 
 /*****************************************************************
@@ -271,6 +414,7 @@ struct netlogon_creds_CredentialState *netlogon_creds_client_init(TALLOC_CTX *me
 								  uint32_t negotiate_flags)
 {
 	struct netlogon_creds_CredentialState *creds = talloc_zero(mem_ctx, struct netlogon_creds_CredentialState);
+	NTSTATUS status;
 
 	if (!creds) {
 		return NULL;
@@ -296,12 +440,23 @@ struct netlogon_creds_CredentialState *netlogon_creds_client_init(TALLOC_CTX *me
 	dump_data_pw("Machine Pass", machine_password->hash, sizeof(machine_password->hash));
 
 	if (negotiate_flags & NETLOGON_NEG_SUPPORTS_AES) {
-		netlogon_creds_init_hmac_sha256(creds,
-						client_challenge,
-						server_challenge,
-						machine_password);
+		status = netlogon_creds_init_hmac_sha256(creds,
+							 client_challenge,
+							 server_challenge,
+							 machine_password);
+		if (!NT_STATUS_IS_OK(status)) {
+			talloc_free(creds);
+			return NULL;
+		}
 	} else if (negotiate_flags & NETLOGON_NEG_STRONG_KEYS) {
-		netlogon_creds_init_128bit(creds, client_challenge, server_challenge, machine_password);
+		status = netlogon_creds_init_128bit(creds,
+						    client_challenge,
+						    server_challenge,
+						    machine_password);
+		if (!NT_STATUS_IS_OK(status)) {
+			talloc_free(creds);
+			return NULL;
+		}
 	} else {
 		netlogon_creds_init_64bit(creds, client_challenge, server_challenge, machine_password);
 	}
@@ -449,10 +604,16 @@ struct netlogon_creds_CredentialState *netlogon_creds_server_init(TALLOC_CTX *me
 	}
 
 	if (negotiate_flags & NETLOGON_NEG_SUPPORTS_AES) {
-		netlogon_creds_init_hmac_sha256(creds,
-						client_challenge,
-						server_challenge,
-						machine_password);
+		NTSTATUS status;
+
+		status = netlogon_creds_init_hmac_sha256(creds,
+							 client_challenge,
+							 server_challenge,
+							 machine_password);
+		if (!NT_STATUS_IS_OK(status)) {
+			talloc_free(creds);
+			return NULL;
+		}
 	} else if (negotiate_flags & NETLOGON_NEG_STRONG_KEYS) {
 		netlogon_creds_init_128bit(creds, client_challenge, server_challenge,
 					   machine_password);
@@ -507,15 +668,16 @@ NTSTATUS netlogon_creds_server_step_check(struct netlogon_creds_CredentialState 
 	}
 }
 
-static void netlogon_creds_crypt_samlogon_validation(struct netlogon_creds_CredentialState *creds,
-						     uint16_t validation_level,
-						     union netr_Validation *validation,
-						     bool do_encrypt)
+static NTSTATUS netlogon_creds_crypt_samlogon_validation(struct netlogon_creds_CredentialState *creds,
+							 uint16_t validation_level,
+							 union netr_Validation *validation,
+							 bool do_encrypt)
 {
 	struct netr_SamBaseInfo *base = NULL;
+	NTSTATUS status;
 
 	if (validation == NULL) {
-		return;
+		return NT_STATUS_INVALID_PARAMETER;
 	}
 
 	switch (validation_level) {
@@ -536,11 +698,11 @@ static void netlogon_creds_crypt_samlogon_validation(struct netlogon_creds_Crede
 		break;
 	default:
 		/* If we can't find it, we can't very well decrypt it */
-		return;
+		return NT_STATUS_INVALID_INFO_CLASS;
 	}
 
 	if (!base) {
-		return;
+		return NT_STATUS_INVALID_INFO_CLASS;
 	}
 
 	/* find and decyrpt the session keys, return in parameters above */
@@ -550,42 +712,57 @@ static void netlogon_creds_crypt_samlogon_validation(struct netlogon_creds_Crede
 		/* Don't crypt an all-zero key, it would give away the NETLOGON pipe session key */
 		if (!all_zero(base->key.key, sizeof(base->key.key))) {
 			if (do_encrypt) {
-				netlogon_creds_aes_encrypt(creds,
-					    base->key.key,
-					    sizeof(base->key.key));
+				status = netlogon_creds_aes_encrypt(
+					creds,
+					base->key.key,
+					sizeof(base->key.key));
 			} else {
-				netlogon_creds_aes_decrypt(creds,
-					    base->key.key,
-					    sizeof(base->key.key));
+				status = netlogon_creds_aes_decrypt(
+					creds,
+					base->key.key,
+					sizeof(base->key.key));
+			}
+			if (!NT_STATUS_IS_OK(status)) {
+				return status;
 			}
 		}
 
 		if (!all_zero(base->LMSessKey.key,
 			      sizeof(base->LMSessKey.key))) {
 			if (do_encrypt) {
-				netlogon_creds_aes_encrypt(creds,
-					    base->LMSessKey.key,
-					    sizeof(base->LMSessKey.key));
-
+				status = netlogon_creds_aes_encrypt(
+					creds,
+					base->LMSessKey.key,
+					sizeof(base->LMSessKey.key));
 			} else {
-				netlogon_creds_aes_decrypt(creds,
-					    base->LMSessKey.key,
-					    sizeof(base->LMSessKey.key));
+				status = netlogon_creds_aes_decrypt(
+					creds,
+					base->LMSessKey.key,
+					sizeof(base->LMSessKey.key));
+			}
+			if (!NT_STATUS_IS_OK(status)) {
+				return status;
 			}
 		}
 	} else if (creds->negotiate_flags & NETLOGON_NEG_ARCFOUR) {
 		/* Don't crypt an all-zero key, it would give away the NETLOGON pipe session key */
 		if (!all_zero(base->key.key, sizeof(base->key.key))) {
-			netlogon_creds_arcfour_crypt(creds,
-					    base->key.key,
-					    sizeof(base->key.key));
+			status = netlogon_creds_arcfour_crypt(creds,
+							      base->key.key,
+							      sizeof(base->key.key));
+			if (!NT_STATUS_IS_OK(status)) {
+				return status;
+			}
 		}
 
 		if (!all_zero(base->LMSessKey.key,
 			      sizeof(base->LMSessKey.key))) {
-			netlogon_creds_arcfour_crypt(creds,
-					    base->LMSessKey.key,
-					    sizeof(base->LMSessKey.key));
+			status = netlogon_creds_arcfour_crypt(creds,
+							      base->LMSessKey.key,
+							      sizeof(base->LMSessKey.key));
+			if (!NT_STATUS_IS_OK(status)) {
+				return status;
+			}
 		}
 	} else {
 		/* Don't crypt an all-zero key, it would give away the NETLOGON pipe session key */
@@ -600,31 +777,39 @@ static void netlogon_creds_crypt_samlogon_validation(struct netlogon_creds_Crede
 			}
 		}
 	}
+
+	return NT_STATUS_OK;
 }
 
-void netlogon_creds_decrypt_samlogon_validation(struct netlogon_creds_CredentialState *creds,
-						uint16_t validation_level,
-						union netr_Validation *validation)
+NTSTATUS netlogon_creds_decrypt_samlogon_validation(struct netlogon_creds_CredentialState *creds,
+						    uint16_t validation_level,
+						    union netr_Validation *validation)
 {
-	netlogon_creds_crypt_samlogon_validation(creds, validation_level,
-							validation, false);
+	return netlogon_creds_crypt_samlogon_validation(creds,
+							validation_level,
+							validation,
+							false);
 }
 
-void netlogon_creds_encrypt_samlogon_validation(struct netlogon_creds_CredentialState *creds,
-						uint16_t validation_level,
-						union netr_Validation *validation)
+NTSTATUS netlogon_creds_encrypt_samlogon_validation(struct netlogon_creds_CredentialState *creds,
+						    uint16_t validation_level,
+						    union netr_Validation *validation)
 {
-	netlogon_creds_crypt_samlogon_validation(creds, validation_level,
-							validation, true);
+	return netlogon_creds_crypt_samlogon_validation(creds,
+							validation_level,
+							validation,
+							true);
 }
 
-static void netlogon_creds_crypt_samlogon_logon(struct netlogon_creds_CredentialState *creds,
-						enum netr_LogonInfoClass level,
-						union netr_LogonLevel *logon,
-						bool do_encrypt)
+static NTSTATUS netlogon_creds_crypt_samlogon_logon(struct netlogon_creds_CredentialState *creds,
+						    enum netr_LogonInfoClass level,
+						    union netr_LogonLevel *logon,
+						    bool do_encrypt)
 {
+	NTSTATUS status;
+
 	if (logon == NULL) {
-		return;
+		return NT_STATUS_INVALID_PARAMETER;
 	}
 
 	switch (level) {
@@ -633,7 +818,7 @@ static void netlogon_creds_crypt_samlogon_logon(struct netlogon_creds_Credential
 	case NetlogonServiceInformation:
 	case NetlogonServiceTransitiveInformation:
 		if (logon->password == NULL) {
-			return;
+			return NT_STATUS_INVALID_PARAMETER;
 		}
 
 		if (creds->negotiate_flags & NETLOGON_NEG_SUPPORTS_AES) {
@@ -642,18 +827,34 @@ static void netlogon_creds_crypt_samlogon_logon(struct netlogon_creds_Credential
 			h = logon->password->lmpassword.hash;
 			if (!all_zero(h, 16)) {
 				if (do_encrypt) {
-					netlogon_creds_aes_encrypt(creds, h, 16);
+					status = netlogon_creds_aes_encrypt(
+						creds,
+						h,
+						16);
 				} else {
-					netlogon_creds_aes_decrypt(creds, h, 16);
+					status = netlogon_creds_aes_decrypt(
+						creds,
+						h,
+						16);
+				}
+				if (!NT_STATUS_IS_OK(status)) {
+					return status;
 				}
 			}
 
 			h = logon->password->ntpassword.hash;
 			if (!all_zero(h, 16)) {
 				if (do_encrypt) {
-					netlogon_creds_aes_encrypt(creds, h, 16);
+					status = netlogon_creds_aes_encrypt(creds,
+								   h,
+								   16);
 				} else {
-					netlogon_creds_aes_decrypt(creds, h, 16);
+					status = netlogon_creds_aes_decrypt(creds,
+								   h,
+								   16);
+				}
+				if (!NT_STATUS_IS_OK(status)) {
+					return status;
 				}
 			}
 		} else if (creds->negotiate_flags & NETLOGON_NEG_ARCFOUR) {
@@ -661,12 +862,22 @@ static void netlogon_creds_crypt_samlogon_logon(struct netlogon_creds_Credential
 
 			h = logon->password->lmpassword.hash;
 			if (!all_zero(h, 16)) {
-				netlogon_creds_arcfour_crypt(creds, h, 16);
+				status = netlogon_creds_arcfour_crypt(creds,
+								      h,
+								      16);
+				if (!NT_STATUS_IS_OK(status)) {
+					return status;
+				}
 			}
 
 			h = logon->password->ntpassword.hash;
 			if (!all_zero(h, 16)) {
-				netlogon_creds_arcfour_crypt(creds, h, 16);
+				status = netlogon_creds_arcfour_crypt(creds,
+								      h,
+								      16);
+				if (!NT_STATUS_IS_OK(status)) {
+					return status;
+				}
 			}
 		} else {
 			struct samr_Password *p;
@@ -696,42 +907,52 @@ static void netlogon_creds_crypt_samlogon_logon(struct netlogon_creds_Credential
 
 	case NetlogonGenericInformation:
 		if (logon->generic == NULL) {
-			return;
+			return NT_STATUS_INVALID_PARAMETER;
 		}
 
 		if (creds->negotiate_flags & NETLOGON_NEG_SUPPORTS_AES) {
 			if (do_encrypt) {
-				netlogon_creds_aes_encrypt(creds,
-						logon->generic->data,
-						logon->generic->length);
+				status = netlogon_creds_aes_encrypt(
+					creds,
+					logon->generic->data,
+					logon->generic->length);
 			} else {
-				netlogon_creds_aes_decrypt(creds,
-						logon->generic->data,
-						logon->generic->length);
+				status = netlogon_creds_aes_decrypt(
+					creds,
+					logon->generic->data,
+					logon->generic->length);
+			}
+			if (!NT_STATUS_IS_OK(status)) {
+				return status;
 			}
 		} else if (creds->negotiate_flags & NETLOGON_NEG_ARCFOUR) {
-			netlogon_creds_arcfour_crypt(creds,
-						     logon->generic->data,
-						     logon->generic->length);
+			status = netlogon_creds_arcfour_crypt(creds,
+							      logon->generic->data,
+							      logon->generic->length);
+			if (!NT_STATUS_IS_OK(status)) {
+				return status;
+			}
 		} else {
 			/* Using DES to verify kerberos tickets makes no sense */
 		}
 		break;
 	}
+
+	return NT_STATUS_OK;
 }
 
-void netlogon_creds_decrypt_samlogon_logon(struct netlogon_creds_CredentialState *creds,
-					   enum netr_LogonInfoClass level,
-					   union netr_LogonLevel *logon)
+NTSTATUS netlogon_creds_decrypt_samlogon_logon(struct netlogon_creds_CredentialState *creds,
+					       enum netr_LogonInfoClass level,
+					       union netr_LogonLevel *logon)
 {
-	netlogon_creds_crypt_samlogon_logon(creds, level, logon, false);
+	return netlogon_creds_crypt_samlogon_logon(creds, level, logon, false);
 }
 
-void netlogon_creds_encrypt_samlogon_logon(struct netlogon_creds_CredentialState *creds,
-					   enum netr_LogonInfoClass level,
-					   union netr_LogonLevel *logon)
+NTSTATUS netlogon_creds_encrypt_samlogon_logon(struct netlogon_creds_CredentialState *creds,
+					       enum netr_LogonInfoClass level,
+					       union netr_LogonLevel *logon)
 {
-	netlogon_creds_crypt_samlogon_logon(creds, level, logon, true);
+	return netlogon_creds_crypt_samlogon_logon(creds, level, logon, true);
 }
 
 union netr_LogonLevel *netlogon_creds_shallow_copy_logon(TALLOC_CTX *mem_ctx,

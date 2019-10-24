@@ -1,6 +1,6 @@
-# implement samba_tool ou commands
+# implement samba-tool ou commands
 #
-# Copyright Bjoern Baumbach <bb@sernet.de> 2018
+# Copyright Bjoern Baumbach 2018-2019 <bb@samba.org>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -38,7 +38,7 @@ class cmd_rename(Command):
     or without the domainDN component.
 
     Examples:
-    samba-tool ou rename 'OU=OrgUnit,DC=samdom,DC=example,DC=com' \
+    samba-tool ou rename 'OU=OrgUnit,DC=samdom,DC=example,DC=com' \\
         'OU=NewNameOfOrgUnit,DC=samdom,DC=example,DC=com'
     samba-tool ou rename 'OU=OrgUnit' 'OU=NewNameOfOrgUnit'
 
@@ -73,12 +73,12 @@ class cmd_rename(Command):
             full_old_ou_dn = samdb.normalize_dn_in_domain(old_ou_dn)
         except Exception as e:
             raise CommandError('Invalid old_ou_dn "%s": %s' %
-                               (old_ou_dn, e.message))
+                               (old_ou_dn, e))
         try:
             full_new_ou_dn = samdb.normalize_dn_in_domain(new_ou_dn)
         except Exception as e:
             raise CommandError('Invalid new_ou_dn "%s": %s' %
-                               (new_ou_dn, e.message))
+                               (new_ou_dn, e))
 
         try:
             res = samdb.search(base=full_old_ou_dn,
@@ -102,7 +102,7 @@ class cmd_move(Command):
     or without the domainDN component.
 
     Examples:
-    samba-tool ou move 'OU=OrgUnit,DC=samdom,DC=example,DC=com' \
+    samba-tool ou move 'OU=OrgUnit,DC=samdom,DC=example,DC=com' \\
         'OU=NewParentOfOrgUnit,DC=samdom,DC=example,DC=com'
     samba-tool ou rename 'OU=OrgUnit' 'OU=NewParentOfOrgUnit'
 
@@ -138,12 +138,12 @@ class cmd_move(Command):
             full_old_ou_dn = samdb.normalize_dn_in_domain(old_ou_dn)
         except Exception as e:
             raise CommandError('Invalid old_ou_dn "%s": %s' %
-                               (old_ou_dn, e.message))
+                               (old_ou_dn, e))
         try:
             full_new_parent_dn = samdb.normalize_dn_in_domain(new_parent_dn)
         except Exception as e:
             raise CommandError('Invalid new_parent_dn "%s": %s' %
-                               (new_parent_dn, e.message))
+                               (new_parent_dn, e))
 
         full_new_ou_dn = ldb.Dn(samdb, str(full_old_ou_dn))
         full_new_ou_dn.remove_base_components(len(full_old_ou_dn) - 1)
@@ -203,7 +203,7 @@ class cmd_create(Command):
         try:
             full_ou_dn = samdb.normalize_dn_in_domain(ou_dn)
         except Exception as e:
-            raise CommandError('Invalid ou_dn "%s": %s' % (ou_dn, e.message))
+            raise CommandError('Invalid ou_dn "%s": %s' % (ou_dn, e))
 
         try:
             samdb.create_ou(full_ou_dn, description=description)
@@ -255,7 +255,7 @@ class cmd_listobjects(Command):
         try:
             full_ou_dn = samdb.normalize_dn_in_domain(ou_dn)
         except Exception as e:
-            raise CommandError('Invalid ou_dn "%s": %s' % (ou_dn, e.message))
+            raise CommandError('Invalid ou_dn "%s": %s' % (ou_dn, e))
 
         minchilds = 0
         scope = ldb.SCOPE_ONELEVEL
@@ -369,7 +369,7 @@ class cmd_delete(Command):
         try:
             full_ou_dn = samdb.normalize_dn_in_domain(ou_dn)
         except Exception as e:
-            raise CommandError('Invalid ou_dn "%s": %s' % (ou_dn, e.message))
+            raise CommandError('Invalid ou_dn "%s": %s' % (ou_dn, e))
 
         controls = []
         if force_subtree_delete:
@@ -390,7 +390,7 @@ class cmd_delete(Command):
 
 
 class cmd_ou(SuperCommand):
-    """Organizational Units (OU) management"""
+    """Organizational Units (OU) management."""
 
     subcommands = {}
     subcommands["create"] = cmd_create()

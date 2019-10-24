@@ -18,6 +18,9 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#ifndef _SOURCE3_SMBD_GLOBALS_H_
+#define _SOURCE3_SMBD_GLOBALS_H_
+
 #include "system/select.h"
 #include "librpc/gen_ndr/smbXsrv.h"
 #include "smbprofile.h"
@@ -89,8 +92,6 @@ extern uint16_t fnf_handle;
 struct conn_ctx {
 	connection_struct *conn;
 	uint64_t vuid;
-	bool need_chdir;
-	bool done_chdir;
 	userdom_struct user_info;
 };
 /* A stack of current_user connection contexts. */
@@ -115,20 +116,17 @@ DATA_BLOB negprot_spnego(TALLOC_CTX *ctx, struct smbXsrv_connection *xconn);
 void smbd_lock_socket(struct smbXsrv_connection *xconn);
 void smbd_unlock_socket(struct smbXsrv_connection *xconn);
 
-NTSTATUS smbd_do_locking(struct smb_request *req,
-			 files_struct *fsp,
-			 uint8_t type,
-			 int32_t timeout,
-			 uint16_t num_locks,
-			 struct smbd_lock_element *locks,
-			 bool *async);
+struct GUID smbd_request_guid(struct smb_request *smb1req, uint16_t idx);
+
 NTSTATUS smbd_do_unlocking(struct smb_request *req,
 			   files_struct *fsp,
 			   uint16_t num_ulocks,
-			   struct smbd_lock_element *ulocks);
+			   struct smbd_lock_element *ulocks,
+			   enum brl_flavour lock_flav);
 
 NTSTATUS smbd_do_qfilepathinfo(connection_struct *conn,
 			       TALLOC_CTX *mem_ctx,
+			       struct smb_request *req,
 			       uint16_t info_level,
 			       files_struct *fsp,
 			       struct smb_filename *smb_fname,
@@ -323,23 +321,6 @@ struct deferred_open_record;
 void send_break_message_smb2(files_struct *fsp,
 			     uint32_t break_from,
 			     uint32_t break_to);
-struct blocking_lock_record *get_pending_smb2req_blr(struct smbd_smb2_request *smb2req);
-bool push_blocking_lock_request_smb2( struct byte_range_lock *br_lck,
-				struct smb_request *req,
-				files_struct *fsp,
-				int lock_timeout,
-				int lock_num,
-				uint64_t smblctx,
-				enum brl_type lock_type,
-				enum brl_flavour lock_flav,
-				uint64_t offset,
-				uint64_t count,
-				uint64_t blocking_smblctx);
-void process_blocking_lock_queue_smb2(
-	struct smbd_server_connection *sconn, struct timeval tv_curr);
-void cancel_pending_lock_requests_by_fid_smb2(files_struct *fsp,
-			struct byte_range_lock *br_lck,
-			enum file_close_type close_type);
 /* From smbd/smb2_create.c */
 int map_smb2_oplock_levels_to_samba(uint8_t in_oplock_level);
 bool get_deferred_open_message_state_smb2(struct smbd_smb2_request *smb2req,
@@ -643,7 +624,6 @@ NTSTATUS smbXsrv_open_create(struct smbXsrv_connection *conn,
 			     struct auth_session_info *session_info,
 			     NTTIME now,
 			     struct smbXsrv_open **_open);
-uint32_t smbXsrv_open_hash(struct smbXsrv_open *_open);
 NTSTATUS smbXsrv_open_update(struct smbXsrv_open *_open);
 NTSTATUS smbXsrv_open_close(struct smbXsrv_open *op, NTTIME now);
 NTSTATUS smb1srv_open_table_init(struct smbXsrv_connection *conn);
@@ -704,9 +684,6 @@ struct smbd_smb2_request {
 	/* the tcon the request operates on, maybe NULL */
 	struct smbXsrv_tcon *tcon;
 	uint32_t last_tid;
-
-	/* the tevent_context (wrapper) the request operates on */
-	struct tevent_context *ev_ctx;
 
 	int current_idx;
 	bool do_signing;
@@ -879,13 +856,10 @@ struct smbd_server_connection {
 	const struct tsocket_address *local_address;
 	const struct tsocket_address *remote_address;
 	const char *remote_hostname;
-	struct tevent_context *raw_ev_ctx;
-	struct tevent_context *root_ev_ctx;
-	struct tevent_context *guest_ev_ctx;
+	struct tevent_context *ev_ctx;
 	struct messaging_context *msg_ctx;
 	struct notify_context *notify_ctx;
 	bool using_smb2;
-	bool aapl_zero_file_id; /* Apple-specific */
 	int trans_num;
 
 	size_t num_users;
@@ -907,7 +881,6 @@ struct smbd_server_connection {
 	struct {
 		struct bitmap *dptr_bmap;
 		struct dptr_struct *dirptrs;
-		int dirhandles_open;
 	} searches;
 
 	uint64_t num_requests;
@@ -921,30 +894,9 @@ struct smbd_server_connection {
 
 	struct {
 		struct notify_mid_map *notify_mid_maps;
-
-		struct {
-			/* dlink list we store pending lock records on. */
-			struct blocking_lock_record *blocking_lock_queue;
-			/* dlink list we move cancelled lock records onto. */
-			struct blocking_lock_record *blocking_lock_cancelled_queue;
-
-			/* The event that makes us process our blocking lock queue */
-			struct tevent_timer *brl_timeout;
-
-			bool blocking_lock_unlock_state;
-			bool blocking_lock_cancel_state;
-		} locks;
 	} smb1;
-	struct {
-		struct {
-			/* The event that makes us process our blocking lock queue */
-			struct tevent_timer *brl_timeout;
-			bool blocking_lock_unlock_state;
-		} locks;
-	} smb2;
 
-	struct pthreadpool_tevent *sync_thread_pool;
-	struct pthreadpool_tevent *raw_thread_pool;
+	struct pthreadpool_tevent *pool;
 
 	struct smbXsrv_client *client;
 };
@@ -952,3 +904,5 @@ struct smbd_server_connection {
 extern struct smbXsrv_client *global_smbXsrv_client;
 
 void smbd_init_globals(void);
+
+#endif /* _SOURCE3_SMBD_GLOBALS_H_ */

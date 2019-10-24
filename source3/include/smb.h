@@ -30,7 +30,7 @@
 #include "libds/common/roles.h"
 
 /* logged when starting the various Samba daemons */
-#define COPYRIGHT_STARTUP_MESSAGE	"Copyright Andrew Tridgell and the Samba Team 1992-2018"
+#define COPYRIGHT_STARTUP_MESSAGE	"Copyright Andrew Tridgell and the Samba Team 1992-2019"
 
 #define SAFETY_MARGIN 1024
 #define LARGE_WRITEX_HDR_SIZE 65
@@ -49,10 +49,6 @@
 #define Required (3)
 
 #define SIZEOFWORD 2
-
-#ifndef DEF_CREATE_MASK
-#define DEF_CREATE_MASK (0755)
-#endif
 
 /* string manipulation flags - see clistr.c and srvstr.c */
 #define STR_TERMINATE 1
@@ -156,8 +152,6 @@ struct sys_notify_context {
 struct current_user {
 	struct connection_struct *conn;
 	uint64_t vuid; /* SMB2 compat */
-	bool need_chdir;
-	bool done_chdir;
 	struct security_unix_token ut;
 	struct security_token *nt_user_token;
 };
@@ -546,13 +540,8 @@ enum remote_arch_types {RA_UNKNOWN, RA_WFWG, RA_OS2, RA_WIN95, RA_WINNT,
 
 #define FNUM_FIELD_INVALID 0
 
-/* 
- * Size of buffer to use when moving files across filesystems. 
- */
-#define COPYBUF_SIZE (8*1024)
-
 /*
- * Map the Core and Extended Oplock requesst bits down
+ * Map the Core and Extended Oplock request bits down
  * to common bits (EXCLUSIVE_OPLOCK & BATCH_OPLOCK).
  */
 
@@ -613,25 +602,6 @@ Offset  Data                  length.
 
 */
 #define MSG_SMB_KERNEL_BREAK_SIZE 28
-
-/* file_renamed_message definition.
-
-struct file_renamed_message {
-	uint64_t dev;
-	uint64_t inode;
-	char names[1]; A variable area containing sharepath and filename.
-};
-
-Offset  Data			length.
-0	uint64_t dev		8 bytes
-8	uint64_t inode		8 bytes
-16      unit64_t extid          8 bytes
-24	char [] name		zero terminated namelen bytes
-minimum length == 24.
-
-*/
-
-#define MSG_FILE_RENAMED_MIN_SIZE 24
 
 /*
  * On the wire return values for oplock types.

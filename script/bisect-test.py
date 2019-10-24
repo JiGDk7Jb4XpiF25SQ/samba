@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # use git bisect to work out what commit caused a test failure
 # Copyright Andrew Tridgell 2010
 # released under GNU GPL v3 or later
@@ -58,7 +58,7 @@ cwd = os.getcwd()
 gitroot = find_git_root()
 
 # create a bisect script
-f = tempfile.NamedTemporaryFile(delete=False)
+f = tempfile.NamedTemporaryFile(delete=False, mode="w+t")
 f.write("set -x\n")
 f.write("cd %s || exit 125\n" % cwd)
 if opts.autogen:

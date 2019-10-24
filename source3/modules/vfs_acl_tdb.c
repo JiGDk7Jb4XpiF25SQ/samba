@@ -22,7 +22,6 @@
 #include "smbd/smbd.h"
 #include "system/filesys.h"
 #include "librpc/gen_ndr/xattr.h"
-#include "../lib/crypto/sha256.h"
 #include "dbwrap/dbwrap.h"
 #include "dbwrap/dbwrap_open.h"
 #include "auth.h"
@@ -235,11 +234,13 @@ static NTSTATUS store_acl_blob_fsp(vfs_handle_struct *handle,
 }
 
 /*********************************************************************
- On unlink we need to delete the tdb record (if using tdb).
+ On unlinkat we need to delete the tdb record (if using tdb).
 *********************************************************************/
 
-static int unlink_acl_tdb(vfs_handle_struct *handle,
-			  const struct smb_filename *smb_fname)
+static int unlinkat_acl_tdb(vfs_handle_struct *handle,
+			struct files_struct *dirfsp,
+			const struct smb_filename *smb_fname,
+			int flags)
 {
 	struct smb_filename *smb_fname_tmp = NULL;
 	struct db_context *db = acl_db;
@@ -261,7 +262,16 @@ static int unlink_acl_tdb(vfs_handle_struct *handle,
 		goto out;
 	}
 
-	ret = unlink_acl_common(handle, smb_fname_tmp);
+	if (flags & AT_REMOVEDIR) {
+		ret = rmdir_acl_common(handle,
+				dirfsp,
+				smb_fname_tmp);
+	} else {
+		ret = unlink_acl_common(handle,
+				dirfsp,
+				smb_fname_tmp,
+				flags);
+	}
 
 	if (ret == -1) {
 		goto out;
@@ -270,32 +280,6 @@ static int unlink_acl_tdb(vfs_handle_struct *handle,
 	acl_tdb_delete(handle, db, &smb_fname_tmp->st);
  out:
 	return ret;
-}
-
-/*********************************************************************
- On rmdir we need to delete the tdb record (if using tdb).
-*********************************************************************/
-
-static int rmdir_acl_tdb(vfs_handle_struct *handle,
-		const struct smb_filename *smb_fname)
-{
-
-	SMB_STRUCT_STAT sbuf;
-	struct db_context *db = acl_db;
-	int ret = -1;
-
-	ret = vfs_stat_smb_basename(handle->conn, smb_fname, &sbuf);
-	if (ret == -1) {
-		return -1;
-	}
-
-	ret = rmdir_acl_common(handle, smb_fname);
-	if (ret == -1) {
-		return -1;
-	}
-
-	acl_tdb_delete(handle, db, &sbuf);
-	return 0;
 }
 
 /*******************************************************************
@@ -489,8 +473,7 @@ static NTSTATUS acl_tdb_fset_nt_acl(vfs_handle_struct *handle,
 static struct vfs_fn_pointers vfs_acl_tdb_fns = {
 	.connect_fn = connect_acl_tdb,
 	.disconnect_fn = disconnect_acl_tdb,
-	.rmdir_fn = rmdir_acl_tdb,
-	.unlink_fn = unlink_acl_tdb,
+	.unlinkat_fn = unlinkat_acl_tdb,
 	.chmod_fn = chmod_acl_module_common,
 	.fchmod_fn = fchmod_acl_module_common,
 	.fget_nt_acl_fn = acl_tdb_fget_nt_acl,

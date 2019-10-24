@@ -68,13 +68,13 @@ class DNSTest(TestCaseInTempDir):
 
     def assert_dns_rcode_equals(self, packet, rcode):
         "Helper function to check return code"
-        p_errcode = packet.operation & 0x000F
+        p_errcode = packet.operation & dns.DNS_RCODE
         self.assertEquals(p_errcode, rcode, "Expected RCODE %s, got %s" %
                           (self.errstr(rcode), self.errstr(p_errcode)))
 
     def assert_dns_opcode_equals(self, packet, opcode):
         "Helper function to check opcode"
-        p_opcode = packet.operation & 0x7800
+        p_opcode = packet.operation & dns.DNS_OPCODE
         self.assertEquals(p_opcode, opcode, "Expected OPCODE %s, got %s" %
                           (opcode, p_opcode))
 
@@ -259,7 +259,7 @@ class DNSTKeyTest(DNSTest):
         self.g.start_mech_by_name("spnego")
 
         finished = False
-        client_to_server = ""
+        client_to_server = b""
 
         (finished, server_to_client) = self.g.update(client_to_server)
         self.assertFalse(finished)

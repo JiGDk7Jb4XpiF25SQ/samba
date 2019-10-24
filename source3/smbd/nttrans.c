@@ -543,6 +543,7 @@ void reply_ntcreate_and_X(struct smb_request *req)
 				fname,
 				ucf_flags,
 				NULL,
+				NULL,
 				&smb_fname);
 
 	TALLOC_FREE(case_state);
@@ -589,6 +590,12 @@ void reply_ntcreate_and_X(struct smb_request *req)
 		if (open_was_deferred(req->xconn, req->mid)) {
 			/* We have re-scheduled this call, no error. */
 			goto out;
+		}
+		if (NT_STATUS_EQUAL(status, NT_STATUS_SHARING_VIOLATION)) {
+			bool ok = defer_smb1_sharing_violation(req);
+			if (ok) {
+				goto out;
+			}
 		}
 		reply_openerror(req, status);
 		goto out;
@@ -1115,6 +1122,7 @@ static void call_nt_transact_create(connection_struct *conn,
 				fname,
 				ucf_flags,
 				NULL,
+				NULL,
 				&smb_fname);
 
 	TALLOC_FREE(case_state);
@@ -1240,6 +1248,12 @@ static void call_nt_transact_create(connection_struct *conn,
 		if (open_was_deferred(req->xconn, req->mid)) {
 			/* We have re-scheduled this call, no error. */
 			return;
+		}
+		if (NT_STATUS_EQUAL(status, NT_STATUS_SHARING_VIOLATION)) {
+			bool ok = defer_smb1_sharing_violation(req);
+			if (ok) {
+				return;
+			}
 		}
 		reply_openerror(req, status);
 		goto out;
@@ -1393,6 +1407,7 @@ void reply_ntcancel(struct smb_request *req)
 {
 	struct smbXsrv_connection *xconn = req->xconn;
 	struct smbd_server_connection *sconn = req->sconn;
+	bool found;
 
 	/*
 	 * Go through and cancel any pending change notifies.
@@ -1400,8 +1415,10 @@ void reply_ntcancel(struct smb_request *req)
 
 	START_PROFILE(SMBntcancel);
 	srv_cancel_sign_response(xconn);
-	remove_pending_change_notify_requests_by_mid(sconn, req->mid);
-	remove_pending_lock_requests_by_mid_smb1(sconn, req->mid);
+	found = remove_pending_change_notify_requests_by_mid(sconn, req->mid);
+	if (!found) {
+		smbd_smb1_brl_finish_by_mid(sconn, req->mid);
+	}
 
 	DEBUG(3,("reply_ntcancel: cancel called on mid = %llu.\n",
 		(unsigned long long)req->mid));
@@ -1636,6 +1653,7 @@ void reply_ntrename(struct smb_request *req)
 				  oldname,
 				  ucf_flags_src,
 				  NULL,
+				  NULL,
 				  &smb_fname_old);
 	if (!NT_STATUS_IS_OK(status)) {
 		if (NT_STATUS_EQUAL(status,
@@ -1652,6 +1670,7 @@ void reply_ntrename(struct smb_request *req)
 	status = filename_convert(ctx, conn,
 				  newname,
 				  ucf_flags_dst,
+				  NULL,
 				  &dest_has_wcard,
 				  &smb_fname_new);
 	if (!NT_STATUS_IS_OK(status)) {
@@ -1724,6 +1743,12 @@ void reply_ntrename(struct smb_request *req)
 		if (open_was_deferred(req->xconn, req->mid)) {
 			/* We have re-scheduled this call. */
 			goto out;
+		}
+		if (NT_STATUS_EQUAL(status, NT_STATUS_SHARING_VIOLATION)) {
+			bool ok = defer_smb1_sharing_violation(req);
+			if (ok) {
+				goto out;
+			}
 		}
 
 		reply_nterror(req, status);
@@ -1802,8 +1827,10 @@ static void call_nt_transact_notify_change(connection_struct *conn,
 
 	if (fsp->notify == NULL) {
 
-		status = change_notify_create(fsp, filter, recursive);
-
+		status = change_notify_create(fsp,
+					      max_param_count,
+					      filter,
+					      recursive);
 		if (!NT_STATUS_IS_OK(status)) {
 			DEBUG(10, ("change_notify_create returned %s\n",
 				   nt_errstr(status)));
@@ -2336,9 +2363,9 @@ static enum ndr_err_code fill_qtlist_from_sids(TALLOC_CTX *mem_ctx,
 
 		ok = sid_to_uid(&sids[i], &list_item->uid);
 		if (!ok) {
-			char buf[DOM_SID_STR_BUFLEN];
-			dom_sid_string_buf(&sids[i], buf, sizeof(buf));
-			DBG_WARNING("Could not convert SID %s to uid\n", buf);
+			struct dom_sid_buf buf;
+			DBG_WARNING("Could not convert SID %s to uid\n",
+				    dom_sid_str_buf(&sids[i], &buf));
 			/* No idea what to return here... */
 			return NDR_ERR_INVALID_POINTER;
 		}
@@ -2468,10 +2495,11 @@ static enum ndr_err_code extract_sids_from_buf(TALLOC_CTX *mem_ctx,
 		*num = i;
 
 		for (iter = sid_list, i = 0; iter; iter = iter->next, i++) {
+			struct dom_sid_buf buf;
 			(*sids)[i] = iter->sid;
 			DBG_DEBUG("quota SID[%u] %s\n",
 				(unsigned int)i,
-				sid_string_dbg(&iter->sid));
+				dom_sid_str_buf(&iter->sid, &buf));
 		}
 	}
 	err = NDR_ERR_SUCCESS;

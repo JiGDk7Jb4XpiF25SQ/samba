@@ -125,7 +125,7 @@ class ConfigurationContext(Context.Context):
 		self.bldnode.mkdir()
 
 		if not os.path.isdir(self.bldnode.abspath()):
-			conf.fatal('Could not create the build directory %s' % self.bldnode.abspath())
+			self.fatal('Could not create the build directory %s' % self.bldnode.abspath())
 
 	def execute(self):
 		"""
@@ -180,6 +180,7 @@ class ConfigurationContext(Context.Context):
 		env.hash = self.hash
 		env.files = self.files
 		env.environ = dict(self.environ)
+		env.launch_dir = Context.launch_dir
 
 		if not (self.env.NO_LOCK_IN_RUN or env.environ.get('NO_LOCK_IN_RUN') or getattr(Options.options, 'no_lock_in_run')):
 			env.store(os.path.join(Context.run_dir, Options.lockfile))
@@ -286,7 +287,7 @@ class ConfigurationContext(Context.Context):
 
 	def eval_rules(self, rules):
 		"""
-		Execute configuration tests provided as list of funcitons to run
+		Execute configuration tests provided as list of functions to run
 
 		:param rules: list of configuration method names
 		:type rules: list of string
@@ -523,7 +524,7 @@ def run_build(self, *k, **kw):
 	Though this function returns *0* by default, the build may set an attribute named *retval* on the
 	build context object to return a particular value. See :py:func:`waflib.Tools.c_config.test_exec_fun` for example.
 
-	This function also provides a limited cache. To use it, provide the following option::
+	This function also features a cache which can be enabled by the following option::
 
 		def options(opt):
 			opt.add_option('--confcache', dest='confcache', default=0,
@@ -534,9 +535,20 @@ def run_build(self, *k, **kw):
 		$ waf configure --confcache
 
 	"""
-	lst = [str(v) for (p, v) in kw.items() if p != 'env']
-	h = Utils.h_list(lst)
+	buf = []
+	for key in sorted(kw.keys()):
+		v = kw[key]
+		if hasattr(v, '__call__'):
+			buf.append(Utils.h_fun(v))
+		else:
+			buf.append(str(v))
+	h = Utils.h_list(buf)
 	dir = self.bldnode.abspath() + os.sep + (not Utils.is_win32 and '.' or '') + 'conf_check_' + Utils.to_hex(h)
+
+	cachemode = kw.get('confcache', getattr(Options.options, 'confcache', None))
+
+	if not cachemode and os.path.exists(dir):
+		shutil.rmtree(dir)
 
 	try:
 		os.makedirs(dir)
@@ -548,7 +560,6 @@ def run_build(self, *k, **kw):
 	except OSError:
 		self.fatal('cannot use the configuration test folder %r' % dir)
 
-	cachemode = getattr(Options.options, 'confcache', None)
 	if cachemode == 1:
 		try:
 			proj = ConfigSet.ConfigSet(os.path.join(dir, 'cache_run_build'))
@@ -588,7 +599,7 @@ def run_build(self, *k, **kw):
 		else:
 			ret = getattr(bld, 'retval', 0)
 	finally:
-		if cachemode == 1:
+		if cachemode:
 			# cache the results each time
 			proj = ConfigSet.ConfigSet()
 			proj['cache_run_build'] = ret

@@ -18,6 +18,7 @@
  */
 
 #include "replace.h"
+#include "util/util.h"
 #include "system/network.h"
 #include "system/filesys.h"
 #include "system/dir.h"
@@ -322,6 +323,13 @@ static int messaging_dgm_out_get(struct messaging_dgm_context *ctx, pid_t pid,
 	}
 
 	messaging_dgm_out_rearm_idle_timer(out);
+	/*
+	 * shouldn't be possible, should be set if messaging_dgm_out_create
+	 * succeeded. This check is to satisfy static checker
+	 */
+	if (out == NULL) {
+		return EINVAL;
+	}
 
 	*pout = out;
 	return 0;
@@ -553,7 +561,7 @@ static void messaging_dgm_out_threaded_job(void *private_data)
 		if (state->sent != -1) {
 			return;
 		}
-		if (errno != ENOBUFS) {
+		if (state->err != ENOBUFS) {
 			return;
 		}
 
@@ -993,12 +1001,6 @@ int messaging_dgm_init(struct tevent_context *ev,
 		return EEXIST;
 	}
 
-	if (tevent_context_is_wrapper(ev)) {
-		/* This is really a programmer error! */
-		DBG_ERR("Should not be used with a wrapper tevent context\n");
-		return EINVAL;
-	}
-
 	ctx = talloc_zero(NULL, struct messaging_dgm_context);
 	if (ctx == NULL) {
 		goto fail_nomem;
@@ -1249,6 +1251,7 @@ static void messaging_dgm_read_handler(struct tevent_context *ev,
 	size_t msgbufsize = msghdr_prep_recv_fds(NULL, NULL, 0, INT8_MAX);
 	uint8_t msgbuf[msgbufsize];
 	uint8_t buf[MESSAGING_DGM_FRAGMENT_LENGTH];
+	size_t num_fds;
 
 	messaging_dgm_validate(ctx);
 
@@ -1284,8 +1287,12 @@ static void messaging_dgm_read_handler(struct tevent_context *ev,
 		return;
 	}
 
-	{
-		size_t num_fds = msghdr_extract_fds(&msg, NULL, 0);
+	num_fds = msghdr_extract_fds(&msg, NULL, 0);
+	if (num_fds == 0) {
+		int fds[1];
+
+		messaging_dgm_recv(ctx, ev, buf, received, fds, 0);
+	} else {
 		size_t i;
 		int fds[num_fds];
 
@@ -1303,7 +1310,6 @@ static void messaging_dgm_read_handler(struct tevent_context *ev,
 
 		messaging_dgm_recv(ctx, ev, buf, received, fds, num_fds);
 	}
-
 }
 
 static int messaging_dgm_in_msg_destructor(struct messaging_dgm_in_msg *m)
@@ -1421,6 +1427,7 @@ int messaging_dgm_send(pid_t pid,
 	struct messaging_dgm_context *ctx = global_dgm_context;
 	struct messaging_dgm_out *out;
 	int ret;
+	unsigned retries = 0;
 
 	if (ctx == NULL) {
 		return ENOTCONN;
@@ -1428,6 +1435,7 @@ int messaging_dgm_send(pid_t pid,
 
 	messaging_dgm_validate(ctx);
 
+again:
 	ret = messaging_dgm_out_get(ctx, pid, &out);
 	if (ret != 0) {
 		return ret;
@@ -1437,6 +1445,20 @@ int messaging_dgm_send(pid_t pid,
 
 	ret = messaging_dgm_out_send_fragmented(ctx->ev, out, iov, iovlen,
 						fds, num_fds);
+	if (ret == ECONNREFUSED) {
+		/*
+		 * We cache outgoing sockets. If the receiver has
+		 * closed and re-opened the socket since our last
+		 * message, we get connection refused. Retry.
+		 */
+
+		TALLOC_FREE(out);
+
+		if (retries < 5) {
+			retries += 1;
+			goto again;
+		}
+	}
 	return ret;
 }
 
@@ -1444,6 +1466,7 @@ static int messaging_dgm_read_unique(int fd, uint64_t *punique)
 {
 	char buf[25];
 	ssize_t rw_ret;
+	int error = 0;
 	unsigned long long unique;
 	char *endptr;
 
@@ -1453,13 +1476,11 @@ static int messaging_dgm_read_unique(int fd, uint64_t *punique)
 	}
 	buf[rw_ret] = '\0';
 
-	unique = strtoull(buf, &endptr, 10);
-	if ((unique == 0) && (errno == EINVAL)) {
-		return EINVAL;
+	unique = smb_strtoull(buf, &endptr, 10, &error, SMB_STR_STANDARD);
+	if (error != 0) {
+		return error;
 	}
-	if ((unique == ULLONG_MAX) && (errno == ERANGE)) {
-		return ERANGE;
-	}
+
 	if (endptr[0] != '\n') {
 		return EINVAL;
 	}
@@ -1510,7 +1531,9 @@ int messaging_dgm_cleanup(pid_t pid)
 	struct messaging_dgm_context *ctx = global_dgm_context;
 	struct sun_path_buf lockfile_name, socket_name;
 	int fd, len, ret;
-	struct flock lck = {};
+	struct flock lck = {
+		.l_pid = 0,
+	};
 
 	if (ctx == NULL) {
 		return ENOTCONN;
@@ -1601,6 +1624,7 @@ int messaging_dgm_forall(int (*fn)(pid_t pid, void *private_data),
 	struct messaging_dgm_context *ctx = global_dgm_context;
 	DIR *msgdir;
 	struct dirent *dp;
+	int error = 0;
 
 	if (ctx == NULL) {
 		return ENOTCONN;
@@ -1623,8 +1647,8 @@ int messaging_dgm_forall(int (*fn)(pid_t pid, void *private_data),
 		unsigned long pid;
 		int ret;
 
-		pid = strtoul(dp->d_name, NULL, 10);
-		if (pid == 0) {
+		pid = smb_strtoul(dp->d_name, NULL, 10, &error, SMB_STR_STANDARD);
+		if ((pid == 0) || (error != 0)) {
 			/*
 			 * . and .. and other malformed entries
 			 */
@@ -1696,40 +1720,12 @@ struct messaging_dgm_fde *messaging_dgm_register_tevent_context(
 			 */
 			continue;
 		}
-
-		/*
-		 * We can only have one tevent_fd
-		 * per low level tevent_context.
-		 *
-		 * This means any wrapper tevent_context
-		 * needs to share the structure with
-		 * the main tevent_context and/or
-		 * any sibling wrapper tevent_context.
-		 *
-		 * This means we need to use tevent_context_same_loop()
-		 * instead of just (fde_ev->ev == ev).
-		 *
-		 * Note: the tevent_context_is_wrapper() check below
-		 * makes sure that fde_ev->ev is always a raw
-		 * tevent context.
-		 */
-		if (tevent_context_same_loop(fde_ev->ev, ev)) {
+		if (fde_ev->ev == ev) {
 			break;
 		}
 	}
 
 	if (fde_ev == NULL) {
-		if (tevent_context_is_wrapper(ev)) {
-			/*
-			 * This is really a programmer error!
-			 *
-			 * The main/raw tevent context should
-			 * have been registered first!
-			 */
-			DBG_ERR("Should not be used with a wrapper tevent context\n");
-			return NULL;
-		}
-
 		fde_ev = talloc(fde, struct messaging_dgm_fde_ev);
 		if (fde_ev == NULL) {
 			return NULL;

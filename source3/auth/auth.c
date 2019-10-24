@@ -21,6 +21,9 @@
 #include "auth.h"
 #include "../lib/tsocket/tsocket.h"
 
+#include "param/param.h"
+#include "../lib/messaging/messaging.h"
+
 #undef DBGC_CLASS
 #define DBGC_CLASS DBGC_AUTH
 
@@ -32,7 +35,7 @@ static struct auth_init_function_entry *auth_find_backend_entry(const char *name
 
 NTSTATUS smb_register_auth(int version, const char *name, auth_init_function init)
 {
-	struct auth_init_function_entry *entry = auth_backends;
+	struct auth_init_function_entry *entry = NULL;
 
 	if (version != AUTH_INTERFACE_VERSION) {
 		DEBUG(0,("Can't register auth_method!\n"
@@ -176,12 +179,20 @@ NTSTATUS auth_check_ntlm_password(TALLOC_CTX *mem_ctx,
 	auth_methods *auth_method;
 	struct auth_serversupplied_info *server_info = NULL;
 	struct dom_sid sid = {0};
+	struct imessaging_context *msg_ctx = NULL;
+	struct loadparm_context *lp_ctx = NULL;
 
 	if (user_info == NULL || auth_context == NULL || pserver_info == NULL) {
 		return NT_STATUS_LOGON_FAILURE;
 	}
 
 	frame = talloc_stackframe();
+
+	if (lp_auth_event_notification()) {
+		lp_ctx = loadparm_init_s3(frame, loadparm_s3_helpers());
+		msg_ctx = imessaging_client_init(
+		    frame, lp_ctx, global_event_context());
+	}
 
 	*pauthoritative = 1;
 
@@ -299,13 +310,14 @@ NTSTATUS auth_check_ntlm_password(TALLOC_CTX *mem_ctx,
 		sid = (struct dom_sid) {0};
 	}
 
-	log_authentication_event(NULL, NULL,
+	log_authentication_event(msg_ctx,
+				 lp_ctx,
 				 &auth_context->start_time,
 				 user_info,
 				 nt_status,
 				 server_info->info3->base.logon_domain.string,
 				 server_info->info3->base.account_name.string,
-				 unix_username, &sid);
+				 &sid);
 
 	DEBUG(server_info->guest ? 5 : 2,
 	      ("check_ntlm_password:  %sauthentication for user "
@@ -333,12 +345,11 @@ fail:
 		  user_info->client.account_name, user_info->mapped.account_name,
 		  nt_errstr(nt_status), *pauthoritative));
 
-	log_authentication_event(NULL,
-				 NULL,
+	log_authentication_event(msg_ctx,
+				 lp_ctx,
 				 &auth_context->start_time,
 				 user_info,
 				 nt_status,
-				 NULL,
 				 NULL,
 				 NULL,
 				 NULL);
@@ -557,7 +568,7 @@ NTSTATUS make_auth3_context_for_netlogon(TALLOC_CTX *mem_ctx,
 	switch (lp_server_role()) {
 	case ROLE_DOMAIN_BDC:
 	case ROLE_DOMAIN_PDC:
-		methods = "sam_netlogon3 winbind:trustdomain";
+		methods = "sam_netlogon3 winbind";
 		break;
 
 	default:

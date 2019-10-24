@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 #
 # Unix SMB/CIFS implementation.
@@ -40,6 +40,7 @@ from ldb import (
     FLAG_MOD_REPLACE,
 )
 from samba.compat import cmp_fn
+from samba.compat import get_string
 
 
 class DrsBaseTestCase(SambaToolCmdTest):
@@ -55,23 +56,23 @@ class DrsBaseTestCase(SambaToolCmdTest):
         creds.set_gensec_features(creds.get_gensec_features() | gensec.FEATURE_SEAL)
 
         # connect to DCs
-        url_dc = samba.tests.env_get_var_value("DC1")
-        (self.ldb_dc1, self.info_dc1) = samba.tests.connect_samdb_ex(url_dc,
+        self.url_dc1 = samba.tests.env_get_var_value("DC1")
+        (self.ldb_dc1, self.info_dc1) = samba.tests.connect_samdb_ex(self.url_dc1,
                                                                      ldap_only=True)
-        url_dc = samba.tests.env_get_var_value("DC2")
-        (self.ldb_dc2, self.info_dc2) = samba.tests.connect_samdb_ex(url_dc,
+        self.url_dc2 = samba.tests.env_get_var_value("DC2")
+        (self.ldb_dc2, self.info_dc2) = samba.tests.connect_samdb_ex(self.url_dc2,
                                                                      ldap_only=True)
         self.test_ldb_dc = self.ldb_dc1
 
         # cache some of RootDSE props
-        self.schema_dn = self.info_dc1["schemaNamingContext"][0]
-        self.domain_dn = self.info_dc1["defaultNamingContext"][0]
-        self.config_dn = self.info_dc1["configurationNamingContext"][0]
+        self.schema_dn = str(self.info_dc1["schemaNamingContext"][0])
+        self.domain_dn = str(self.info_dc1["defaultNamingContext"][0])
+        self.config_dn = str(self.info_dc1["configurationNamingContext"][0])
         self.forest_level = int(self.info_dc1["forestFunctionality"][0])
 
         # we will need DCs DNS names for 'samba-tool drs' command
-        self.dnsname_dc1 = self.info_dc1["dnsHostName"][0]
-        self.dnsname_dc2 = self.info_dc2["dnsHostName"][0]
+        self.dnsname_dc1 = str(self.info_dc1["dnsHostName"][0])
+        self.dnsname_dc2 = str(self.info_dc2["dnsHostName"][0])
 
         # for debugging the test code
         self._debug = False
@@ -84,7 +85,7 @@ class DrsBaseTestCase(SambaToolCmdTest):
         self.test_ldb_dc = ldb_dc
 
     def _GUID_string(self, guid):
-        return self.test_ldb_dc.schema_format_value("objectGUID", guid)
+        return get_string(self.test_ldb_dc.schema_format_value("objectGUID", guid))
 
     def _ldap_schemaUpdateNow(self, sam_db):
         rec = {"dn": "",
@@ -113,11 +114,15 @@ class DrsBaseTestCase(SambaToolCmdTest):
     def _samba_tool_cmd_list(self, drs_command):
         # make command line credentials string
 
-        ccache_name = self.get_creds_ccache_name()
+        # If test runs on windows then it can provide its own auth string
+        if hasattr(self, 'cmdline_auth'):
+            cmdline_auth = self.cmdline_auth
+        else:
+            ccache_name = self.get_creds_ccache_name()
 
-        # Tunnel the command line credentials down to the
-        # subcommand to avoid a new kinit
-        cmdline_auth = "--krb5-ccache=%s" % ccache_name
+            # Tunnel the command line credentials down to the
+            # subcommand to avoid a new kinit
+            cmdline_auth = "--krb5-ccache=%s" % ccache_name
 
         # bin/samba-tool drs <drs_command> <cmdline_auth>
         return ["drs", drs_command, cmdline_auth]
@@ -383,14 +388,25 @@ class DrsBaseTestCase(SambaToolCmdTest):
         """
         Check that a ctr6 matches the specified parameters.
         """
-        self.assertEqual(ctr6.object_count, len(expected_dns))
+        ctr6_raw_dns = self._get_ctr6_dn_list(ctr6)
+
+        # filter out changes to the RID Set objects, as these can happen
+        # intermittently and mess up the test assertions
+        ctr6_dns = []
+        for dn in ctr6_raw_dns:
+            if "CN=RID Set," in dn or "CN=RID Manager$," in dn:
+                print("Removing {0} from GetNCChanges reply".format(dn))
+            else:
+                ctr6_dns.append(dn)
+
+        self.assertEqual(len(ctr6_dns), len(expected_dns),
+                         "Received unexpected objects (%s)" % ctr6_dns)
+        self.assertEqual(ctr6.object_count, len(ctr6_raw_dns))
         self.assertEqual(ctr6.linked_attributes_count, len(expected_links))
         self.assertEqual(ctr6.more_data, more_data)
         self.assertEqual(ctr6.nc_object_count, nc_object_count)
         self.assertEqual(ctr6.nc_linked_attributes_count, nc_linked_attributes_count)
         self.assertEqual(ctr6.drs_error[0], drs_error)
-
-        ctr6_dns = self._get_ctr6_dn_list(ctr6)
 
         i = 0
         for dn in expected_dns:

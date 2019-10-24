@@ -26,6 +26,7 @@
 #include "../libcli/auth/libcli_auth.h"
 #include "smb_krb5.h"
 #include "libads/kerberos_proto.h"
+#include "libads/krb5_errs.h"
 
 #undef DBGC_CLASS
 #define DBGC_CLASS DBGC_WINBIND
@@ -145,6 +146,9 @@ rekinit:
 							  False, /* no PAC required anymore */
 							  True,
 							  WINBINDD_PAM_AUTH_KRB5_RENEW_TIME,
+							  NULL,
+							  NULL,
+							  NULL,
 							  NULL);
 			gain_root_privilege();
 
@@ -342,6 +346,9 @@ static void krb5_ticket_gain_handler(struct tevent_context *event_ctx,
 					  False, /* no PAC required anymore */
 					  True,
 					  WINBINDD_PAM_AUTH_KRB5_RENEW_TIME,
+					  NULL,
+					  NULL,
+					  NULL,
 					  NULL);
 	gain_root_privilege();
 
