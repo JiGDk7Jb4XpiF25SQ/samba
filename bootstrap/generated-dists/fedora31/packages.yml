@@ -44,7 +44,6 @@ packages:
   - libicu-devel
   - libnsl2-devel
   - libpcap-devel
-  - libsemanage-python
   - libtasn1-devel
   - libtasn1-tools
   - libtirpc-devel
@@ -69,7 +68,6 @@ packages:
   - perl-generators
   - perl-interpreter
   - pkgconfig
-  - policycoreutils-python
   - popt-devel
   - procps-ng
   - psmisc
@@ -78,7 +76,9 @@ packages:
   - python3-devel
   - python3-dns
   - python3-gpg
+  - python3-libsemanage
   - python3-markdown
+  - python3-policycoreutils
   - quota-devel
   - readline-devel
   - redhat-lsb

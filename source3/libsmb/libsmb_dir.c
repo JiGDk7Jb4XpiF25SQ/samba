@@ -170,6 +170,7 @@ static int add_dirplus(SMBCFILE *dir, struct file_info *finfo)
 		return -1;
 	}
 	ZERO_STRUCTP(new_entry);
+	new_entry->ino = finfo->ino;
 
 	info = SMB_MALLOC_P(struct libsmb_file_info);
 	if (info == NULL) {
@@ -350,7 +351,7 @@ dir_list_fn(const char *mnt,
 	return NT_STATUS_OK;
 }
 
-static int
+static NTSTATUS
 net_share_enum_rpc(struct cli_state *cli,
                    void (*fn)(const char *name,
                               uint32_t type,
@@ -377,7 +378,7 @@ net_share_enum_rpc(struct cli_state *cli,
 					     &pipe_hnd);
         if (!NT_STATUS_IS_OK(nt_status)) {
                 DEBUG(1, ("net_share_enum_rpc pipe open fail!\n"));
-                return -1;
+		goto done;
         }
 
 	ZERO_STRUCT(info_ctr);
@@ -400,18 +401,18 @@ net_share_enum_rpc(struct cli_state *cli,
         /* Was it successful? */
 	if (!NT_STATUS_IS_OK(nt_status)) {
                 /*  Nope.  Go clean up. */
-		result = ntstatus_to_werror(nt_status);
 		goto done;
 	}
 
 	if (!W_ERROR_IS_OK(result)) {
                 /*  Nope.  Go clean up. */
+		nt_status = werror_to_ntstatus(result);
 		goto done;
         }
 
 	if (total_entries == 0) {
                 /*  Nope.  Go clean up. */
-		result = WERR_GEN_FAILURE;
+		nt_status = NT_STATUS_NOT_FOUND;
 		goto done;
 	}
 
@@ -436,7 +437,7 @@ done:
         TALLOC_FREE(pipe_hnd);
 
         /* Tell 'em if it worked */
-        return W_ERROR_IS_OK(result) ? 0 : -1;
+        return nt_status;
 }
 
 
@@ -825,7 +826,7 @@ SMBC_opendir_ctx(SMBCCTX *context,
 				}
 			} else if (srv ||
                                    (resolve_name(server, &rem_ss, 0x20, false))) {
-				int rc;
+				NTSTATUS status;
 
                                 /*
                                  * If we hadn't found the server, get one now
@@ -852,22 +853,38 @@ SMBC_opendir_ctx(SMBCCTX *context,
 
                                 /* List the shares ... */
 
-				rc = net_share_enum_rpc(srv->cli,
+				status = net_share_enum_rpc(srv->cli,
 							list_fn,
 							(void *)dir);
-				if (rc != 0 &&
-				    lp_client_min_protocol() <= PROTOCOL_NT1) {
-					rc = cli_RNetShareEnum(srv->cli,
+				if (!NT_STATUS_IS_OK(status) &&
+				    smbXcli_conn_protocol(srv->cli->conn) <=
+						PROTOCOL_NT1) {
+					/*
+					 * Only call cli_RNetShareEnum()
+					 * on SMB1 connections, not SMB2+.
+					 */
+					int rc = cli_RNetShareEnum(srv->cli,
 							       list_fn,
 							       (void *)dir);
+					if (rc != 0) {
+						status = cli_nt_error(srv->cli);
+					} else {
+						status = NT_STATUS_OK;
+					}
 				}
-				if (rc != 0) {
-					errno = cli_errno(srv->cli);
+				if (!NT_STATUS_IS_OK(status)) {
+					/*
+					 * Set cli->raw_status so SMBC_errno()
+					 * will correctly return the error.
+					 */
+					srv->cli->raw_status = status;
 					if (dir != NULL) {
 						SAFE_FREE(dir->fname);
 						SAFE_FREE(dir);
 					}
 					TALLOC_FREE(frame);
+					errno = map_errno_from_nt_status(
+								status);
 					return NULL;
 				}
                         } else {
@@ -1229,6 +1246,105 @@ SMBC_readdirplus_ctx(SMBCCTX *context,
 		errno = ENOENT;
 		return NULL;
 	}
+	dir->dirplus_next = dir->dirplus_next->next;
+
+	/*
+	 * If we are returning file entries, we
+	 * have a duplicate list in dir_list
+	 *
+	 * Update dir_next also so readdir and
+	 * readdirplus are kept in sync.
+	 */
+	if (dir->dir_list) {
+		dir->dir_next = dir->dir_next->next;
+	}
+
+	TALLOC_FREE(frame);
+	return smb_finfo;
+}
+
+/*
+ * Routine to get a directory entry plus a filled in stat structure if
+ * requested.
+ */
+
+const struct libsmb_file_info *SMBC_readdirplus2_ctx(SMBCCTX *context,
+			SMBCFILE *dir,
+			struct stat *st)
+{
+	struct libsmb_file_info *smb_finfo = NULL;
+	struct smbc_dirplus_list *dp_list = NULL;
+	ino_t ino;
+	char *full_pathname = NULL;
+	TALLOC_CTX *frame = NULL;
+
+	/*
+	 * Allow caller to pass in NULL for stat pointer if
+	 * required. This makes this call identical to
+	 * smbc_readdirplus().
+	 */
+
+	if (st == NULL) {
+		return SMBC_readdirplus_ctx(context, dir);
+	}
+
+	frame = talloc_stackframe();
+
+	/* Check that all is ok first ... */
+	if (context == NULL || !context->internal->initialized) {
+		DBG_ERR("Invalid context in SMBC_readdirplus2_ctx()\n");
+		TALLOC_FREE(frame);
+		errno = EINVAL;
+		return NULL;
+	}
+
+	if (dir == NULL ||
+	    SMBC_dlist_contains(context->internal->files,
+					dir) == 0)
+	{
+		DBG_ERR("Invalid dir in SMBC_readdirplus2_ctx()\n");
+		TALLOC_FREE(frame);
+		errno = EBADF;
+		return NULL;
+	}
+
+	dp_list = dir->dirplus_next;
+	if (dp_list == NULL) {
+		TALLOC_FREE(frame);
+		return NULL;
+	}
+
+	ino = (ino_t)dp_list->ino;
+
+	smb_finfo = dp_list->smb_finfo;
+	if (smb_finfo == NULL) {
+		TALLOC_FREE(frame);
+		errno = ENOENT;
+		return NULL;
+	}
+
+	full_pathname = talloc_asprintf(frame,
+				"%s/%s",
+				dir->fname,
+				smb_finfo->name);
+	if (full_pathname == NULL) {
+		TALLOC_FREE(frame);
+		errno = ENOENT;
+		return NULL;
+	}
+
+	setup_stat(st,
+		full_pathname,
+		smb_finfo->size,
+		smb_finfo->attrs,
+		ino,
+		dir->srv->dev,
+		smb_finfo->atime_ts,
+		smb_finfo->ctime_ts,
+		smb_finfo->mtime_ts);
+
+	TALLOC_FREE(full_pathname);
+
 	dir->dirplus_next = dir->dirplus_next->next;
 
 	/*

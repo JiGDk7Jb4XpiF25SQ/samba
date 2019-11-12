@@ -484,7 +484,7 @@ static char *audit_prefix(TALLOC_CTX *ctx, connection_struct *conn)
 	if (!prefix) {
 		return NULL;
 	}
-	result = talloc_sub_advanced(ctx,
+	result = talloc_sub_full(ctx,
 			lp_servicename(talloc_tos(), SNUM(conn)),
 			conn->session_info->unix_info->unix_name,
 			conn->connectpath,
@@ -1875,16 +1875,17 @@ static int smb_full_audit_chflags(vfs_handle_struct *handle,
 static struct file_id smb_full_audit_file_id_create(struct vfs_handle_struct *handle,
 						    const SMB_STRUCT_STAT *sbuf)
 {
-	struct file_id id_zero;
+	struct file_id id_zero = { 0 };
 	struct file_id result;
-
-	ZERO_STRUCT(id_zero);
+	struct file_id_buf idbuf;
 
 	result = SMB_VFS_NEXT_FILE_ID_CREATE(handle, sbuf);
 
 	do_log(SMB_VFS_OP_FILE_ID_CREATE,
 	       !file_id_equal(&id_zero, &result),
-	       handle, "%s", file_id_string_tos(&result));
+	       handle,
+	       "%s",
+	       file_id_str_buf(result, &idbuf));
 
 	return result;
 }

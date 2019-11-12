@@ -254,7 +254,7 @@ NTSTATUS check_path_syntax_posix(char *path)
 }
 
 /****************************************************************************
- Pull a string and check the path allowing a wilcard - provide for error return.
+ Pull a string and check the path allowing a wildcard - provide for error return.
  Passes in posix flag.
 ****************************************************************************/
 
@@ -302,7 +302,7 @@ static size_t srvstr_get_path_wcard_internal(TALLOC_CTX *ctx,
 }
 
 /****************************************************************************
- Pull a string and check the path allowing a wilcard - provide for error return.
+ Pull a string and check the path allowing a wildcard - provide for error return.
 ****************************************************************************/
 
 size_t srvstr_get_path_wcard(TALLOC_CTX *ctx,
@@ -328,7 +328,7 @@ size_t srvstr_get_path_wcard(TALLOC_CTX *ctx,
 }
 
 /****************************************************************************
- Pull a string and check the path allowing a wilcard - provide for error return.
+ Pull a string and check the path allowing a wildcard - provide for error return.
  posix_pathnames version.
 ****************************************************************************/
 
@@ -3643,7 +3643,6 @@ static void send_file_readbraw(connection_struct *conn,
 	 */
 
 	if ( !req_is_in_chain(req) && (nread > 0) && (fsp->base_fsp == NULL) &&
-	    (fsp->wcp == NULL) &&
 	    lp_use_sendfile(SNUM(conn), xconn->smb1.signing_state) ) {
 		ssize_t sendfile_read = -1;
 		char header[4];
@@ -3826,8 +3825,6 @@ void reply_readbraw(struct smb_request *req)
 		END_PROFILE(SMBreadbraw);
 		return;
 	}
-
-	flush_write_cache(fsp, SAMBA_READRAW_FLUSH);
 
 	startpos = IVAL_TO_SMB_OFF_T(req->vwv+1, 0);
 	if(req->wct == 10) {
@@ -4215,7 +4212,6 @@ static void send_file_readX(connection_struct *conn, struct smb_request *req,
 	if (!req_is_in_chain(req) &&
 	    !req->encrypted &&
 	    (fsp->base_fsp == NULL) &&
-	    (fsp->wcp == NULL) &&
 	    lp_use_sendfile(SNUM(conn), xconn->smb1.signing_state) ) {
 		uint8_t headerbuf[smb_size + 12 * 2 + 1 /* padding byte */];
 		DATA_BLOB header;
@@ -5445,8 +5441,6 @@ void reply_lseek(struct smb_request *req)
 	if (!check_fsp(conn, req, fsp)) {
 		return;
 	}
-
-	flush_write_cache(fsp, SAMBA_SEEK_FLUSH);
 
 	mode = SVAL(req->vwv+1, 0) & 3;
 	/* NB. This doesn't use IVAL_TO_SMB_OFF_T as startpos can be signed in this case. */
@@ -6768,6 +6762,7 @@ static void rename_open_files(connection_struct *conn,
 
 	for(fsp = file_find_di_first(conn->sconn, id); fsp;
 	    fsp = file_find_di_next(fsp)) {
+		struct file_id_buf idbuf;
 		/* fsp_name is a relative path under the fsp. To change this for other
 		   sharepaths we need to manipulate relative paths. */
 		/* TODO - create the absolute path and manipulate the newname
@@ -6778,10 +6773,12 @@ static void rename_open_files(connection_struct *conn,
 		if (fsp->name_hash != orig_name_hash) {
 			continue;
 		}
-		DEBUG(10, ("rename_open_files: renaming file %s "
-			   "(file_id %s) from %s -> %s\n", fsp_fnum_dbg(fsp),
-			   file_id_string_tos(&fsp->file_id), fsp_str_dbg(fsp),
-			   smb_fname_str_dbg(smb_fname_dst)));
+		DBG_DEBUG("renaming file %s "
+			  "(file_id %s) from %s -> %s\n",
+			  fsp_fnum_dbg(fsp),
+			  file_id_str_buf(fsp->file_id, &idbuf),
+			  fsp_str_dbg(fsp),
+			  smb_fname_str_dbg(smb_fname_dst));
 
 		status = fsp_set_smb_fname(fsp, smb_fname_dst);
 		if (NT_STATUS_IS_OK(status)) {
@@ -6791,9 +6788,11 @@ static void rename_open_files(connection_struct *conn,
 	}
 
 	if (!did_rename) {
-		DEBUG(10, ("rename_open_files: no open files on file_id %s "
-			   "for %s\n", file_id_string_tos(&id),
-			   smb_fname_str_dbg(smb_fname_dst)));
+		struct file_id_buf idbuf;
+		DBG_DEBUG("no open files on file_id %s "
+			  "for %s\n",
+			  file_id_str_buf(id, &idbuf),
+			  smb_fname_str_dbg(smb_fname_dst));
 	}
 
 	/* Send messages to all smbd's (not ourself) that the name has changed. */

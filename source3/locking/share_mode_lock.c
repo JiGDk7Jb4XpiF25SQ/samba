@@ -177,11 +177,12 @@ static DATA_BLOB memcache_key(const struct file_id *id)
 static void share_mode_memcache_store(struct share_mode_data *d)
 {
 	const DATA_BLOB key = memcache_key(&d->id);
+	struct file_id_buf idbuf;
 
 	DBG_DEBUG("stored entry for file %s seq %"PRIx64" key %s\n",
 		  d->base_name,
 		  d->sequence_number,
-		  file_id_string(talloc_tos(), &d->id));
+		  file_id_str_buf(d->id, &idbuf));
 
 	/* Ensure everything stored in the cache is pristine. */
 	d->modified = false;
@@ -293,6 +294,7 @@ static struct share_mode_data *share_mode_memcache_fetch(TALLOC_CTX *mem_ctx,
 	uint16_t flags;
 	void *ptr;
 	struct file_id id;
+	struct file_id_buf idbuf;
 	DATA_BLOB key;
 
 	/* Ensure this is a locking_key record. */
@@ -307,17 +309,17 @@ static struct share_mode_data *share_mode_memcache_fetch(TALLOC_CTX *mem_ctx,
 			SHARE_MODE_LOCK_CACHE,
 			key);
 	if (ptr == NULL) {
-		DEBUG(10,("failed to find entry for key %s\n",
-			file_id_string(mem_ctx, &id)));
+		DBG_DEBUG("failed to find entry for key %s\n",
+			  file_id_str_buf(id, &idbuf));
 		return NULL;
 	}
 	/* sequence number key is at start of blob. */
 	ndr_err = get_share_mode_blob_header(blob, &sequence_number, &flags);
 	if (ndr_err != NDR_ERR_SUCCESS) {
 		/* Bad blob. Remove entry. */
-		DEBUG(10,("bad blob %u key %s\n",
-			(unsigned int)ndr_err,
-			file_id_string(mem_ctx, &id)));
+		DBG_DEBUG("bad blob %u key %s\n",
+			  (unsigned int)ndr_err,
+			  file_id_str_buf(id, &idbuf));
 		memcache_delete(NULL,
 			SHARE_MODE_LOCK_CACHE,
 			key);
@@ -330,7 +332,7 @@ static struct share_mode_data *share_mode_memcache_fetch(TALLOC_CTX *mem_ctx,
 			  "for key %s\n",
 			  d->sequence_number,
 			  sequence_number,
-			  file_id_string(mem_ctx, &id));
+			  file_id_str_buf(id, &idbuf));
 		/* Cache out of date. Remove entry. */
 		memcache_delete(NULL,
 			SHARE_MODE_LOCK_CACHE,
@@ -358,7 +360,7 @@ static struct share_mode_data *share_mode_memcache_fetch(TALLOC_CTX *mem_ctx,
 	DBG_DEBUG("fetched entry for file %s seq %"PRIx64" key %s\n",
 		  d->base_name,
 		  d->sequence_number,
-		  file_id_string(mem_ctx, &id));
+		  file_id_str_buf(id, &idbuf));
 
 	return d;
 }
@@ -1197,13 +1199,13 @@ bool share_mode_cleanup_disconnected(struct file_id fid,
 	struct share_mode_data *data;
 	bool ret = false;
 	TALLOC_CTX *frame = talloc_stackframe();
+	struct file_id_buf idbuf;
 	bool ok;
 
 	state.lck = get_existing_share_mode_lock(frame, fid);
 	if (state.lck == NULL) {
-		DEBUG(5, ("share_mode_cleanup_disconnected: "
-			  "Could not fetch share mode entry for %s\n",
-			  file_id_string(frame, &fid)));
+		DBG_INFO("Could not fetch share mode entry for %s\n",
+			 file_id_str_buf(fid, &idbuf));
 		goto done;
 	}
 	data = state.lck->data;
@@ -1226,7 +1228,7 @@ bool share_mode_cleanup_disconnected(struct file_id fid,
 			  "with file (file-id='%s', servicepath='%s', "
 			  "base_name='%s%s%s') and open_persistent_id %"PRIu64" "
 			  "==> do not cleanup\n",
-			  file_id_string(frame, &fid),
+			  file_id_str_buf(fid, &idbuf),
 			  data->servicepath,
 			  data->base_name,
 			  (data->stream_name == NULL)
@@ -1242,7 +1244,7 @@ bool share_mode_cleanup_disconnected(struct file_id fid,
 			  "with file (file-id='%s', servicepath='%s', "
 			  "base_name='%s%s%s') and open_persistent_id %"PRIu64" "
 			  "==> do not cleanup\n",
-			  file_id_string(frame, &fid),
+			  file_id_str_buf(fid, &idbuf),
 			  data->servicepath,
 			  data->base_name,
 			  (data->stream_name == NULL)
@@ -1258,7 +1260,7 @@ bool share_mode_cleanup_disconnected(struct file_id fid,
 		  "base_name='%s%s%s') "
 		  "from open_persistent_id %"PRIu64"\n",
 		  data->num_share_modes,
-		  file_id_string(frame, &fid),
+		  file_id_str_buf(fid, &idbuf),
 		  data->servicepath,
 		  data->base_name,
 		  (data->stream_name == NULL)

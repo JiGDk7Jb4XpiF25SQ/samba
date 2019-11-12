@@ -97,6 +97,7 @@ struct smbc_dir_list {
 struct smbc_dirplus_list {
 	struct smbc_dirplus_list *next;
 	struct libsmb_file_info *smb_finfo;
+	uint64_t ino;
 };
 
 /*
@@ -304,6 +305,11 @@ SMBC_readdir_ctx(SMBCCTX *context,
 const struct libsmb_file_info *
 SMBC_readdirplus_ctx(SMBCCTX *context,
                      SMBCFILE *dir);
+
+const struct libsmb_file_info *
+SMBC_readdirplus2_ctx(SMBCCTX *context,
+		SMBCFILE *dir,
+		struct stat *st);
 
 int
 SMBC_getdents_ctx(SMBCCTX *context,
@@ -522,6 +528,16 @@ SMBC_attr_server(TALLOC_CTX *ctx,
 
 
 /* Functions in libsmb_stat.c */
+void setup_stat(struct stat *st,
+		const char *fname,
+		off_t size,
+		int mode,
+		ino_t ino,
+		dev_t dev,
+		struct timespec access_time_ts,
+		struct timespec change_time_ts,
+		struct timespec write_time_ts);
+
 int
 SMBC_stat_ctx(SMBCCTX *context,
               const char *fname,

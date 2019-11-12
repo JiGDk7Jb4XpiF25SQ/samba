@@ -183,12 +183,12 @@ char *talloc_sub_specified(TALLOC_CTX *mem_ctx,
 char *talloc_sub_advanced(TALLOC_CTX *mem_ctx,
 			  const char *servicename, const char *user,
 			  const char *connectpath, gid_t gid,
+			  const char *str);
+char *talloc_sub_full(TALLOC_CTX *mem_ctx,
+			  const char *servicename, const char *user,
+			  const char *connectpath, gid_t gid,
 			  const char *smb_name, const char *domain_name,
 			  const char *str);
-void standard_sub_advanced(const char *servicename, const char *user,
-			   const char *connectpath, gid_t gid,
-			   const char *smb_name, const char *domain_name,
-			   char *str, size_t len);
 
 /* The following definitions come from lib/sysquotas.c  */
 
@@ -399,7 +399,6 @@ uint32_t map_share_mode_to_deny_mode(uint32_t share_access, uint32_t private_opt
 
 #include "lib/util_procid.h"
 
-#define serverid_equal(p1, p2) server_id_equal(p1,p2)
 struct server_id interpret_pid(const char *pid_string);
 bool is_offset_safe(const char *buf_base, size_t buf_len, char *ptr, size_t off);
 char *get_safe_ptr(const char *buf_base, size_t buf_len, char *ptr, size_t off);

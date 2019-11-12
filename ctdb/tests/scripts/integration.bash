@@ -568,59 +568,35 @@ wait_until_node_has_no_ips ()
 
 ctdb_init ()
 {
-    local i
-    for i in $(seq 1 5) ; do
 	ctdb_stop_all >/dev/null 2>&1 || :
-	ctdb_start_all || {
-	    echo "Start failed.  Trying again in a few seconds..."
-	    sleep_for 5
-	    continue
-	}
 
-	wait_until_ready || {
-	    echo "Cluster didn't become ready.  Restarting..."
-	    continue
-	}
+	ctdb_start_all || ctdb_test_error "Cluster start failed"
+
+	wait_until_ready || ctdb_test_error "Cluster didn't become ready"
 
 	echo "Setting RerecoveryTimeout to 1"
 	onnode -pq all "$CTDB setvar RerecoveryTimeout 1"
 
-	# In recent versions of CTDB, forcing a recovery like this
-	# blocks until the recovery is complete.  Hopefully this will
-	# help the cluster to stabilise before a subsequent test.
 	echo "Forcing a recovery..."
-	onnode -q 0 $CTDB recover
+	onnode -q 0 "$CTDB recover"
 	sleep_for 2
 
-	if ! onnode -q any $CTDB_TEST_WRAPPER _cluster_is_recovered ; then
-	    echo "Cluster has gone into recovery again, waiting..."
-	    wait_until 30/2 onnode -q any $CTDB_TEST_WRAPPER _cluster_is_recovered
+	if ! onnode -q all "$CTDB_TEST_WRAPPER _cluster_is_recovered" ; then
+		echo "Cluster has gone into recovery again, waiting..."
+		wait_until 30/2 onnode -q all \
+			   "$CTDB_TEST_WRAPPER _cluster_is_recovered" || \
+			ctdb_test_error "Cluster did not come out of recovery"
 	fi
 
-
-	# Cluster is still healthy.  Good, we're done!
-	if ! onnode 0 $CTDB_TEST_WRAPPER _cluster_is_healthy ; then
-	    echo "Cluster became UNHEALTHY again [$(date)]"
-	    onnode -p all ctdb status -X 2>&1
-	    onnode -p all ctdb scriptstatus 2>&1
-	    echo "Restarting..."
-	    continue
+	if ! onnode 0 "$CTDB_TEST_WRAPPER _cluster_is_healthy" ; then
+		ctdb_test_error "Cluster became UNHEALTHY again [$(date)]"
 	fi
 
 	echo "Doing a sync..."
-	onnode -q 0 $CTDB sync
+	onnode -q 0 "$CTDB sync"
 
 	echo "ctdb is ready"
 	return 0
-    done
-
-    echo "Cluster UNHEALTHY...  too many attempts..."
-    onnode -p all ctdb status -X 2>&1
-    onnode -p all ctdb scriptstatus 2>&1
-
-    # Try to make the calling test fail
-    status=1
-    return 1
 }
 
 ctdb_base_show ()

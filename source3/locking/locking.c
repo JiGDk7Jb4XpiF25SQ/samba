@@ -532,7 +532,7 @@ static bool rename_share_filename_fn(
 	e->name_hash = state->new_name_hash;
 	*modified = true;
 
-	ok = serverid_equal(&e->pid, &state->self);
+	ok = server_id_equal(&e->pid, &state->self);
 	if (ok) {
 		return false;
 	}
@@ -1013,11 +1013,12 @@ bool set_sticky_write_time(struct file_id fileid, struct timespec write_time)
 bool set_write_time(struct file_id fileid, struct timespec write_time)
 {
 	struct share_mode_lock *lck;
+	struct file_id_buf idbuf;
 
-	DEBUG(5,("set_write_time: %s id=%s\n",
+	DBG_INFO("%s id=%s\n",
 		 timestring(talloc_tos(),
 			    convert_timespec_to_time_t(write_time)),
-		 file_id_string_tos(&fileid)));
+		 file_id_str_buf(fileid, &idbuf));
 
 	lck = get_existing_share_mode_lock(talloc_tos(), fileid);
 	if (lck == NULL) {

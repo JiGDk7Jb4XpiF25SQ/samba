@@ -160,7 +160,6 @@ static const struct loadparm_service _sDefault =
 	.min_print_space = 0,
 	.max_print_jobs = 1000,
 	.max_reported_print_jobs = 0,
-	.write_cache_size = 0,
 	.create_mask = 0744,
 	.force_create_mode = 0,
 	.directory_mask = 0755,
@@ -3861,6 +3860,7 @@ static bool lp_load_ex(const char *pszFname,
 	bool bRetval;
 	TALLOC_CTX *frame = talloc_stackframe();
 	struct loadparm_context *lp_ctx;
+	int max_protocol, min_protocol;
 
 	DEBUG(3, ("lp_load_ex: refreshing parameters\n"));
 
@@ -3998,6 +3998,19 @@ static bool lp_load_ex(const char *pszFname,
 	}
 
 	bAllowIncludeRegistry = true;
+
+	/* Check if command line max protocol < min protocol, if so
+	 * report a warning to the user.
+	 */
+	max_protocol = lp_client_max_protocol();
+	min_protocol = lp_client_min_protocol();
+	if (max_protocol < min_protocol) {
+		const char *max_protocolp, *min_protocolp;
+		max_protocolp = lpcfg_get_smb_protocol(max_protocol);
+		min_protocolp = lpcfg_get_smb_protocol(min_protocol);
+		DBG_ERR("Max protocol %s is less than min protocol %s.\n",
+			max_protocolp, min_protocolp);
+	}
 
 	TALLOC_FREE(frame);
 	return (bRetval);

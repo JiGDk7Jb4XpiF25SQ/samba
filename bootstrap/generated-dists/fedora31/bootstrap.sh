@@ -55,7 +55,6 @@ dnf install -y \
     libicu-devel \
     libnsl2-devel \
     libpcap-devel \
-    libsemanage-python \
     libtasn1-devel \
     libtasn1-tools \
     libtirpc-devel \
@@ -80,7 +79,6 @@ dnf install -y \
     perl-generators \
     perl-interpreter \
     pkgconfig \
-    policycoreutils-python \
     popt-devel \
     procps-ng \
     psmisc \
@@ -89,7 +87,9 @@ dnf install -y \
     python3-devel \
     python3-dns \
     python3-gpg \
+    python3-libsemanage \
     python3-markdown \
+    python3-policycoreutils \
     quota-devel \
     readline-devel \
     redhat-lsb \

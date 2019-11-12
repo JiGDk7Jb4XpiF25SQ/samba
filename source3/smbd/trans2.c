@@ -8016,6 +8016,11 @@ static NTSTATUS smb_unix_mknod(connection_struct *conn,
 #endif
 
 	switch (file_type) {
+		/* We can't create other objects here. */
+		case UNIX_TYPE_FILE:
+		case UNIX_TYPE_DIR:
+		case UNIX_TYPE_SYMLINK:
+			return NT_STATUS_ACCESS_DENIED;
 #if defined(S_IFIFO)
 		case UNIX_TYPE_FIFO:
 			unixmode |= S_IFIFO;
@@ -8028,11 +8033,18 @@ static NTSTATUS smb_unix_mknod(connection_struct *conn,
 #endif
 #if defined(S_IFCHR)
 		case UNIX_TYPE_CHARDEV:
+			/* This is only allowed for root. */
+			if (get_current_uid(conn) != sec_initial_uid()) {
+				return NT_STATUS_ACCESS_DENIED;
+			}
 			unixmode |= S_IFCHR;
 			break;
 #endif
 #if defined(S_IFBLK)
 		case UNIX_TYPE_BLKDEV:
+			if (get_current_uid(conn) != sec_initial_uid()) {
+				return NT_STATUS_ACCESS_DENIED;
+			}
 			unixmode |= S_IFBLK;
 			break;
 #endif
@@ -8091,12 +8103,10 @@ static NTSTATUS smb_set_file_unix_basic(connection_struct *conn,
 	uid_t set_owner = (uid_t)SMB_UID_NO_CHANGE;
 	gid_t set_grp = (uid_t)SMB_GID_NO_CHANGE;
 	NTSTATUS status = NT_STATUS_OK;
-	bool delete_on_fail = False;
 	enum perm_type ptype;
 	files_struct *all_fsps = NULL;
 	bool modify_mtime = true;
 	struct file_id id;
-	struct smb_filename *smb_fname_tmp = NULL;
 	SMB_STRUCT_STAT sbuf;
 
 	ZERO_STRUCT(ft);
@@ -8148,42 +8158,10 @@ static NTSTATUS smb_set_file_unix_basic(connection_struct *conn,
 		 * a new info level should be used for mknod. JRA.
 		 */
 
-		status = smb_unix_mknod(conn,
+		return smb_unix_mknod(conn,
 					pdata,
 					total_data,
 					smb_fname);
-		if (!NT_STATUS_IS_OK(status)) {
-			return status;
-		}
-
-		smb_fname_tmp = cp_smb_filename(talloc_tos(), smb_fname);
-		if (smb_fname_tmp == NULL) {
-			return NT_STATUS_NO_MEMORY;
-		}
-
-		if (SMB_VFS_STAT(conn, smb_fname_tmp) != 0) {
-			status = map_nt_error_from_unix(errno);
-			TALLOC_FREE(smb_fname_tmp);
-			SMB_VFS_UNLINKAT(conn,
-				conn->cwd_fsp,
-				smb_fname,
-				0);
-			return status;
-		}
-
-		sbuf = smb_fname_tmp->st;
-		smb_fname = smb_fname_tmp;
-
-		/* Ensure we don't try and change anything else. */
-		raw_unixmode = SMB_MODE_NO_CHANGE;
-		size = get_file_size_stat(&sbuf);
-		ft.atime = sbuf.st_ex_atime;
-		ft.mtime = sbuf.st_ex_mtime;
-		/* 
-		 * We continue here as we might want to change the 
-		 * owner uid/gid.
-		 */
-		delete_on_fail = True;
 	}
 
 #if 1
@@ -8243,12 +8221,6 @@ static NTSTATUS smb_set_file_unix_basic(connection_struct *conn,
 
 		if (ret != 0) {
 			status = map_nt_error_from_unix(errno);
-			if (delete_on_fail) {
-				SMB_VFS_UNLINKAT(conn,
-					conn->cwd_fsp,
-					smb_fname,
-					0);
-			}
 			return status;
 		}
 	}
@@ -8277,26 +8249,22 @@ static NTSTATUS smb_set_file_unix_basic(connection_struct *conn,
 		}
 		if (ret != 0) {
 			status = map_nt_error_from_unix(errno);
-			if (delete_on_fail) {
-				SMB_VFS_UNLINKAT(conn,
-					conn->cwd_fsp,
-					smb_fname,
-					0);
-			}
 			return status;
 		}
 	}
 
 	/* Deal with any size changes. */
 
-	status = smb_set_file_size(conn, req,
-				   fsp,
-				   smb_fname,
-				   &sbuf,
-				   size,
-				   false);
-	if (!NT_STATUS_IS_OK(status)) {
-		return status;
+	if (S_ISREG(sbuf.st_ex_mode)) {
+		status = smb_set_file_size(conn, req,
+					   fsp,
+					   smb_fname,
+					   &sbuf,
+					   size,
+					   false);
+		if (!NT_STATUS_IS_OK(status)) {
+			return status;
+		}
 	}
 
 	/* Deal with any time changes. */

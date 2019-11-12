@@ -225,7 +225,7 @@ static void init_srv_share_info_1(struct pipes_struct *p,
 	char *remark = lp_comment(p->mem_ctx, snum);
 
 	if (remark) {
-		remark = talloc_sub_advanced(
+		remark = talloc_sub_full(
 			p->mem_ctx, lp_servicename(talloc_tos(), snum),
 			get_current_username(), lp_path(talloc_tos(), snum),
 			p->session_info->unix_token->uid, get_current_username(),
@@ -253,7 +253,7 @@ static void init_srv_share_info_2(struct pipes_struct *p,
 
 	remark = lp_comment(p->mem_ctx, snum);
 	if (remark) {
-		remark = talloc_sub_advanced(
+		remark = talloc_sub_full(
 			p->mem_ctx, lp_servicename(talloc_tos(), snum),
 			get_current_username(), lp_path(talloc_tos(), snum),
 			p->session_info->unix_token->uid, get_current_username(),
@@ -318,7 +318,7 @@ static void init_srv_share_info_501(struct pipes_struct *p,
 	char *remark = lp_comment(p->mem_ctx, snum);
 
 	if (remark) {
-		remark = talloc_sub_advanced(
+		remark = talloc_sub_full(
 			p->mem_ctx, lp_servicename(talloc_tos(), snum),
 			get_current_username(), lp_path(talloc_tos(), snum),
 			p->session_info->unix_token->uid, get_current_username(),
@@ -352,7 +352,7 @@ static void init_srv_share_info_502(struct pipes_struct *p,
 	char *remark = lp_comment(ctx, snum);
 
 	if (remark) {
-		remark = talloc_sub_advanced(
+		remark = talloc_sub_full(
 			p->mem_ctx, lp_servicename(talloc_tos(), snum),
 			get_current_username(), lp_path(talloc_tos(), snum),
 			p->session_info->unix_token->uid, get_current_username(),
@@ -393,7 +393,7 @@ static void init_srv_share_info_1004(struct pipes_struct *p,
 	char *remark = lp_comment(p->mem_ctx, snum);
 
 	if (remark) {
-		remark = talloc_sub_advanced(
+		remark = talloc_sub_full(
 			p->mem_ctx, lp_servicename(talloc_tos(), snum),
 			get_current_username(), lp_path(talloc_tos(), snum),
 			p->session_info->unix_token->uid, get_current_username(),
@@ -862,7 +862,7 @@ static int count_sess_files_fn(struct file_id fid,
 		*/
 		struct sessionid *sess = &info->session_list[rh + i];
 		if ((e->uid == sess->uid) &&
-		     serverid_equal(&e->pid, &sess->pid)) {
+		     server_id_equal(&e->pid, &sess->pid)) {
 
 			info->ctr->array[i].num_open++;
 			return 0;
@@ -981,7 +981,8 @@ static int share_file_fn(struct file_id fid,
 
 	if (strequal(d->servicepath, sfs->in_sharepath)) {
 		for (i=0; i < sfs->resp_entries; i++) {
-			if (serverid_equal(&e->pid, &sfs->svrid_arr[offset + i])) {
+			if (server_id_equal(
+				    &e->pid, &sfs->svrid_arr[offset + i])) {
 				sfs->netconn_arr[i].num_open ++;
 				return 0;
 			}

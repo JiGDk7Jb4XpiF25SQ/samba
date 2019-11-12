@@ -1451,8 +1451,6 @@ static NTSTATUS open_file(files_struct *fsp,
 		fsp->aio_write_behind = True;
 	}
 
-	fsp->wcp = NULL; /* Write cache pointer. */
-
 	DEBUG(2,("%s opened file %s read=%s write=%s (numopen=%d)\n",
 		 conn->session_info->unix_info->unix_name,
 		 smb_fname_str_dbg(smb_fname),
@@ -1566,7 +1564,7 @@ static bool validate_my_share_entries_fn(
 	struct validate_my_share_entries_state *state = private_data;
 	files_struct *fsp;
 
-	if (!serverid_equal(&state->self, &e->pid)) {
+	if (!server_id_equal(&state->self, &e->pid)) {
 		return false;
 	}
 

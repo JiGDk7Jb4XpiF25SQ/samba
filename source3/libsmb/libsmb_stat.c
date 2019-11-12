@@ -32,16 +32,11 @@
  * Generate an inode number from file name for those things that need it
  */
 
-static ino_t
-generate_inode(SMBCCTX *context,
-               const char *name)
+static ino_t generate_inode(const char *name)
 {
-	if (!context || !context->internal->initialized) {
-		errno = EINVAL;
-		return -1;
+	if (name == NULL) {
+		return (ino_t)-1;
 	}
-
-	if (!*name) return 2; /* FIXME, why 2 ??? */
 	return (ino_t)str_checksum(name);
 }
 
@@ -50,15 +45,16 @@ generate_inode(SMBCCTX *context,
  * fstat below.
  */
 
-static int
-setup_stat(SMBCCTX *context,
-           struct stat *st,
-           const char *fname,
-           off_t size,
-           int mode)
+void setup_stat(struct stat *st,
+		const char *fname,
+		off_t size,
+		int mode,
+		ino_t ino,
+		dev_t dev,
+		struct timespec access_time_ts,
+		struct timespec change_time_ts,
+		struct timespec write_time_ts)
 {
-	TALLOC_CTX *frame = talloc_stackframe();
-
 	st->st_mode = 0;
 
 	if (IS_DOS_DIR(mode)) {
@@ -67,10 +63,18 @@ setup_stat(SMBCCTX *context,
 		st->st_mode = SMBC_FILE_MODE;
 	}
 
-	if (IS_DOS_ARCHIVE(mode)) st->st_mode |= S_IXUSR;
-	if (IS_DOS_SYSTEM(mode)) st->st_mode |= S_IXGRP;
-	if (IS_DOS_HIDDEN(mode)) st->st_mode |= S_IXOTH;
-	if (!IS_DOS_READONLY(mode)) st->st_mode |= S_IWUSR;
+	if (IS_DOS_ARCHIVE(mode)) {
+		st->st_mode |= S_IXUSR;
+	}
+	if (IS_DOS_SYSTEM(mode)) {
+		st->st_mode |= S_IXGRP;
+	}
+	if (IS_DOS_HIDDEN(mode)) {
+		st->st_mode |= S_IXOTH;
+	}
+	if (!IS_DOS_READONLY(mode)) {
+		st->st_mode |= S_IWUSR;
+	}
 
 	st->st_size = size;
 #ifdef HAVE_STAT_ST_BLKSIZE
@@ -91,12 +95,16 @@ setup_stat(SMBCCTX *context,
 		st->st_nlink = 1;
 	}
 
-	if (st->st_ino == 0) {
-		st->st_ino = generate_inode(context, fname);
+	if (ino != 0) {
+		st->st_ino = ino;
+	} else {
+		st->st_ino = generate_inode(fname);
 	}
 
-	TALLOC_FREE(frame);
-	return True;  /* FIXME: Is this needed ? */
+	st->st_dev = dev;
+	st->st_atime = convert_timespec_to_time_t(access_time_ts);
+	st->st_ctime = convert_timespec_to_time_t(change_time_ts);
+	st->st_mtime = convert_timespec_to_time_t(write_time_ts);
 }
 
 /*
@@ -181,14 +189,15 @@ SMBC_stat_ctx(SMBCCTX *context,
 		return -1;
 	}
 
-	st->st_ino = ino;
-
-	setup_stat(context, st, fname, size, mode);
-
-	st->st_atime = convert_timespec_to_time_t(access_time_ts);
-	st->st_ctime = convert_timespec_to_time_t(change_time_ts);
-	st->st_mtime = convert_timespec_to_time_t(write_time_ts);
-	st->st_dev   = srv->dev;
+	setup_stat(st,
+		fname,
+		size,
+		mode,
+		ino,
+		srv->dev,
+		access_time_ts,
+		change_time_ts,
+		write_time_ts);
 
 	TALLOC_FREE(frame);
 	return 0;
@@ -286,14 +295,15 @@ SMBC_fstat_ctx(SMBCCTX *context,
 		write_time_ts = convert_time_t_to_timespec(write_time);
 	}
 
-	st->st_ino = ino;
-
-	setup_stat(context, st, file->fname, size, mode);
-
-	st->st_atime = convert_timespec_to_time_t(access_time_ts);
-	st->st_ctime = convert_timespec_to_time_t(change_time_ts);
-	st->st_mtime = convert_timespec_to_time_t(write_time_ts);
-	st->st_dev = file->srv->dev;
+	setup_stat(st,
+		file->fname,
+		size,
+		mode,
+		ino,
+		file->srv->dev,
+		access_time_ts,
+		change_time_ts,
+		write_time_ts);
 
 	TALLOC_FREE(frame);
 	return 0;

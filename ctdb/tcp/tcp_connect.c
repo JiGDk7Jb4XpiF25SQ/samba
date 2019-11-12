@@ -93,8 +93,7 @@ static void ctdb_node_connect_write(struct tevent_context *ev,
 	int one = 1;
 	int ret;
 
-	talloc_free(tnode->connect_te);
-	tnode->connect_te = NULL;
+	TALLOC_FREE(tnode->connect_te);
 
 	ret = getsockopt(tnode->out_fd, SOL_SOCKET, SO_ERROR, &error, &len);
 	if (ret != 0 || error != 0) {
@@ -105,8 +104,7 @@ static void ctdb_node_connect_write(struct tevent_context *ev,
 		return;
 	}
 
-	talloc_free(tnode->connect_fde);
-	tnode->connect_fde = NULL;
+	TALLOC_FREE(tnode->connect_fde);
 
 	ret = setsockopt(tnode->out_fd,
 			 IPPROTO_TCP,
@@ -153,7 +151,7 @@ static void ctdb_node_connect_write(struct tevent_context *ev,
 	 * as connected, but only if the corresponding listening
 	 * socket is also connected
 	 */
-	if (tnode->in_fd != -1) {
+	if (tnode->in_queue != NULL) {
 		node->ctdb->upcalls->node_connected(node);
 	}
 }
@@ -312,6 +310,13 @@ static void ctdb_listen_event(struct tevent_context *ev, struct tevent_fd *fde,
 		return;
 	}
 
+	if (tnode->in_queue != NULL) {
+		DBG_ERR("Incoming queue active, rejecting connection from %s\n",
+			ctdb_addr_to_str(&addr));
+		close(fd);
+		return;
+	}
+
 	ret = set_blocking(fd, false);
 	if (ret != 0) {
 		DBG_ERR("Failed to set socket non-blocking (%s)\n",
@@ -347,8 +352,6 @@ static void ctdb_listen_event(struct tevent_context *ev, struct tevent_fd *fde,
 		close(fd);
 		return;
 	}
-
-	tnode->in_fd = fd;
 
        /*
 	* Mark the connecting node as connected, but only if the

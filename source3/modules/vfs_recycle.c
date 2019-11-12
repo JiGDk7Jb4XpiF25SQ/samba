@@ -282,7 +282,7 @@ static bool recycle_create_dir(vfs_handle_struct *handle, const char *dname)
 		}
 	}
 
-	/* Create directory tree if neccessary */
+	/* Create directory tree if necessary */
 	for(token = strtok_r(tok_str, "/", &saveptr); token;
 	    token = strtok_r(NULL, "/", &saveptr)) {
 		if (strlcat(new_dir, token, len+1) >= len+1) {
@@ -467,7 +467,7 @@ static int recycle_unlink_internal(vfs_handle_struct *handle,
 	bool exist;
 	int rc = -1;
 
-	repository = talloc_sub_advanced(NULL, lp_servicename(talloc_tos(), SNUM(conn)),
+	repository = talloc_sub_full(NULL, lp_servicename(talloc_tos(), SNUM(conn)),
 					conn->session_info->unix_info->unix_name,
 					conn->connectpath,
 					conn->session_info->unix_token->gid,

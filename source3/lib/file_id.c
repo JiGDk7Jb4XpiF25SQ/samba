@@ -31,14 +31,6 @@ bool file_id_equal(const struct file_id *id1, const struct file_id *id2)
 	    id1->extid == id2->extid;
 }
 
-/*
-  a static-like (on talloc_tos()) string for a file_id structure
- */
-const char *file_id_string_tos(const struct file_id *id)
-{
-	return file_id_string(talloc_tos(), id);
-}
-
 char *file_id_str_buf(struct file_id fid, struct file_id_buf *dst)
 {
 	snprintf(dst->buf,
@@ -48,17 +40,6 @@ char *file_id_str_buf(struct file_id fid, struct file_id_buf *dst)
 		 fid.inode,
 		 fid.extid);
 	return dst->buf;
-}
-
-/*
-  an allocated string for a file_id structure
- */
-const char *file_id_string(TALLOC_CTX *mem_ctx, const struct file_id *id)
-{
-	struct file_id_buf buf;
-	char *result = talloc_strdup(mem_ctx, file_id_str_buf(*id, &buf));
-	SMB_ASSERT(result != NULL);
-	return result;
 }
 
 /*

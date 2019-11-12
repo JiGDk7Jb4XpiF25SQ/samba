@@ -17,9 +17,13 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include "includes.h"
+#include "replace.h"
 #include "system/filesys.h"
 #include "lib/util/server_id.h"
+#include "lib/util/debug.h"
+#include "lib/util/talloc_stack.h"
+#include "lib/util/samba_util.h"
+#include "lib/util_path.h"
 #include "dbwrap/dbwrap.h"
 #include "dbwrap/dbwrap_open.h"
 #include "dbwrap/dbwrap_watch.h"
@@ -244,7 +248,7 @@ static NTSTATUS g_lock_trylock(struct db_record *rec, struct server_id self,
 
 		g_lock_get_rec(&lck, i, &lock);
 
-		if (serverid_equal(&self, &lock.pid)) {
+		if (server_id_equal(&self, &lock.pid)) {
 			if (lock.lock_type == type) {
 				status = NT_STATUS_WAS_LOCKED;
 				goto done;
@@ -405,7 +409,7 @@ struct tevent_req *g_lock_lock_send(TALLOC_CTX *mem_ctx,
 
 	if (!tevent_req_set_endtime(
 		    fn_state.watch_req, state->ev,
-		    timeval_current_ofs(5 + sys_random() % 5, 0))) {
+		    timeval_current_ofs(5 + generate_random() % 5, 0))) {
 		return tevent_req_post(req, ev);
 	}
 	tevent_req_set_callback(fn_state.watch_req, g_lock_lock_retry, req);
@@ -458,7 +462,7 @@ static void g_lock_lock_retry(struct tevent_req *subreq)
 
 	if (!tevent_req_set_endtime(
 		    fn_state.watch_req, state->ev,
-		    timeval_current_ofs(5 + sys_random() % 5, 0))) {
+		    timeval_current_ofs(5 + generate_random() % 5, 0))) {
 		return;
 	}
 	tevent_req_set_callback(fn_state.watch_req, g_lock_lock_retry, req);
@@ -528,7 +532,7 @@ static void g_lock_unlock_fn(struct db_record *rec,
 	for (i=0; i<lck.num_recs; i++) {
 		struct g_lock_rec lockrec;
 		g_lock_get_rec(&lck, i, &lockrec);
-		if (serverid_equal(&state->self, &lockrec.pid)) {
+		if (server_id_equal(&state->self, &lockrec.pid)) {
 			break;
 		}
 	}
@@ -601,7 +605,7 @@ static void g_lock_write_data_fn(struct db_record *rec,
 		struct g_lock_rec lockrec;
 		g_lock_get_rec(&lck, i, &lockrec);
 		if ((lockrec.lock_type == G_LOCK_WRITE) &&
-		    serverid_equal(&state->self, &lockrec.pid)) {
+		    server_id_equal(&state->self, &lockrec.pid)) {
 			break;
 		}
 	}
@@ -749,68 +753,4 @@ NTSTATUS g_lock_dump(struct g_lock_ctx *ctx, TDB_DATA key,
 		return state.status;
 	}
 	return NT_STATUS_OK;
-}
-
-static bool g_lock_init_all(TALLOC_CTX *mem_ctx,
-			    struct tevent_context **pev,
-			    struct messaging_context **pmsg,
-			    struct g_lock_ctx **pg_ctx)
-{
-	struct tevent_context *ev = NULL;
-	struct messaging_context *msg = NULL;
-	struct g_lock_ctx *g_ctx = NULL;
-
-	ev = samba_tevent_context_init(mem_ctx);
-	if (ev == NULL) {
-		d_fprintf(stderr, "ERROR: could not init event context\n");
-		goto fail;
-	}
-	msg = messaging_init(mem_ctx, ev);
-	if (msg == NULL) {
-		d_fprintf(stderr, "ERROR: could not init messaging context\n");
-		goto fail;
-	}
-	g_ctx = g_lock_ctx_init(mem_ctx, msg);
-	if (g_ctx == NULL) {
-		d_fprintf(stderr, "ERROR: could not init g_lock context\n");
-		goto fail;
-	}
-
-	*pev = ev;
-	*pmsg = msg;
-	*pg_ctx = g_ctx;
-	return true;
-fail:
-	TALLOC_FREE(g_ctx);
-	TALLOC_FREE(msg);
-	TALLOC_FREE(ev);
-	return false;
-}
-
-NTSTATUS g_lock_do(TDB_DATA key, enum g_lock_type lock_type,
-		   struct timeval timeout,
-		   void (*fn)(void *private_data), void *private_data)
-{
-	struct tevent_context *ev = NULL;
-	struct messaging_context *msg = NULL;
-	struct g_lock_ctx *g_ctx = NULL;
-	NTSTATUS status;
-
-	if (!g_lock_init_all(talloc_tos(), &ev, &msg, &g_ctx)) {
-		status = NT_STATUS_ACCESS_DENIED;
-		goto done;
-	}
-
-	status = g_lock_lock(g_ctx, key, lock_type, timeout);
-	if (!NT_STATUS_IS_OK(status)) {
-		goto done;
-	}
-	fn(private_data);
-	g_lock_unlock(g_ctx, key);
-
-done:
-	TALLOC_FREE(g_ctx);
-	TALLOC_FREE(msg);
-	TALLOC_FREE(ev);
-	return status;
 }

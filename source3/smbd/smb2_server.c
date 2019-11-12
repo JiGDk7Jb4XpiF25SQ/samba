@@ -1600,15 +1600,11 @@ static void smbd_smb2_request_pending_timer(struct tevent_context *ev,
 	uint8_t *outhdr = NULL;
 	const uint8_t *inhdr = NULL;
 	uint8_t *tf = NULL;
-	size_t tf_len = 0;
 	uint8_t *hdr = NULL;
 	uint8_t *body = NULL;
 	uint8_t *dyn = NULL;
 	uint32_t flags = 0;
-	uint64_t session_id = 0;
 	uint64_t message_id = 0;
-	uint64_t nonce_high = 0;
-	uint64_t nonce_low = 0;
 	uint64_t async_id = 0;
 	NTSTATUS status;
 	bool ok;
@@ -1620,7 +1616,6 @@ static void smbd_smb2_request_pending_timer(struct tevent_context *ev,
 	outhdr = SMBD_SMB2_OUT_HDR_PTR(req);
 	flags = IVAL(outhdr, SMB2_HDR_FLAGS);
 	message_id = BVAL(outhdr, SMB2_HDR_MESSAGE_ID);
-	session_id = BVAL(outhdr, SMB2_HDR_SESSION_ID);
 
 	async_id = message_id; /* keep it simple for now... */
 
@@ -1646,13 +1641,16 @@ static void smbd_smb2_request_pending_timer(struct tevent_context *ev,
 	}
 
 	tf = state->buf + NBT_HDR_SIZE;
-	tf_len = SMB2_TF_HDR_SIZE;
 
 	hdr = tf + SMB2_TF_HDR_SIZE;
 	body = hdr + SMB2_HDR_BODY;
 	dyn = body + 8;
 
 	if (req->do_encryption) {
+		uint64_t nonce_high = 0;
+		uint64_t nonce_low = 0;
+		uint64_t session_id = req->session->global->session_wire_id;
+
 		status = smb2_get_new_nonce(req->session,
 					    &nonce_high,
 					    &nonce_low);
@@ -1661,12 +1659,12 @@ static void smbd_smb2_request_pending_timer(struct tevent_context *ev,
 							 nt_errstr(status));
 			return;
 		}
-	}
 
-	SIVAL(tf, SMB2_TF_PROTOCOL_ID, SMB2_TF_MAGIC);
-	SBVAL(tf, SMB2_TF_NONCE+0, nonce_low);
-	SBVAL(tf, SMB2_TF_NONCE+8, nonce_high);
-	SBVAL(tf, SMB2_TF_SESSION_ID, session_id);
+		SIVAL(tf, SMB2_TF_PROTOCOL_ID, SMB2_TF_MAGIC);
+		SBVAL(tf, SMB2_TF_NONCE+0, nonce_low);
+		SBVAL(tf, SMB2_TF_NONCE+8, nonce_high);
+		SBVAL(tf, SMB2_TF_SESSION_ID, session_id);
+	}
 
 	SIVAL(hdr, SMB2_HDR_PROTOCOL_ID, SMB2_MAGIC);
 	SSVAL(hdr, SMB2_HDR_LENGTH, SMB2_HDR_BODY);
@@ -1696,7 +1694,8 @@ static void smbd_smb2_request_pending_timer(struct tevent_context *ev,
 
 	if (req->do_encryption) {
 		state->vector[1+SMBD_SMB2_TF_IOV_OFS].iov_base   = tf;
-		state->vector[1+SMBD_SMB2_TF_IOV_OFS].iov_len    = tf_len;
+		state->vector[1+SMBD_SMB2_TF_IOV_OFS].iov_len    =
+							SMB2_TF_HDR_SIZE;
 	} else {
 		state->vector[1+SMBD_SMB2_TF_IOV_OFS].iov_base   = NULL;
 		state->vector[1+SMBD_SMB2_TF_IOV_OFS].iov_len    = 0;
@@ -3148,13 +3147,20 @@ NTSTATUS smbd_smb2_request_done_ex(struct smbd_smb2_request *req,
 	struct iovec *outbody_v;
 	struct iovec *outdyn_v;
 	uint32_t next_command_ofs;
+	uint64_t mid;
 
-	DEBUG(10,("smbd_smb2_request_done_ex: "
-		  "idx[%d] status[%s] body[%u] dyn[%s:%u] at %s\n",
-		  req->current_idx, nt_errstr(status), (unsigned int)body.length,
-		  dyn ? "yes": "no",
+	outhdr = SMBD_SMB2_OUT_HDR_PTR(req);
+	mid = BVAL(outhdr, SMB2_HDR_MESSAGE_ID);
+
+	DBG_DEBUG("mid [%"PRIu64"] idx[%d] status[%s] "
+		  "body[%u] dyn[%s:%u] at %s\n",
+		  mid,
+		  req->current_idx,
+		  nt_errstr(status),
+		  (unsigned int)body.length,
+		  dyn ? "yes" : "no",
 		  (unsigned int)(dyn ? dyn->length : 0),
-		  location));
+		  location);
 
 	if (body.length < 2) {
 		return smbd_smb2_request_error(req, NT_STATUS_INTERNAL_ERROR);
@@ -3164,7 +3170,6 @@ NTSTATUS smbd_smb2_request_done_ex(struct smbd_smb2_request *req,
 		return smbd_smb2_request_error(req, NT_STATUS_INTERNAL_ERROR);
 	}
 
-	outhdr = SMBD_SMB2_OUT_HDR_PTR(req);
 	outbody_v = SMBD_SMB2_OUT_BODY_IOV(req);
 	outdyn_v = SMBD_SMB2_OUT_DYN_IOV(req);
 

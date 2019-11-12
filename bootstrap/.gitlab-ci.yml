@@ -101,14 +101,14 @@ debian8:
 debian7:
   extends: .build_image_template_force_broken
 
+fedora31:
+  extends: .build_image_template
+
 fedora30:
   extends: .build_image_template
 
 fedora29:
   extends: .build_image_template
-
-fedora28:
-  extends: .build_image_template_force_broken
 
 centos8:
   extends: .build_image_template

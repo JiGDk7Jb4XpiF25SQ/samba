@@ -58,6 +58,7 @@ NTSTATUS set_file_oplock(files_struct *fsp)
 	struct kernel_oplocks *koplocks = sconn->oplocks.kernel_ops;
 	bool use_kernel = lp_kernel_oplocks(SNUM(fsp->conn)) &&
 			(koplocks != NULL);
+	struct file_id_buf buf;
 
 	if (fsp->oplock_type == LEVEL_II_OPLOCK && use_kernel) {
 		DEBUG(10, ("Refusing level2 oplock, kernel oplocks "
@@ -82,7 +83,7 @@ NTSTATUS set_file_oplock(files_struct *fsp)
 	DBG_INFO("granted oplock on file %s, %s/%"PRIu64", "
 		 "tv_sec = %x, tv_usec = %x\n",
 		 fsp_str_dbg(fsp),
-		 file_id_string_tos(&fsp->file_id),
+		 file_id_str_buf(fsp->file_id, &buf),
 		 fsp->fh->gen_id,
 		 (int)fsp->open_time.tv_sec,
 		 (int)fsp->open_time.tv_usec);
@@ -138,9 +139,6 @@ static void release_file_oplock(files_struct *fsp)
 	fsp->oplock_type = NO_OPLOCK;
 	fsp->sent_oplock_break = NO_BREAK_SENT;
 
-	flush_write_cache(fsp, SAMBA_OPLOCK_RELEASE_FLUSH);
-	delete_write_cache(fsp);
-
 	TALLOC_FREE(fsp->oplock_timeout);
 }
 
@@ -167,9 +165,6 @@ static void downgrade_file_oplock(files_struct *fsp)
 	sconn->oplocks.exclusive_open--;
 	sconn->oplocks.level_II_open++;
 	fsp->sent_oplock_break = NO_BREAK_SENT;
-
-	flush_write_cache(fsp, SAMBA_OPLOCK_RELEASE_FLUSH);
-	delete_write_cache(fsp);
 
 	TALLOC_FREE(fsp->oplock_timeout);
 }
@@ -219,10 +214,12 @@ bool remove_oplock(files_struct *fsp)
 
 	ret = remove_share_oplock(lck, fsp);
 	if (!ret) {
+		struct file_id_buf buf;
+
 		DBG_ERR("failed to remove share oplock for "
 			"file %s, %s, %s\n",
 			fsp_str_dbg(fsp), fsp_fnum_dbg(fsp),
-			file_id_string_tos(&fsp->file_id));
+			file_id_str_buf(fsp->file_id, &buf));
 	}
 	release_file_oplock(fsp);
 
@@ -249,10 +246,12 @@ bool downgrade_oplock(files_struct *fsp)
 	}
 	ret = downgrade_share_oplock(lck, fsp);
 	if (!ret) {
-		DEBUG(0,("downgrade_oplock: failed to downgrade share oplock "
-			 "for file %s, %s, file_id %s\n",
-			 fsp_str_dbg(fsp), fsp_fnum_dbg(fsp),
-			 file_id_string_tos(&fsp->file_id)));
+		struct file_id_buf idbuf;
+		DBG_ERR("failed to downgrade share oplock "
+			"for file %s, %s, file_id %s\n",
+			fsp_str_dbg(fsp),
+			fsp_fnum_dbg(fsp),
+			file_id_str_buf(fsp->file_id, &idbuf));
 	}
 	downgrade_file_oplock(fsp);
 
@@ -475,9 +474,11 @@ NTSTATUS downgrade_lease(struct smbXsrv_connection *xconn,
 	uint16_t lease_version, epoch;
 	NTSTATUS status;
 	uint32_t i;
+	struct file_id_buf idbuf;
 
-	DEBUG(10, ("%s: Downgrading %s to %x\n", __func__,
-		   file_id_string_tos(&id), (unsigned)lease_state));
+	DBG_DEBUG("Downgrading %s to %"PRIu32"\n",
+		  file_id_str_buf(id, &idbuf),
+		  lease_state);
 
 	lck = get_existing_share_mode_lock(talloc_tos(), id);
 	if (lck == NULL) {
@@ -647,8 +648,10 @@ NTSTATUS downgrade_lease(struct smbXsrv_connection *xconn,
 		}
 	}
 
-	DEBUG(10, ("%s: Downgrading %s to %x => %s\n", __func__,
-		   file_id_string_tos(&id), (unsigned)lease_state, nt_errstr(status)));
+	DBG_DEBUG("Downgrading %s to %"PRIu32" => %s\n",
+		  file_id_str_buf(id, &idbuf),
+		  lease_state,
+		  nt_errstr(status));
 
 	/*
 	 * No, we did not modify the share mode array. We did modify
@@ -661,8 +664,11 @@ NTSTATUS downgrade_lease(struct smbXsrv_connection *xconn,
 	fsps_lease_update(sconn, &id, key);
 
 	TALLOC_FREE(lck);
-	DEBUG(10, ("%s: Downgrading %s to %x => %s\n", __func__,
-		   file_id_string_tos(&id), (unsigned)lease_state, nt_errstr(status)));
+
+	DBG_DEBUG("Downgrading %s to %"PRIu32" => %s\n",
+		  file_id_str_buf(id, &idbuf),
+		  lease_state,
+		  nt_errstr(status));
 
 	/*
 	 * Dynamic share case. Ensure other opens are copies.
@@ -677,8 +683,10 @@ NTSTATUS downgrade_lease(struct smbXsrv_connection *xconn,
 
 		fsps_lease_update(sconn, &ids[i], key);
 
-		DEBUG(10, ("%s: Downgrading %s to %x => %s\n", __func__,
-			file_id_string_tos(&ids[i]), (unsigned)lease_state, nt_errstr(status)));
+		DBG_DEBUG("Downgrading %s to %"PRIu32" => %s\n",
+			  file_id_str_buf(ids[i], &idbuf),
+			  lease_state,
+			  nt_errstr(status));
 
 		TALLOC_FREE(lck);
 	}
@@ -730,12 +738,14 @@ static files_struct *initial_break_processing(
 	unsigned long file_id)
 {
 	files_struct *fsp = NULL;
+	struct file_id_buf idbuf;
 
-	DEBUG(3, ("initial_break_processing: called for %s/%u\n"
-		  "Current oplocks_open (exclusive = %d, levelII = %d)\n",
-		  file_id_string_tos(&id), (int)file_id,
-		  sconn->oplocks.exclusive_open,
-		  sconn->oplocks.level_II_open));
+	DBG_NOTICE("called for %s/%u\n"
+		   "Current oplocks_open (exclusive = %d, levelII = %d)\n",
+		   file_id_str_buf(id, &idbuf),
+		   (int)file_id,
+		   sconn->oplocks.exclusive_open,
+		   sconn->oplocks.level_II_open);
 
 	/*
 	 * We need to search the file open table for the
@@ -747,9 +757,11 @@ static files_struct *initial_break_processing(
 
 	if(fsp == NULL) {
 		/* The file could have been closed in the meantime - return success. */
-		DEBUG(3, ("initial_break_processing: cannot find open file "
-			  "with file_id %s gen_id = %lu, allowing break to "
-			  "succeed.\n", file_id_string_tos(&id), file_id));
+		DBG_NOTICE("cannot find open file "
+			   "with file_id %s gen_id = %lu, allowing break to "
+			   "succeed.\n",
+			   file_id_str_buf(id, &idbuf),
+			   file_id);
 		return NULL;
 	}
 
@@ -768,7 +780,7 @@ static files_struct *initial_break_processing(
 			   "has no oplock. "
 			   "Allowing break to succeed regardless.\n",
 			   fsp_str_dbg(fsp),
-			   file_id_string_tos(&id),
+			   file_id_str_buf(id, &idbuf),
 			   fsp->fh->gen_id);
 		return NULL;
 	}
@@ -1021,9 +1033,10 @@ static void process_oplock_break_message(struct messaging_context *msg_ctx,
 	}
 
 	if ((break_from == SMB2_LEASE_NONE) && !break_needed) {
-		DEBUG(3, ("Already downgraded oplock to none on %s: %s\n",
-			  file_id_string_tos(&fsp->file_id),
-			  fsp_str_dbg(fsp)));
+		struct file_id_buf idbuf;
+		DBG_NOTICE("Already downgraded oplock to none on %s: %s\n",
+			   file_id_str_buf(fsp->file_id, &idbuf),
+			   fsp_str_dbg(fsp));
 		return;
 	}
 
@@ -1031,16 +1044,17 @@ static void process_oplock_break_message(struct messaging_context *msg_ctx,
 		   (unsigned)break_from, (unsigned)break_to));
 
 	if ((break_from == break_to) && !break_needed) {
-		DEBUG(3, ("Already downgraded oplock to %u on %s: %s\n",
-			  (unsigned)break_to,
-			  file_id_string_tos(&fsp->file_id),
-			  fsp_str_dbg(fsp)));
+		struct file_id_buf idbuf;
+		DBG_NOTICE("Already downgraded oplock to %u on %s: %s\n",
+			   (unsigned)break_to,
+			   file_id_str_buf(fsp->file_id, &idbuf),
+			   fsp_str_dbg(fsp));
 		return;
 	}
 
 	/* Need to wait before sending a break
 	   message if we sent ourselves this message. */
-	if (serverid_equal(&self, &src)) {
+	if (server_id_equal(&self, &src)) {
 		wait_before_sending_break();
 	}
 
@@ -1084,6 +1098,7 @@ static void process_kernel_oplock_break(struct messaging_context *msg_ctx,
 					DATA_BLOB *data)
 {
 	struct file_id id;
+	struct file_id_buf idbuf;
 	unsigned long file_id;
 	files_struct *fsp;
 	struct smbd_server_connection *sconn =
@@ -1105,9 +1120,10 @@ static void process_kernel_oplock_break(struct messaging_context *msg_ctx,
 	pull_file_id_24((char *)data->data, &id);
 	file_id = (unsigned long)IVAL(data->data, 24);
 
-	DEBUG(10, ("Got kernel oplock break message from pid %s: %s/%u\n",
-		   server_id_str_buf(src, &tmp), file_id_string_tos(&id),
-		   (unsigned int)file_id));
+	DBG_DEBUG("Got kernel oplock break message from pid %s: %s/%u\n",
+		  server_id_str_buf(src, &tmp),
+		  file_id_str_buf(id, &idbuf),
+		  (unsigned int)file_id);
 
 	fsp = initial_break_processing(sconn, id, file_id);
 
@@ -1291,8 +1307,9 @@ static void contend_level2_oplocks_begin_default(files_struct *fsp,
 
 	lck = get_existing_share_mode_lock(talloc_tos(), fsp->file_id);
 	if (lck == NULL) {
+		struct file_id_buf idbuf;
 		DBG_WARNING("failed to lock share mode entry for file %s.\n",
-			    file_id_string_tos(&state.id));
+			    file_id_str_buf(state.id, &idbuf));
 		return;
 	}
 	d = lck->data;
